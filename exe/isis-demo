@@ -1,0 +1,51 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Two IS instances on one in-memory wire, forming an IS-IS adjacency with
+# no privileges and no real interface. Watch them go Down -> Init -> Up.
+#
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-demo
+#
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
+
+require "isis"
+require "datalink/backends/loopback"
+
+wire = Datalink::Backends::Loopback::Wire.new
+
+def socket(wire)
+  Datalink::Socket.new("demo", backend: :loopback, wire: wire, recv_timeout: 0.1).open
+end
+
+a_sock = socket(wire)
+b_sock = socket(wire)
+
+a = ISIS::Circuit.new(a_sock, system_id: "0000.0000.0001",
+                      snpa: "00:00:00:00:00:01", holding_time: 30, logger: $stdout)
+b = ISIS::Circuit.new(b_sock, system_id: "0000.0000.0002",
+                      snpa: "00:00:00:00:00:02", holding_time: 30, logger: $stdout)
+
+sid_a = ISIS::SystemId.new("0000.0000.0001")
+sid_b = ISIS::SystemId.new("0000.0000.0002")
+
+puts "Starting two IS-IS instances on a shared wire..."
+10.times do |i|
+  a.send_hello
+  b.send_hello
+  a.poll
+  b.poll
+  if a.up?(sid_b) && b.up?(sid_a)
+    puts "Converged after #{i + 1} hello exchange(s)."
+    break
+  end
+  sleep 0.1
+end
+
+puts
+puts "A (#{a.system_id}) sees B: #{a.adjacency_state(sid_b)}"
+puts "B (#{b.system_id}) sees A: #{b.adjacency_state(sid_a)}"
+puts "adjacency up both ways: #{a.up?(sid_b) && b.up?(sid_a)}"
+
+a_sock.close
+b_sock.close
