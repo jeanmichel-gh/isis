@@ -1641,7 +1641,8 @@ of concept: a LAN Hello encode and parse and an L1 LAN adjacency over the
 datalink-socket loopback backend. Phase 1 gate 1 is not met: there is no
 `pdu.rb` with a common header class, no `Unknown` at any level, no parse
 policy, no `to_shex`, and no injected clock. The gem has not been
-published and has no license set. Update this paragraph when that changes.
+published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
+`LICENSE.txt`. Update this paragraph when that changes.
 
 ### Phase 1, minimal speaker
 
@@ -1763,6 +1764,17 @@ later decision may change one.
   switch, correct originators, receive policy separate from validation, an
   injected clock and scheduler, pass-through equivalence, and a forwarding
   boundary. All under "Autonomous operation and testing controls".
+
+**2026-10-31. License: the same terms as bgp4r, for now.**
+
+* GPLv3 or later, or the conditions in `LICENSE.txt`, at the user's
+  choice. The gemspec declares `GPL-3.0-or-later` and `Ruby`.
+* Premise: consistency with bgp4r while the commercial model is
+  undecided. Loosening the license later is easy; tightening it only
+  affects versions released afterwards.
+* Consequence: keeping a commercial dual license open needs the right to
+  relicense every contribution. Decide on a contributor agreement before
+  accepting outside code.
 
 **Open. May a forwarding adapter use a native dependency?**
 

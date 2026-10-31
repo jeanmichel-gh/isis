@@ -84,3 +84,16 @@ TLVs, the adjacency FSM, and the timers.
 Still pending, for when this runs on a real NIC: datalink-socket does not
 yet expose the socket FD, so `Circuit#poll` drains with a timeout instead
 of joining an event loop. That is the next thing to move down.
+
+## License
+
+isis4r is copyright (c) 2026 Jean-Michel Esnault. It uses the same terms
+as bgp4r. You can redistribute it and/or modify it under either:
+
+1. the GNU General Public License, version 3 or (at your option) any later
+   version, in [COPYING](COPYING); or
+2. the conditions in [LICENSE.txt](LICENSE.txt).
+
+isis4r is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE.
