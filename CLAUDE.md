@@ -1,0 +1,1665 @@
+# CLAUDE.md
+
+Guide for AI agents working on isis4r. Read this before writing anything.
+
+## What this is
+
+isis4r is a pure Ruby library to build, parse and speak IS-IS (ISO/IEC
+10589 and RFC 1195, with the extensions that matter). It exists to script
+IS-IS speakers for testing and research: to put a PDU on a wire and watch
+a real router decide what to do with it.
+
+**It is a protocol testing tool before it is a protocol implementation.**
+That sentence settles most design arguments in this file. A tool that can
+only send correct PDUs can only test the happy path, and the happy path is
+not where routers break.
+
+## The one rule the rest follow from
+
+**A PDU is a tree of objects, and every node in that tree obeys the same
+contract.** A Link State PDU holds a TLV list, which holds TLVs, one of
+which holds sub-TLVs, one of which holds a prefix. Nine levels or two, it
+makes no difference: each node knows how to build itself from the four
+kinds of input below, how to write its own octets, and how to read them
+back.
+
+`encode` on the root returns the whole PDU because it walked the tree. No
+node knows the shape of the tree above it, and no node knows more about
+the node below it than `child.encode` tells it.
+
+Everything below is that rule applied.
+
+### Where the OSPF analogy breaks, and it breaks here
+
+Most people arrive knowing OSPF or BGP, and the vocabulary maps well enough
+to be dangerous. LSA to LSP is the mapping that will cost a day, and it is
+not for the reason first written here.
+
+**It is not that an LSA is small and an LSP is large.** An OSPF Router-LSA
+carries many link descriptions, and an IS-IS reachability TLV carries many
+entries, so both are containers and both deserve classes for the things
+inside them.
+
+**The difference is that OSPF has a packet layer above the advertisement
+and IS-IS does not.** OSPF carries N LSAs inside a Link State Update
+packet. An IS-IS LSP is both the packet and the container, with nothing
+wrapping it. So the mapping that holds, for **the encoding layers only**,
+is:
+
+| OSPF | IS-IS |
+|---|---|
+| Link State Update packet | LSP |
+| LSA | TLV |
+| a link description inside a Router-LSA | an entry inside a TLV |
+
+Map LSA to LSP and a layer goes missing. That is the whole hazard, and it
+is enough of one: a reader who has it wrong looks for the IS-IS Link State
+Update and concludes something is unimplemented.
+
+**Read the table for containment and for nothing else.** An LSA has its own
+sequence number and age and is the unit of flooding; a TLV has none of
+those and is flooded only as part of whatever LSP carries it. So identity,
+sequencing, aging and flooding map LSA to **LSP**, where containment maps
+LSA to TLV. Neither row is interchangeable outside the question it answers,
+which is why this belongs in a guide labelled as such and not in anyone's
+mental model unlabelled.
+
+Classes for entries are wanted, not forbidden. A neighbour entry in TLV 22
+and a prefix entry in TLV 135 each have their own fields, their own widths
+and their own sub-TLV framing, so each is an object. Write a glossary in
+`docs/` if the vocabulary helps, and keep the near-equivalences in it
+labelled as hazards rather than conveniences.
+
+## Layout
+
+```
+isis4r.rb              entry point, requires everything
+isis/common.rb         shared helpers: hex dumps, the packed-string mark,
+                       Fletcher checksum, System ID and LSP ID formatting
+isis/codepoints.rb     the IANA numbers in one place: PDU types, TLV types,
+                       sub-TLV types per parent TLV, with the registry's
+                       own names beside them
+isis/pdu/              one file per PDU layout, which is five and not nine,
+                       plus pdu.rb with the common header, the type
+                       registry and Pdu::Unknown
+isis/tlv/              one file per TLV, plus tlv.rb with the framing,
+                       the registry, Tlv::Unknown and the TLV list
+isis/subtlv/           sub-TLVs, grouped by the TLV that carries them,
+                       since the same number means different things under
+                       different parents
+isis/link/             getting bytes on and off a link: raw socket, LLC
+                       framing, the interface
+isis/adjacency/        the hello state machine, if and when it exists
+test/unit/             mirrors isis/, one test file per source file
+test/functional/       tests that put PDUs on a real interface
+docs/                  the guides, each with a test that asserts its
+                       load-bearing claims
+```
+
+## Nine PDU types, five layouts
+
+There are nine PDU types and that is not nine classes. Four of the families
+come in a Level 1 and a Level 2 variant whose **field layouts are
+identical**, differing only in the PDU type octet itself:
+
+| Family | Types | Layouts | Where the level lives |
+|---|---|---|---|
+| LAN hello | L1, L2 | one | the PDU type, and a Circuit Type field |
+| Point to point hello | one | one, genuinely different | **a Circuit Type field only** |
+| LSP | L1, L2 | one | the PDU type |
+| CSNP | L1, L2 | one | the PDU type |
+| PSNP | L1, L2 | one | the PDU type |
+
+So write five layouts, let the type registry map nine numbers onto them,
+and Level 2 stops being a feature anyone asks about. Decide it before the
+second PDU, because the alternative is discovered rather than chosen: nine
+classes, four of them copies, and "is Level 2 implemented?" asked
+separately for every family forever.
+
+**The level is not one parameter, and the hellos are why.** For an LSP, a
+CSNP and a PSNP the PDU type number is the only level information, so a
+single level argument says everything. A hello also carries a **Circuit
+Type** field saying which levels the circuit supports, L1, L2 or both, and
+that is a different fact from which hello this is. The point to point hello
+has **one** PDU type for both levels, so there the field is the only level
+information there is, and a blanket level argument would misrepresent the
+packet: it cannot say "both", which is the common case on a point to point
+link.
+
+So: a level argument for the three paired non-hello families, and a Circuit
+Type field, carried and encoded as a field, for all three hellos. Do not
+collapse the two into one setting because they happen to be about levels.
+
+The point to point hello earns its own class for the same reason. It is not
+a LAN hello with the DIS parts removed, so do not share a base with the LAN
+hellos for the sake of symmetry.
+
+**Two of everything is the shape of the whole protocol**, not a quirk of
+the PDU types: two databases, two of most PDU types, two variants of
+several TLVs. That is what makes the level worth parameterising. It is not
+a licence to assume every level distinction is the same distinction.
+
+## The object contract
+
+Every class in `isis/pdu/`, `isis/tlv/` and `isis/subtlv/` is built the
+same four ways and answers the same five questions. Keep all of them
+working in every change.
+
+### Four ways in
+
+`initialize` dispatches on what it is handed:
+
+1. **Field values.** `Lsp.new(lsp_id, sequence: 7, lifetime: 1200)`. This is
+   how a test says what it means.
+2. **A hash.** `Lsp.new(h)` where `h` is what `to_hash` answered.
+3. **Wire bytes**, a binary String. This is how a capture comes back to
+   life.
+4. **Another instance**, re-parsed through its own `encode`. A copy
+   constructor that costs one line and catches encoder bugs for free.
+
+**Wire bytes must be recognised by a mark, never by guessing.** A binary
+String and a field value String are the same class in Ruby. Mark the
+binary one explicitly, the way bgp4r marks with `is_packed`, and branch on
+the mark. Sniffing the content works until the day a field value happens
+to look like octets, and then it fails somewhere far away from the cause.
+
+Write the dispatch order down in `docs/building-objects.md` and keep it the
+same in every class. A reader who learns one constructor has learned all of
+them.
+
+### Five ways out
+
+* **`encode`** returns the complete wire octets of this node and everything
+  under it. Nothing else. No length prefix the parent did not ask for, no
+  padding, no framing that belongs to a level above.
+* **`to_shex`** is `encode` as a hex string. One line of code, and **it is
+  the canonical form of an object**: it is what every test asserts on,
+  because it is the only representation the specification and the library
+  share. See Testing.
+* **`parse`** reads octets and fills the instance. It is `encode` run
+  backwards and it must be exact: for every octet sequence the class
+  accepts, `Klass.new(octets).to_shex` is the hex it was handed. **That
+  includes octets that are wrong**, which is what the replay rule below is
+  about, and it is the one promise in this list with a mechanism behind it
+  rather than a convention.
+* **`to_hash`** returns a hash that rebuilds the object through `new`,
+  **where it can**. It is a convenience for people writing tests as values
+  rather than as hex, not part of the protocol, so a class whose hash
+  cannot rebuild it is allowed. What is not allowed is that being
+  undocumented. See the `to_hash` section for the one consistent contract.
+* **`to_s`** returns the presentation form. **Two kinds of class, two
+  different obligations**, and conflating them was an error in an earlier
+  version of this file:
+  * **An identifier or address class** owes a reversible form. A System
+    ID, an LSP ID, an area address, an ISO or IP prefix: for these,
+    `Klass.new(obj.to_s)` reproduces the object. That is the pton
+    direction, it is a contract, and it is what lets a line from a live
+    dump be pasted into a test as a fixture.
+  * **A composite** owes a readable dump and nothing more. Nobody parses a
+    forty TLV LSP back from its printed form, and requiring it would mean
+    inventing a grammar for a debugging aid. Its `to_s` is for a person.
+    Its reversible form is `to_shex`, always, and `to_hash` where the
+    catalog says that one works.
+
+  Where the line falls is not a judgement call: if the class holds other
+  nodes of the tree, it is a composite.
+
+## Composition: how a PDU assembles
+
+This is the part worth getting right, because everything else is cheap to
+change and this is not.
+
+### The idiom
+
+**A parent writes framing. A child writes value. The child calls up.**
+
+```ruby
+class Tlv
+  # Every TLV is type, length, value. This method is the only place in the
+  # library that knows that.
+  def encode(value)
+    n = value.bytesize
+    raise ArgumentError, "TLV #{type} value is #{n} octets, max 255" if n > 255
+    [type, n, value].pack('CCa*')
+  end
+end
+
+class Area_addresses < Tlv
+  def encode
+    super(@areas.collect { |a| a.encode }.join)
+  end
+end
+```
+
+**`bytesize` and not `size`, everywhere a length is written.** `String#size`
+counts characters, so it is the octet count only while the String's encoding
+happens to be binary. A Dynamic Hostname TLV built from a UTF-8 name is
+where that bites: the length octet comes out short, the TLV is framed wrong,
+and every TLV after it in the PDU is read at the wrong offset.
+
+**The root cause is the buffer's encoding, and it has a second symptom.**
+`String#<<` with an Integer appends a **codepoint**, so on a UTF-8 buffer
+every value above 0x7f becomes two octets. On an `ASCII-8BIT` buffer it
+appends one octet and is perfectly safe, so this is not a method to ban; it
+is the same encoding bug wearing a different face. bgp4r shipped exactly
+this and the detail worth keeping is the order: calling `.b` **after** the
+expansion relabels the string without undoing it, so the two extra octets
+survive and the field comes back long.
+
+So: force `Encoding::BINARY` on every buffer at the point it is created,
+use `bytesize` for every length, and the `<<` question answers itself.
+Assert the encoding in a test rather than trusting it, because a buffer
+that is binary today becomes UTF-8 the moment someone interpolates a name
+into it.
+
+The raise follows the library's one rule about refusing: **it refuses when
+it cannot produce the octets, never when it disapproves of them.** A value
+over 255 octets cannot be expressed in a one octet length, so writing it
+truncated would put a different TLV on the wire than the caller asked for.
+A digest with no key is the same kind of failure, one section further on.
+Neither is a judgement about validity, which nothing here ever makes.
+Splitting an oversized value is the builder's job and not this method's.
+See the packing section.
+
+`Area_addresses` never writes a length and never writes a type. It knows
+what its value is, hands it up, and the base class frames it. Change the
+framing once and every TLV in the library changes with it.
+
+The same shape goes one level down for sub-TLVs and one level up for the
+PDU header. Three layers, each wrapping the one below, each ignorant of the
+others.
+
+**When a field is missing from the wire, find which layer owns it before
+you edit anything.** Half the time the field is written by a class two
+levels up from where it looks like it belongs.
+
+### What a parent may assume about a child
+
+**Exactly one thing: that `child.encode` returns the child's complete
+octets.**
+
+Not its length in advance. Not its type. Not whether it is fixed width.
+That single assumption is what lets one TLV list hold nineteen unrelated
+classes and a handful of `Tlv::Unknown` objects it has never heard of.
+
+The moment a parent reaches inside a child for a field, the tree stops
+being a tree. If a parent genuinely needs something a child has, give the
+child a method and let it answer. `Flow spec` in bgp4r had to learn this
+the slow way: the container asked the family how long an item was, rather
+than computing it from a prefix length it had assumed.
+
+### A length field is a statement about octets that already exist
+
+So the order inside `encode` is always the same:
+
+1. Encode the children. Join them. Now the body exists.
+2. Measure the body. Now the lengths are known.
+3. Write the header, with those lengths in it.
+4. Compute anything that covers header and body together, and splice it in.
+
+Never the reverse. A length written before the thing it measures is a guess
+that happens to be right most of the time, which is the worst kind of bug
+to own.
+
+### Sub-TLV framing belongs to the parent TLV, not to the sub-TLVs
+
+A sub-TLV is type, length, value, the same shape as a TLV. **How a list of
+them is framed is the parent's business, and the two parents that matter
+most do it differently.** Verified against RFC 5305:
+
+* **TLV 22, extended IS reachability, section 3.** Each neighbour entry is 7
+  octets of system ID and pseudonode number, "3 octets of default metric",
+  "1 octet of length of sub-TLVs", then "0-244 octets of sub-TLVs". The
+  length octet is **always written**, as zero when there are none, so an
+  entry with no sub-TLVs is 11 octets.
+* **TLV 135, extended IPv4 reachability, section 4.** "4 octets of metric
+  information", then a control octet holding "1 bit of up/down
+  information", "1 bit indicating the presence of sub-TLVs" and "6 bits of
+  prefix length", then "0-4 octets of IPv4 prefix". The sub-TLV length
+  octet is **written only when that presence bit is set**.
+
+So one parent frames its sub-TLVs unconditionally and the other frames
+them behind a bit in a field it wrote earlier. Write one `SubTlv` class
+and one list, and let each parent decide whether and how the list is
+framed. A single "sub-TLVs under a TLV" mechanism gets one of these two
+wrong, and the symptom is a one octet offset that shifts everything after
+it.
+
+Three more things fall out of those two layouts, and each is a bug waiting:
+
+* **The metric widths differ**, 3 octets in TLV 22 against 4 in TLV 135.
+  Same word, two widths, in one RFC, one section apart.
+* **TLV 135 packs its prefix to the minimum octets for its length**, so the
+  arithmetic is the familiar `(bits + 7) / 8`. Do not assume that holds
+  elsewhere. Whether a prefix is packed down or written at full width is a
+  per-TLV decision and has to be read each time.
+* **The up/down bit lives in the same octet as the prefix length.** A
+  control octet that mixes a flag with a width is the shape most likely to
+  be read with the wrong mask, so give it its own method and its own test.
+
+### The worked example, an L1 Link State PDU
+
+This is the most intricate `encode` in the protocol. Every other PDU is a
+simpler version of it, so get this one right and copy its shape.
+
+```ruby
+def encode
+  body   = @tlvs.encode                       # 1. the children
+  header = encode_header(body.bytesize)       # 2 and 3. lengths over the body
+  with_checksum(header + body)                # 4. a field over the whole
+end
+```
+
+The header is two parts and they are worth separating, because one is
+shared by every PDU type and the other is not:
+
+* **The common header**, the same eight octets in every IS-IS PDU: the
+  Intradomain Routeing Protocol Discriminator (0x83), the Length
+  Indicator, the Version/Protocol ID Extension, the ID Length, the PDU
+  Type, the Version, a Reserved octet and the Maximum Area Addresses.
+  This belongs in `Pdu` and is written once.
+* **The PDU-specific header**, which for an LSP is the PDU Length, the
+  Remaining Lifetime, the LSP ID, the Sequence Number, the Checksum and
+  the flags octet.
+
+**Two length fields with different meanings sit a few octets apart, and
+confusing them is the first bug this library will have.** The Length
+Indicator in the common header is the length of the fixed header. The PDU
+Length in the LSP header is the length of the whole PDU. Name them apart in
+the code, comment both, and write a test that would fail if they were
+swapped.
+
+The checksum is the reason step 4 exists. It is computed over a span that
+includes part of the header, so it cannot be written until the header is
+written, and it cannot be written as part of the header because it covers
+itself as zero. So: assemble with a zero checksum, compute over the span,
+splice the result back in. Verify the span against the spec before you
+write it down. The Remaining Lifetime is deliberately outside it, because
+that field is decremented hop by hop and a checksum covering it would be
+invalid the moment the PDU moved.
+
+### The LSP flags octet is four fields, and one of them is not one bit
+
+The flags octet at the end of the LSP header holds P, ATT, OL and IS Type.
+**ATT is four bits, not one**, with one bit per metric type: error,
+expense, delay and default. Nearly every summary of IS-IS calls it "the
+attached bit", singular, because in practice only the default metric bit is
+ever set. An encoder written from that summary writes the wrong width.
+
+The masks, to be checked against the chosen ISO edition and meanwhile
+sourced as below:
+
+| Field | Mask |
+|---|---:|
+| P, partition repair | `0x80` |
+| ATT, error metric | `0x40` |
+| ATT, expense metric | `0x20` |
+| ATT, delay metric | `0x10` |
+| ATT, default metric | `0x08` |
+| OL, overload | `0x04` |
+| IS Type | `0x03` |
+
+**Those seven tile the octet, and checking that takes two tests.** Bitwise
+OR is idempotent, so a union of `0xff` proves coverage and says nothing
+about overlap: `0x01 | 0x01 | 0xfe` is `0xff` too. Both checks, neither
+alone:
+
+* **Coverage.** The OR of every mask is `0xff`, so no bit is unaccounted
+  for.
+* **Disjointness.** Every pair of distinct masks ANDs to zero, so no bit is
+  claimed twice.
+
+Run both on any bitfield table before trusting it. It is still the cheapest
+verification in this file.
+
+**And it establishes structure, not meaning.** A table with the four ATT
+masks reversed passes both checks perfectly, because reversing a
+permutation of disjoint masks is still a permutation of disjoint masks.
+That is the whole failure mode under discussion here, and the check is
+blind to it. So tiling tells you a table is coherent. Only the
+specification tells you which name goes with which mask.
+
+Provenance, since it is not first hand. The layout above is cited to RFC
+1142 section 9.8, which is the 1990 republication and so is historical
+confirmation rather than the current standard. It agrees with a November
+2003 report on the ethereal-dev list, subject "ISIS ATT bit definition is
+wrong", which argued Ethereal had the four in the reverse order. Two
+sources that agree, neither of them the 2002 edition. Read the edition.
+
+**Keep the Ethereal story, and keep it in its place.** It is not evidence
+for the layout. Nothing in this section is: the two sources agree with each
+other, neither is the current standard, and the tiling checks are blind to
+exactly the error in question. **The layout above is unsettled until
+somebody reads ISO/IEC 10589:2002, and the table is a lead.** What the
+Ethereal story is evidence for is that the reversal is a failure mode
+careful people reach, which is the argument for writing the test at all.
+
+**The test has to assert the mask.** Asserting `0x08` for the default bit
+catches a reversal at once, since a reversed encoder writes `0x40`. The
+test that misses it is the **round trip**, which passes whenever encoder
+and decoder share the mistake, and that is the usual case because one
+person writes both in one sitting. The Testing section makes the same point
+about ntop and pton. This is the field that proves it.
+
+So: assert each mask against the number the specification gives, from the
+specification and not from this table. Then add the round trip. In that
+order, and never the round trip alone.
+
+`IS Type` is two bits, `P` and `OL` one each. Four fields, four widths, one
+octet. Verify every one before writing the pack string.
+
+### Narrow and wide metrics both exist, and the library sends both
+
+Two encodings of the same concept are live on the wire at once. The
+original metric is six bits of value in one octet, in TLVs 2, 128 and 130.
+The extended metric is 24 bits in TLV 22 and 32 bits in TLV 135.
+
+**There are four original metric octets per entry, not one, and they do not
+share a layout.** Not one octet holding a value, an internal/external bit
+and an S bit. Four octets, two layouts:
+
+* The **default** metric octet carries the six bit value, an
+  internal/external bit, and a reserved high bit.
+* The **delay, expense and error** metric octets each carry the six bit
+  value, an **S** bit and a reserved bit.
+
+And **S set means the metric is not supported**, which is the reverse of
+what the name suggests and is the single most likely thing to be
+implemented inverted here. Document the layout per TLV and per metric kind
+rather than once for "the narrow metric", because the four are not
+interchangeable. RFC 1195 sections 5.3.4 and 5.3.5 are the IP reachability
+formats, and RFC 5302 is worth reading alongside them for what later work
+does with the same bits.
+
+Which bits are reserved has also moved: later extensions put meaning on
+some of them. So a reserved bit here is a keep-and-echo field like any
+other, and a mask written once and reused for all four octets is a bug.
+
+**Both are real traffic and both must be sendable, including both at
+once.** A router may be configured for either or for both during a
+transition, so a tool that can only speak the extended form cannot test the
+transition, which is where the interesting failures are. The operational
+consequences of mixing them are in RFC 3787, which is worth reading before
+deciding what the library should make easy.
+
+Do not let the words mislead: the six bit field is a metric with a small
+range, not a different kind of metric. Narrow and wide are the encodings.
+
+## Computed fields: computed on build, replayed on parse
+
+**This is the most consequential decision in the file and it has to be made
+before any class is written**, because two rules that both look obviously
+right contradict each other. "Lengths and checksums are always recomputed"
+and "a parsed object re-encodes byte for byte" cannot both hold for a PDU
+that arrived with a wrong checksum. One of them has to give, and which one
+decides how every computed field in the library behaves.
+
+**The resolution: a computed field is computed when the object is built
+from values, and preserved when it is parsed from octets.**
+
+| Built from | Length Indicator, PDU Length, checksum, auth value |
+|---|---|
+| Field values | computed, every time, no option to supply one |
+| A hash | computed, every time; a hash never carries a computed field |
+| **Wire octets** | **kept exactly as they arrived, right or wrong** |
+| Another instance | whatever that instance would encode |
+
+So a capture replays byte for byte including its lies, a built object is
+correct by construction, and nothing in between guesses.
+
+**A hash does not carry computed fields, even from a parsed object.** A
+hash key that sets a checksum or a length is a `checksum:` option under
+another name, and the singleton section below forbids that option for a
+reason that applies here too: it moves the lie into the library. So
+`to_hash` on a parsed object whose computed fields were wrong loses them,
+and the catalog records that loss like any other. To replay those fields,
+replay the octets.
+
+**That is the same rule as keeping a reserved bit, and for the same
+reason**, which is worth noticing because it means the library has one
+principle here and not two. A reserved octet arriving as `0xff` is
+somebody's test, and a tool that can send a value no specification
+describes but cannot replay what it just received is the wrong shape of
+tool. A checksum arriving wrong is exactly that, one field over.
+
+### How an edit invalidates a preserved field
+
+**This is the hardest part of the decision above and the place an
+implementation will go wrong.** Invalidation follows **content**, not size.
+Change a metric, a prefix, a sequence number or a reserved bit and every
+length stays identical while the protected octets change, so a checksum
+preserved on a size comparison is now a digest of something that is no
+longer there. And the edit can be four levels down: a sub-TLV inside a TLV
+inside the LSP.
+
+Three mechanisms are possible. **Pick the third.**
+
+| Mechanism | Why not |
+|---|---|
+| Immutable children, so an edit rebuilds the parent | Fights the whole purpose: a tool for building odd PDUs wants `lsp.tlvs[3].metric = 999` to work |
+| Children notify their parent on change | Every setter must remember to, and the one that forgets fails silently as a stale checksum |
+| **Parent keeps the octets it parsed and compares** | Nothing to forget |
+
+**The third needs no cooperation from any child.** At encode time the
+parent re-encodes and compares against what it retained. Identical means
+nothing under it moved, so the preserved fields are replayed. Different
+means something did, so they are recomputed. A new setter cannot defeat it,
+because it never asked the setter for anything.
+
+It is also the only one of the three consistent with the composition rule:
+the parent assumes `child.encode` and nothing more. The other two require a
+second channel between child and parent that the rule says does not exist.
+
+**Nesting then costs nothing.** Each level compares its own span against
+what it kept, so a metric changed inside a sub-TLV shows up as a differing
+span at every level above it, with no propagation to implement and nothing
+to get wrong. That is the test to write: edit a field several levels down
+and assert the root recomputed.
+
+### One retained input per calculation, not one per object
+
+Two computed fields means **two retained inputs**, because the checksum and
+the digest cover different octets and normalize different fields. One
+shared span cannot express what follows.
+
+| Calculation | Covers | Normalized to zero first |
+|---|---|---|
+| LSP checksum | from the LSP ID to the end of the PDU | the Checksum field |
+| RFC 5304 digest | the whole PDU, header included | Checksum, Remaining Lifetime, Authentication Value |
+
+**The two are ordered, not parallel, and that is the whole of this
+section.** The digest normalizes away both the checksum and its own value,
+so it depends on neither output. The checksum's span contains the
+Authentication TLV, so it depends on the digest's output. A one way
+dependency, so no loop, but the order is not optional:
+
+```text
+digest first  ->  its bytes land in the Authentication TLV
+              ->  checksum input built WITH those bytes in place
+              ->  checksum
+```
+
+That is the step order the authentication section already gives. The
+comparison has to follow it: **build the checksum's input from the PDU with
+the final authentication bytes inserted**, never from the PDU as parsed.
+
+**So a common header edit reaches the checksum, transitively.** The header
+is outside the checksum's span, so for an **unauthenticated** LSP a
+same-size header edit leaves the checksum alone. For an **authenticated**
+one the chain runs header, digest, Authentication TLV, checksum span, and
+the checksum must be recalculated. The header is outside the checksum's
+coverage; the digest it changed is not.
+
+**A Remaining Lifetime edit still invalidates neither**, and that survives
+the chain: it is outside the checksum's span and the digest normalizes it
+away, so the digest is unchanged, so the authentication bytes are
+unchanged, so the checksum's input is unchanged. That is what makes aging a
+stored LSP possible at all when the library has no key.
+
+**Normalization is what keeps a calculation from triggering itself.** The
+digest's input zeroes the Checksum and the Authentication Value, so the
+digest is stable under both outputs. The checksum's input zeroes the
+Checksum field, so it is stable under its own. Without that, writing one
+output changes the other's input and the pair never settles.
+
+So the retained input is always the **normalized** bytes, never the raw
+ones. Five tests, and the last catches a loop:
+
+1. A same-size edit several levels down recomputes both.
+2. A same-size common header edit on an **unauthenticated** LSP leaves the
+   checksum unchanged.
+3. The same edit on an **authenticated** LSP recomputes the digest and
+   then the checksum.
+4. A Remaining Lifetime edit recomputes neither, authenticated or not.
+5. **Two consecutive `encode` calls return identical octets.** A
+   self-triggering pair passes the first four and fails this one.
+
+Test 2 against test 3 is the pair that proves the dependency is modelled
+rather than assumed away in either direction.
+
+The cost is one extra encode per calculation per `encode`. That is the same
+price the packing section already accepted, for the same reason: at IS-IS
+item counts it does not register.
+
+Three further consequences to design in rather than discover:
+
+* **`recompute!` and `preserved?` are public.** A caller replaying a
+  capture wants to know whether what it is about to send is the original
+  arithmetic or ours, and a caller editing one wants to force the issue.
+  Neither should have to infer it.
+* **The exactness promise is about the fields, not about luck.** A parsed
+  object re-encodes identically because it kept the fields, not because
+  the recomputation happened to agree. Write the test with a capture whose
+  checksum is deliberately wrong, so it cannot pass by agreement.
+* **A test still has to be able to build a wrong PDU from scratch**, not
+  only replay one, because that is the input a router's parser is most
+  likely to mishandle.
+
+Resolve that the way bgp4r does, and do not resolve it by adding a
+parameter. Override the method at runtime on the one object you are lying
+with:
+
+```ruby
+lsp.define_singleton_method(:encode) do |*a|
+  s = super(*a)
+  s[8, 2] = [9999].pack('n')   # a PDU Length that is not true
+  s
+end
+```
+
+The class stays correct, the send path is the ordinary one, and the lie
+lives in the test that wanted it. Patching the encoded String and sending
+that works too, since the link layer takes a String and writes it
+unchanged.
+
+Write a `checksum:` or `pdu_length:` option and you have moved the lie into
+the library, where it will eventually be set by accident.
+
+## Parse, and the three things it must declare
+
+### Whether it consumes
+
+If `parse` reads with `slice!` it empties the String it was handed. That is
+fine, and it is efficient, but it is a property of the class and the caller
+has to know it.
+
+**Pick one convention and hold it.** The recommendation: **every `parse`
+consumes exactly its own octets and leaves the rest.** That makes a list
+loop trivial, which matters because IS-IS is nothing but lists:
+
+```ruby
+until s.empty?
+  @tlvs << Tlv.factory(s)   # each one takes its own bites
+end
+```
+
+bgp4r did not hold one convention, and it costs a line in its guide and an
+afternoon every few months. The symptom is memorable:
+`assert_equal(octets, Klass.new(octets).encode)` fails while both sides
+print the same hex, because the left side was emptied before the comparison
+ran. Compare encoded hex, not the input you passed.
+
+### What it needs that is not in its own octets
+
+**This is the structural difference between IS-IS and a protocol like BGP,
+and it has to be designed for rather than discovered.**
+
+The common header carries an **ID Length** field, and it decides how wide
+a System ID is wherever one appears below. The Source ID in the header
+itself. An LSP ID, which is a System ID plus a pseudonode octet and an LSP
+Number octet. The LAN ID in a hello. A neighbour record in TLV 2. None of
+those octets say how long they are. The header said, once, at the top of
+the PDU.
+
+So the ID length is a **parse-time input**, threaded from the header down
+into every node that needs it, exactly the way a flow spec component needs
+its AFI in bgp4r. Design that in from the first commit:
+
+* `Pdu.factory(octets)` reads the common header and holds the ID length.
+* Everything it builds takes the ID length as an argument.
+* A class that does not need it does not take it.
+
+**It does not scale everything that looks like an identifier, and getting
+that wrong is worse than not threading it at all.** A neighbour entry in
+TLV 6 looks like a case for it and is not:
+TLV 6 is the IS Neighbours TLV carried in LAN hellos and its entries are
+six octet **LAN addresses**, which are MAC addresses of the link and have
+nothing to do with the System ID or with ID Length. TLV 2 is the one whose
+entries are System ID based. Two TLVs with nearly the same name, one scaled
+by ID Length and one not.
+
+So the third bullet above is the load bearing one. Work out per field
+whether it is a System ID or an address that merely looks like one, write
+the answer in the class, and do not pass the ID length to a class that does
+not need it: a class that accepts it will eventually use it.
+
+**Keep the list of parse-time inputs short and write it down.** Today it is
+the ID length. If a second one appears, that is a design event worth a
+paragraph in the guide, not a quiet extra argument.
+
+**The ID Length encoding is a trap and must be verified in the spec, not
+recalled.** The field does not mean what it appears to. A value of zero
+means the default of six octets, and one particular value means a null
+System ID rather than a length. Read ISO 10589, write the mapping in one
+method, and put the quoted sentence in a comment beside it.
+
+### What it does when a length lies
+
+A length field is written by someone else, so it can say anything. **The
+parse policy is seven rules, written once in the base classes, and every
+list loop in the library obeys them.** Without them the loop idiom above is
+a hang waiting for the right capture.
+
+1. **An enclosing boundary is always passed down, and it always wins.** A
+   TLV knows how many octets its PDU has left; a sub-TLV knows how many its
+   TLV has left. A declared length larger than that boundary is **clamped
+   to the boundary**, never followed. Following it reads another object's
+   octets, or past the end of the buffer, and reports a field that was
+   never sent.
+2. **A clamp is recorded, not silently absorbed.** The object keeps the
+   length as declared, so `encode` replays it, and the discrepancy becomes
+   a finding. That is the same keep-the-declared-length rule the `Unknown`
+   classes follow, applied to a class that is implemented.
+3. **Every parse consumes at least one octet, or the loop stops.** A TLV
+   header is two octets, so a remainder of one cannot be a TLV and becomes
+   a tail. A declared length of zero still consumes the two header octets,
+   so it makes progress whether or not that type permits it, which is a
+   separate question; a bug that consumes nothing must not spin.
+   Put the backstop in the loop, not in the hope that no class has that
+   bug.
+4. **Octets left over at the end of a container are kept as a tail**, not
+   dropped and not treated as a failure to parse the container.
+
+5. **A layout that cannot read its whole fixed header does not build one.**
+   The rules above cover a PDU whose TLVs are cut short. A capture can stop
+   inside the header itself, halfway through a Sequence Number, and then
+   the recognised layout has fields it never received. Reconstructing the
+   header from what it did parse **synthesises octets that never arrived**,
+   which is the one thing the replay rule forbids. So: keep the available
+   octets as a truncated representation of that PDU, note how far the read
+   got, and let `encode` return exactly those octets and no more. A
+   truncated LSP is not an LSP with some fields unset.
+6. **The declared PDU Length and the captured boundary are two different
+   numbers, and they go wrong in four ways.** Rule 5 covers only one of
+   them, an incomplete **fixed header**, so do not route the rest there.
+   * **Header incomplete.** Rule 5. No layout is built.
+   * **Header complete, declared length runs past the capture.** The
+     ordinary bounded body parser, rules 1 to 4, with the boundary being
+     what actually arrived rather than what was declared. The layout is
+     built, the TLVs that arrived are parsed, the shortfall is a finding.
+     This is the common case in a real capture and it needs no special
+     machinery.
+   * **Declared length shorter than the capture.** Octets arrived after
+     this PDU ended: another PDU, link padding, or capture slack.
+   * **Declared length shorter than the fixed header the layout
+     requires**, zero included. This one has no honest reading at all: the
+     PDU claims to be smaller than the fields it must contain. Build an
+     explicitly malformed representation holding whatever arrived, and
+     **never let the value reach arithmetic**, because `declared minus
+     header_length` is negative and a negative body length is a crash or a
+     loop depending on where it lands. Clamp at the point of reading, not
+     at the point of use.
+7. **The replay promise is about the consumed slice, not the declared
+   length**, and those are different numbers often enough that equating
+   them is a bug. A PDU replays **exactly the octets it actually
+   consumed**, whatever its length field claimed, and it retains the
+   declared value separately so `encode` can write that claim back. The
+   three cases:
+
+   | Situation | Consumed | Retained |
+   |---|---|---|
+   | Declared exceeds what arrived | only what arrived, within the boundary it was given | the declared value, written back as it was |
+   | Declared below the required header | whatever arrived, as malformed | the declared value, and no arithmetic uses it |
+   | Declared valid, extra octets follow | the declared extent | nothing extra; the remainder is not this PDU's |
+
+   **Octets past a PDU's declared end belong to the level above it.** That
+   is what keeps "keep the excess separately" from contradicting "every
+   object replays its input exactly", which it did as written. Both
+   promises hold once they are scoped: a PDU replays its consumed slice, and
+   a capture or frame object above it owns the remainder and replays the
+   complete input it was handed.
+
+   So the outermost object is not a PDU. Something has to hold a tail at
+   that level, which means the design needs a capture representation above
+   `Pdu` rather than treating a PDU as the root. That is rule 4 applied one
+   level further out, and it is cheaper to put there now than to retrofit
+   when the first pcap with two PDUs in a buffer arrives.
+
+Those seven are what make "it must be exact" achievable on input nobody
+checked. State them in `docs/`, and write the truncation tests first: a TLV
+whose length overruns its PDU, a sub-TLV whose length overruns its TLV, a
+one octet remainder, a PDU cut off mid-TLV, a PDU cut off inside its fixed
+header, and a declared length shorter than the capture.
+
+Each should produce an object that replays its input exactly. **Most should
+also produce a finding, and not all**: a TLV with a declared length of zero
+makes progress and is a seventh test worth writing, but whether it is legal
+is specific to the type, so it belongs in the per-TLV rules and gets a
+finding only where that type's own clause says so. Do not write a blanket
+assertion that every odd length is an error.
+
+## Keep what you cannot read
+
+**When parsing cannot interpret something, keep it whole and write it
+back.** A capture from a router that speaks something isis4r does not must
+survive the round trip and go back out byte for byte. This is not a
+nicety: it is what lets the library be pointed at real traffic on day one.
+
+Three levels, so three classes:
+
+* `Pdu::Unknown` for a PDU type not implemented. **Opaque octets, and it
+  does not parse TLVs out of them.** The temptation is to trust the common
+  header's Length Indicator, treat everything past it as a TLV area, and
+  hand back an Unknown full of `Tlv::Unknown`s. Do not: for a PDU type
+  nobody implemented, nothing establishes that the body is TLVs at all,
+  nor where they begin, and the Length Indicator is a field written by the
+  sender like any other. Parsing on that assumption invents structure and
+  reports fields that were never sent. Keep the octets, say which type
+  number arrived and how many octets followed, and stop.
+* `Tlv::Unknown` for a TLV type not implemented, keyed by type so the dump
+  says "TLV 199, 14 octets" rather than nothing. This one **is** framed,
+  because the TLV framing is type, length, value for every type, known or
+  not, so its extent is readable without understanding it.
+* `SubTlv::Unknown` for a sub-TLV under a TLV that is implemented, same
+  reasoning, with the extent bounded by the parent.
+
+The difference between the first and the other two is the whole point:
+**an extent you can read without understanding the contents is the licence
+to frame.** A TLV has that and an unknown PDU body does not. The same test
+decides every future case.
+
+Each builds all the ways above and each **keeps the declared length even
+when it disagrees with the value it found**, so a malformed capture can be
+replayed as malformed. A class that silently repairs what it read has
+destroyed the evidence.
+
+The same rule applies inside a class that is implemented:
+
+* **Trailing octets** a TLV cannot interpret are kept and written back.
+* **Reserved bits** that arrived set are kept and echoed, not zeroed.
+  Writing zero is right when building from field values, since that is what
+  the spec asks an encoder for. Echoing is right when replaying, since a
+  reserved octet arriving as `0xff` is somebody's test and the tool must be
+  able to send it back.
+
+Carry the extra information in the hash only when it is unusual: no kept
+tail, no `:tail` key; no reserved bit set, no `:bits` key. An ordinary
+object then hashes exactly as it always did, and the hash stays readable.
+
+## to_hash, and the one thing to do differently from bgp4r
+
+**A TLV list hashes as a list, not as a map keyed by type.**
+
+bgp4r keyed its path attribute hash by attribute type, which was reasonable
+there, and then had to bolt on a `:duplicates` key when it turned out two
+attributes of one type can arrive. The fix works and the reasoning behind
+it is sound, but the shape was wrong from the start.
+
+**In IS-IS, repetition is not the exception. It is the design.** A TLV
+value is at most 255 octets because the length is one octet, so anything
+larger is sent as several TLVs of the same type. A router with forty
+neighbours sends many TLV 22s as a matter of course. A hash keyed by type
+cannot hold that and should never be asked to.
+
+So:
+
+```ruby
+{ :pdu => :l1_lsp,
+  :lsp_id => '1921.6800.1001.00-00',
+  :sequence => 7,
+  :tlvs => [ { :area_addresses => ['49.0001'] },
+             { :protocols_supported => [:ipv4, :ipv6] },
+             { :extended_ip_reachability => [ ... ] },
+             { :extended_ip_reachability => [ ... ] } ] }
+```
+
+Order is preserved, repetition is free, and nothing has to be bolted on
+later.
+
+### The one hash contract
+
+Stated once, because "every hash round trips" plus a list of exceptions is
+two contracts and reads as a contradiction. There is one:
+
+**The hash is a convenience for writing tests as values instead of as hex.
+It is not part of the protocol and nothing on the wire depends on it. Where
+it can rebuild the object it must, and where it cannot, the catalog says
+so.**
+
+What follows from that, and all of it is enforced rather than asked for:
+
+* A class whose hash rebuilds the object has a test proving it, in its own
+  test file, exercising every field the class carries.
+* A class whose hash cannot has an entry in the catalog naming what it
+  loses, with a reproduction and a decision.
+* A class in neither place fails the suite, so a new class has to be
+  measured and decided rather than assumed.
+* **The rule is one way.** A gap may stay a gap. A round trip that works
+  must not stop working, because other people's tests are built on it.
+
+Keep the catalog as a file the suite reads, measure it against the library
+on every run, and print the counts from it rather than writing them in
+prose. A number written in prose is a number that will be wrong.
+
+Why a gap is tolerable at all: a hash is an argument to `initialize`, so
+what has to come back is the instance state, and a field that no key sets
+cannot survive. Every gap is an instance of that one sentence, which is
+why the answer is a recorded reason rather than a campaign.
+
+## Building never validates
+
+**This library must be able to put octets on a wire that no standard
+allows.** Any PDU type, any TLV in any order, a TLV inside a PDU that
+forbids it, a length that lies, a checksum that is wrong, a TLV 1 with no
+area in it, the same TLV forty times.
+
+So:
+
+* No check in a constructor that refuses something merely invalid.
+* No check in `encode`.
+* No check in `to_hash`.
+
+A constructor may refuse an input it **cannot represent at all**, such as an
+integer too large for the field it goes in, because the alternative is
+silently sending a different value than the caller asked for. It may never
+refuse a combination that is simply wrong by the spec.
+
+Where a constructor does refuse, **the octet level route stays open**:
+building from wire bytes, and an `Unknown` of the right level, must always
+work. There is no input the library cannot express.
+
+## Validation
+
+Validation exists, and it lives in exactly one place, and it runs only on
+what was received.
+
+* One file, `isis/validation.rb`. A rule is added there with the clause it
+  comes from, never in the class it is about.
+* It reports findings. It does not raise, except under an explicit strict
+  policy a caller asks for.
+* **An `errors` finding, and only that channel, means the sender got
+  something wrong.** The other two channels below mean something else and
+  must never be reported as the peer's fault. A conformance tool that
+  reports its own missing code as the peer's error gives a confident wrong
+  verdict about a correct router, which is the worst failure a tool of
+  this kind has.
+
+**So there are three channels and not two.** The second one is the usual
+omission; the third is the one that makes this library's verdicts
+defensible at all.
+
+| Channel | Means | Example |
+|---|---|---|
+| `errors` | the sender violated a clause | a TLV type the standard forbids in this PDU |
+| `gaps` | isis4r has no code for this | a valid TLV type nobody implemented yet |
+| `inconclusive` | the octets do not support a verdict | a PDU the capture cut short, or a rule needing a TLV that is not in this PDU |
+
+The third is not fastidiousness. **A truncated capture looks exactly like a
+truncated PDU**, and the library cannot tell them apart from the octets, so
+calling it a protocol error is a guess presented as a result. The same
+applies to any rule that needs more context than the thing being checked:
+if a check needs a second TLV, or another PDU, or session state, and it is
+handed one TLV, the honest answer is that it did not run. bgp4r met this
+from the other direction and left its cross-attribute checks unimplemented
+rather than approximate them, which was right.
+
+Keep the channels independent: run the checks on the raw octets, before and
+regardless of whether the decoder succeeded. Then a PDU that is both
+malformed and undecodable gets an entry in each, and neither waits on the
+other.
+
+**A finding carries where it came from.** The clause for an `errors` entry,
+the missing class for a `gaps` entry, and what was missing for an
+`inconclusive` one. A finding nobody can trace back is an opinion.
+
+**Do not invent an error response the spec does not specify.** If ISO 10589
+says what a receiver does with a malformed PDU, implement that and quote
+it. If it does not, record that it does not. Copying what one router
+happens to do is not the same as the spec saying it, and one implementation
+agreeing with you is not a quorum.
+
+## The 255 octet limit is a packing problem, not an encoding one
+
+A TLV value longer than 255 octets cannot be encoded. That is a fact about
+the framing, and the TLV class should refuse it, because it genuinely
+cannot represent it.
+
+**Splitting content across several TLVs is a separate job and belongs in a
+separate object.** A builder takes the content and returns a list of TLVs
+that carry it. The TLV class stays dumb and the splitting rules, which
+differ per TLV type, stay in one readable place.
+
+The same separation applies one level up: fitting TLVs into a PDU is the
+builder's job, not the PDU's.
+
+**The limit for an LSP is not the link MTU.** An LSP is flooded, so it has
+to be receivable everywhere it will go, not merely sendable on the
+interface it leaves by. Read in RFC 3719 section 5, and worth getting
+exactly right because the terms point in opposite directions:
+
+* **`originatingL1LSPBufferSize` and `originatingL2LSPBufferSize`** are
+  "two private management parameters" bounding the largest LSP this router
+  will **generate**, per level.
+* **`ReceiveLSPBufferSize`** is what a router will **accept**. ISO 10589
+  gives it as **1492 octets**, an architectural value and **not a
+  ceiling**: RFC 3719 section 5 discusses configuring it higher for
+  networks that support larger LSPs, noting that it enlarges the LSP
+  database, otherwise bounded at 256 times 1492 per level, and that it
+  "must be done with care".
+* The rule is `originatingL1LSPBufferSize <= ReceiveLSPBufferSize`, and
+  the same for L2, and each originating size must also not exceed the MTU
+  of the links at that level.
+* **The consistency requirement is on `ReceiveLSPBufferSize`**, which must
+  be "a consistent value throughout the network". The originating sizes do
+  **not** all have to be identical. They each have to fit.
+
+**TLV 14 advertises the originating size, not the receive capacity.** It
+lets a receiver detect a mismatch with its own capacity, so the
+recommendations are to
+include it when generating LSPs, to check it on receipt, and to report a
+value above the local `ReceiveLSPBufferSize`. A mismatch causes routing
+loops and black holes because LSPs do not propagate fully.
+
+**One recommendation there bears directly on this library's receive side**:
+do not discard an oversized PDU by default. Storing and processing it may
+keep a misconfigured network coherent. So an oversized PDU is a finding and
+not a reason to drop, which is also the only behaviour that lets the
+library be used to watch what a router does with one.
+
+So the builder takes **two** budgets and keeps them apart: an originating
+LSP size budget, checked against the **configured** receive capacity and
+the applicable circuit MTUs, and a link framing budget, which bounds what
+any single transmission can carry. They fail differently. The first
+produces an LSP somebody refuses to store. The second produces a frame
+nobody can send. Hellos and the sequence number PDUs are bounded by the
+second only, since they are never flooded.
+
+**Both budgets are configuration handed to the builder, and 1492 is a
+default rather than a limit this library imposes.** Anything else would
+contradict the rule that building never validates: originating a 9000
+octet LSP to watch a router refuse it is a test somebody will want, and the
+encoder has no business preventing it. So the number lives in the builder's
+configuration, the default matches the architectural value, and raising it
+is a caller's decision.
+
+**`encode` does not enforce configured operational size budgets.
+Representability checks still apply**, and the two are different kinds of
+limit. A budget is somebody's policy about what is sensible to originate,
+so the encoder ignores it. A one octet length field that cannot hold 300 is
+arithmetic, so the encoder raises, exactly as the TLV framing does. The
+library's one rule about refusing covers both cases from the same side: it
+refuses when it cannot produce the octets, never when it disapproves of
+them.
+
+**The builder encodes each child once, keeps the bytes, and measures them.
+It does not predict sizes with arithmetic.** Predicting contradicts the
+composition rule two sections up: if the only thing a parent may assume
+about a child is that `child.encode` returns its octets, a parent that
+predicts a child's length has assumed something else. It also means two
+implementations of every layout, the encoder and the size formula, which
+drift.
+
+bgp4r predicts, and the reason does not transfer. A BGP prefix is
+`1 + (len + 7) / 8` octets and a full table is about a million of them, so
+re-encoding per candidate is the difference between a second and an hour.
+An IS-IS PDU holds tens or hundreds of TLVs and is bounded by the link MTU,
+so encoding each once and summing `bytesize` is exact, simpler, and fast
+enough that the question does not arise. Measure the finished PDU once as
+well, so a slip raises instead of putting an oversized PDU on the wire.
+
+Where a size genuinely is needed before the bytes exist, give the class a
+method that answers it **by encoding and measuring**, not by a parallel
+formula. One implementation, and it cannot disagree with itself.
+
+**And a third level above that, which is the one with a field attached to
+it.** When a router's advertisements will not fit in one LSP, they go out
+as several, distinguished by the LSP Number, the last octet of the LSP ID.
+So there are three packing problems stacked:
+
+| Level | Overflows at | Carried by |
+|---|---|---|
+| Content into a TLV | 255 octets of value | repeated TLVs of one type |
+| TLVs into a PDU | the LSP size budget, or the link framing budget | nothing, it has to fit |
+| Advertisements into LSPs | one LSP | the LSP Number |
+
+Three builders, one per row, and none of them in an encoding class. The
+rows are independent: a TLV that repeats because of row one has nothing to
+do with an LSP that splits because of row three, and conflating them
+produces a splitter that cannot explain its own output.
+
+**Call it the LSP Number in code.** Routers and operators call it the
+fragment, which is the useful word in conversation and the wrong one here,
+because the specification calls it the LSP Number and because it has
+nothing to do with IP fragmentation: there is no reassembly, each LSP is
+independent, floods on its own and ages on its own. A reader who takes
+"fragment" literally goes looking for a reassembly step that does not
+exist. Accept the word in prose and in a comment. Keep it out of the field
+name.
+
+## Authentication is a fixup, like the checksum
+
+The authentication TLV covers the PDU that contains it, including its own
+value field. So it is the same shape as the checksum: assemble, compute
+over the span, splice in. Two fixups in a defined order, and the order
+matters. Write down which runs first and why, and put a test on a PDU that
+carries both.
+
+**Only part of the TLV value is zeroed, not the TLV.** Read in RFC 5304:
+TLV type 10, whose "first octet of the value is used to specify the
+authentication type", with "the remainder of the TLV value ... known as the
+Authentication Value". For HMAC-MD5 the type is 54, the value is 16 octets
+and the TLV length is 17. Before computing, the **Authentication Value** is
+zeroed while the authentication type octet stays set to 54 and the length
+stays 17: "the Authentication Type is set to 54 and the length of the TLV
+is set to 17 before authentication is computed". RFC 5310 adds a Key ID,
+which likewise stays populated.
+
+So the thing that gets prepared is a field inside the value, and the
+preparation is the **algorithm's** to specify. RFC 5304 zeroes it. RFC
+5310's generic cryptographic authentication prepares it differently, and
+its sections 3.3 and 3.4 are where to read that; it is not read here yet.
+Write the fixup to ask the algorithm what to put there, splice, compute,
+splice the result. Write it that way while only one algorithm exists, or
+the second has to be threaded around a zeroing step buried in the PDU.
+Cleartext authentication is a third case and shares none of this.
+
+### The order, and which half of it is the RFC's
+
+1. Assemble every field and any padding, so the octets exist.
+2. Ask the algorithm to prepare the Authentication Value in place, leaving
+   the type, length and any Key ID populated.
+3. **Zero the LSP Checksum and the Remaining Lifetime.** RFC 5304 section
+   2: "Checksum and Remaining Lifetime fields are set to zero (0) before
+   authentication is computed." **The two are zeroed for different
+   reasons.** Remaining Lifetime is decremented during normal flooding, so
+   a digest covering it would fail at the next hop. The **checksum is not
+   modified in transit**: the historical specification says another system
+   must not alter it, and one that cannot keep it valid purges the LSP
+   instead. It is zeroed because the checksum covers the digest, so the
+   digest must not cover the checksum, which is the circular dependency
+   the previous section is about. RFC 1142 section 7.3.11 is cited for the
+   transit rule and has not been read here.
+4. Compute the digest, write it into the Authentication Value, restore the
+   real Remaining Lifetime.
+5. Compute the LSP checksum and write it in.
+
+**Steps 1 to 4 are RFC 5304's. Step 5's position is not, and the
+difference matters.** The RFC specifies that the Checksum field is zeroed
+during authentication and restored on receipt, and it gives **no
+sender-side ordering** between the two computations. Checksum last is a
+derivation, and the reason is that the checksum covers the Authentication
+TLV's own octets, so computing it before the digest is written would
+checksum a field about to change. Cite the derivation as a derivation.
+
+### An authenticated capture that is edited without a key
+
+Preserving the digest on an unmodified capture is right. Once protected
+content changes, the library cannot produce a valid one without the key,
+and all three quiet answers are wrong: keeping the stale digest claims a
+validity the PDU does not have, zeroing it sends something nobody asked
+for, and recomputing with no key is not possible.
+
+**So it reports.** Encoding an edited authenticated PDU with no key raises,
+naming the field and saying a key is needed.
+
+**And the escape route cannot be the singleton override.** That override
+calls `super` first and patches the result, so against a method that raises
+it never runs at all: the one case it would be invented for is the one case
+it cannot reach.
+
+Two routes that do work, and they answer different questions:
+
+* **`replay`** returns the octets the object was parsed from, exactly, with
+  no encode step and so nothing to raise. This is the whole of "send me
+  that capture again", it needs no key by construction, and the link layer
+  takes a String. It is the right answer for an unedited capture and it
+  should be the documented default for replay work.
+* **`preserve_authentication!`** is the explicit opt-in for the edited
+  case: encode with the retained digest even though the protected octets
+  moved. The method name is the point. A test that calls it is on record as
+  sending a PDU whose digest is wrong on purpose, which is a real test and
+  should look like one.
+
+The singleton override keeps its place for a PDU **built** from values,
+where nothing raises and patching the encoded result is the cleanest way to
+lie about a length or a checksum. Three routes, three jobs: replay an
+original, send a knowingly stale digest, or fabricate a wrong field.
+
+**The rule that generalizes**, stated in full once here and used in the
+idiom and packing sections. The library refuses only when it **cannot
+produce the octets**, never when it disapproves of them. A value too large for its
+field and a digest with no key are both the first kind. Nothing anywhere is
+the second kind.
+
+The replay rule still holds for the untouched case: a parsed PDU keeps the
+authentication value it arrived with, so a capture with a bad digest can be
+sent again exactly as it came, which is the whole reason anyone points this
+library at a router.
+
+## Codepoints
+
+Keep them in one file, with the registry's own names beside the numbers.
+
+**The IANA "IS-IS TLV Codepoints" registry is the index**, and it is
+reachable from this sandbox. So "check the registry" is a real instruction
+and not a wish. Two things about fetching it: search and follow a result
+link, because a URL assembled by editing a path tends to be refused; and a
+third party mirror is worth less than one read of the defining document,
+because mirrors go stale silently.
+
+**The base spec is the awkward one.** RFC 1195 and the extension RFCs are
+free. ISO/IEC 10589 is not an RFC and is not always to hand. When it is not
+available, say in the comment that the claim is second hand and from where,
+rather than writing it as though it were read. A claim nobody can check
+reads as verified, which is how a wrong one survives.
+
+Three documents, and which one a citation came from matters:
+
+* **ISO/IEC 10589:2002, second edition**, is the base standard. Paid.
+  **INCITS/ISO/IEC 10589:2002 (R2022)** from the ANSI store is the
+  identical national adoption, so either is the same text. R2022 means
+  reaffirmed in 2022 and is not a newer edition of the protocol.
+* **RFC 1142** is free and is the same protocol republished in **1990**,
+  twelve years before the edition above. It is sound for the algorithm and
+  the vocabulary. It is **not** a source for a clause number, because the
+  numbering and the content both moved. Cite it as RFC 1142 by name and
+  never as "ISO 10589 section N".
+* **RFC 1195** is Integrated IS-IS, which is where IP enters the protocol
+  at all. Most of what this library encodes for IP traces to here or to the
+  extension RFCs, not to the base standard.
+
+**Checking a citation means reading the section, not the title**, and this
+file is where that was learned the hard way. Three citations in a set of
+notes about this protocol were called misplaced here on the strength of
+their titles. Then they were read:
+
+* **RFC 5120, cited for packet terminology.** Its title is M-ISIS, Multi
+  Topology. Its **section 1.2 is "Definitions of Terms Used in This
+  Document"** and defines CSNP, DIS, IIH, LSP, PSNP and SPF outright. The
+  citation was correct and the criticism was wrong.
+* **RFC 9681, cited for PDU families and for IS-IS running over the link
+  layer.** Its title is IS-IS Fast Flooding. Its section 5.2 opens "There
+  are three classes of PDUs sent by IS-IS", section 5.1 covers PSNPs
+  acknowledging LSPs on point to point networks, and **section 8 says in
+  so many words that IS-IS does not run over IP but directly over the link
+  layer**. Correct on all three counts, and wrong again.
+* **RFC 5303, cited for LAN adjacency behaviour.** Title and content agree:
+  "Three-Way Handshake for IS-IS **Point-to-Point** Adjacencies". This one
+  was genuinely misplaced.
+
+One of three. **The failure was not carelessness about whether the RFCs
+existed; it was substituting the title for the section**, which is the
+identical shortcut to writing a clause number from memory and produces the
+same confident wrong result. A title tells you what a document is mostly
+about. A citation is a claim about one passage.
+
+So: fetch the section and quote it, or write "unverified" beside the
+reference. There is no third option, and "the title says otherwise" is not
+one. The same check went the other way on RFC 3563 below, where the
+expectation was that the citation would be wrong and reading it showed it
+was right.
+
+A citation that is real, relevant sounding and about something else is
+still worse than a missing one. That part stands. What changed is who is
+most likely to produce one.
+
+**Cite the clause in a comment when you implement wire format logic**, and
+open the document to check the number rather than writing it from memory. A
+wrong citation is worse than none, because it reads as verified and sends
+the next reader to the wrong page.
+
+## Testing
+
+### Hex is the canonical form of an object
+
+**In a test, an object is its encoded value as a hex string.** Give every
+class a `to_shex`, and assert on that.
+
+The reason is not convenience. **Hex is the only representation the
+specification and the library share.** A clause describes an encoding field
+by field, with widths and bit positions. A reader can turn that description
+into a hex string by hand. Nobody can turn it into a Ruby object. So the
+expected value in a test is hex written out of the document, and the
+assertion compares it against what the library produced:
+
+```ruby
+# The Area Addresses TLV: type 1, length, then each area as a length
+# octet followed by that many octets. Area 49.0001 is 3 octets, so the
+# value is 03 490001 and the TLV length is 4.
+def test_one_area
+  assert_equal('010403490001', Area_addresses.new('49.0001').to_shex)
+end
+```
+
+That expectation came from the clause, not from the library. When it fails,
+one of two things is wrong: the code, or the reading. Both are worth
+finding. A test that asserts on whatever the library already prints finds
+neither, and passes forever.
+
+**That very example was written wrong here first**, as `010449010001`,
+dropping the per-area length octet the comment above it describes. The
+prose was right, the hex did not match the prose, and a reader checking the
+hex against the clause caught it. **Spell the field breakdown out in the
+comment for that reason**: without it the wrong hex looks as plausible as
+the right one, and nobody can check either.
+
+Three rules follow.
+
+* **Never assert object equality.** Two objects can be equal and encode
+  differently, and `==` is a method somebody has to write and get right.
+  Hex is definitive and needs no code to be trusted.
+* **Never assert against the input String.**
+  `assert_equal(octets, Klass.new(octets).encode)` fails when `parse`
+  consumed its argument, and both sides print the same thing while it
+  fails, which costs an hour every time. Compare `to_shex` with `to_shex`.
+* **Say where an expectation came from**, because they are not worth the
+  same. Ranked:
+  1. **A worked example in the specification.** Its hex is the document's
+     own, so it is independent of this reader's understanding of the
+     document, which is the thing under test. Use these wherever they
+     exist, and quote the clause beside them.
+  2. **A capture from a real router.** Proves somebody else agrees.
+  3. **Hex you worked out from the clause yourself.** Still worth far more
+     than asserting what the library prints, since it checks the code
+     against the document. But write in the test that the expectation is
+     your arithmetic, so the next reader knows which side to doubt first.
+
+  The ranking is not theory. On a protocol with worked examples, hand
+  written expectations get written wrong often, and the document's hex is
+  what catches them. **When a hand written expectation and the library
+  disagree, print both sides before concluding anything**: it is the
+  expectation about half the time.
+
+### Both directions, ntop and pton
+
+`inet_ntop` and `inet_pton` name the two directions, and **every identifier
+and address class owes both**. That is the scope, not every class that has
+a `to_s`: a composite's `to_s` is a dump for a person to read and owes no
+reverse direction, for the reasons under the object contract. System ID,
+LSP ID, area address, LAN address, ISO and IP prefix. Those are the ones
+this section is about.
+
+* **ntop, network to presentation.** Octets in. `Klass.new_ntop(octets)`
+  builds the object and `to_s` gives the human form. Six octets become
+  `1921.6800.1001`. Eight become `1921.6800.1001.00-00`.
+* **pton, presentation to network.** The human form in.
+  `Klass.new('1921.6800.1001')` builds the object and `encode` gives the
+  octets back.
+
+**Each direction needs its own test, and the round trip needs a third.**
+
+```ruby
+def test_ntop
+  assert_equal('1921.6800.1001', System_id.new_ntop([HEX].pack('H*')).to_s)
+end
+
+def test_pton
+  assert_equal(HEX, System_id.new('1921.6800.1001').to_shex)
+end
+
+def test_round_trip
+  assert_equal(HEX, System_id.new_ntop([HEX].pack('H*')).to_shex)
+end
+```
+
+The round trip is not either of the other two. It passes when both
+directions are wrong in the same way, which is the commonest way for them
+to be wrong, since one author writes both in one sitting. So it is the
+third test and never the only one.
+
+**The direction with a name gets tested. The direction without one gets
+assumed.** bgp4r names `new_ntop` explicitly in a dozen classes and has no
+`pton` method anywhere: that direction is the ordinary constructor followed
+by `encode`, which does not look like a direction and so does not get a
+test of its own. Name both here.
+
+**IS-IS gives you nothing to lean on for either half.** For IP there is a
+standard library call and both directions are somebody else's problem. A
+System ID, an LSP ID with its pseudonode and LSP number, a variable length
+area address, an ISO prefix: every one of those presentation forms is code
+written in this library, both ways. Printing can be right while parsing is
+wrong, and only a pton test says so.
+
+**A presentation form that cannot be parsed back is a bug, however well it
+prints.** When `to_s` feeds `new`, a dump from a live session can be pasted
+straight into a test as a fixture, which is the most useful thing a library
+of this kind produces. When it cannot, every fixture has to be hand built
+from hex.
+
+**The presentation forms are conventions and not specification, so this is
+the one place to copy routers rather than the document.** ISO 10589
+describes octets. It does not say that a System ID prints as three
+dot-separated groups of four hex digits, or that an LSP ID appends its
+pseudonode and LSP number after a hyphen. Those come from vendor command
+lines. Pick what real routers print, because the whole value of `to_s`
+feeding `new` is pasting a line out of a router dump, and say in a comment
+that the form is a convention with no clause behind it. That keeps the next
+audit from going looking for one.
+
+### The rest
+
+* One test file per source file, same name with `_test.rb`, in the matching
+  folder under `test/unit/`.
+* Write class names out in full in a test file, and `include` into the test
+  class, never at the top level. A top level `include` leaks into `Object`
+  and every file loaded afterwards sees those names, so a test written that
+  way passes in the suite and fails on its own.
+* The mirror image is just as real: a file that does not require what it
+  names passes in the suite, because an earlier file required it, and fails
+  alone. **The two traps fail in opposite directions and one run cannot
+  catch both.** Run a file you changed on its own and in the suite.
+* A test method defined after `private` never runs and nothing says so. If a
+  count looks low, compare it against `grep -c 'def test_'`.
+
+### Prove the test proves something
+
+When you add a test for a fix, break the fix and watch the test fail.
+
+**A sabotage that passes means the sabotage missed, or the test is weak.**
+Both happen. Check which before believing the result:
+
+* Assert on the thing you actually changed.
+* Prefer deleting a line to mutating a value, because a lenient constructor
+  will absorb a mutated value and the test is then right to pass.
+* Be suspicious of an assertion that could pass by luck. Asking for a free
+  port on one loopback address and binding it on another passes whether or
+  not the code reads the argument, because the two are almost always free
+  together. Find the assertion that cannot pass by accident.
+
+## Documentation
+
+Write a guide for anything intricate: the PDU header, the TLV framing, the
+ID length threading, the checksum span.
+
+**Then assert its load-bearing claims with a test**, and make the test
+**discover** rather than compare against a list. A guide that lists the TLVs
+goes stale the day someone adds one. A guide whose test reads the registry
+out of the library and cross-checks the document in both directions cannot:
+a new TLV class fails the suite until the document mentions it.
+
+Prove that guard works by sabotaging it in both directions. A table test
+that passes when the table is empty is not a guard.
+
+## Where to start
+
+Each phase ends with something that works end to end. Record status here as
+it moves, because a plan that lives only in a chat is lost when the chat is.
+
+**Status, measured 2026-10-31.** The repository is still `isis-poc`, laid
+out under `lib/isis/` and not as the Layout section above describes. It
+has a LAN Hello encode and parse, a TLV helper, an LLC header and an L1 LAN
+adjacency over the datalink-socket loopback backend. None of the phases
+below is done in the form this file describes: there is no common header
+class, no `Unknown` at any level, no parse policy, and no `to_shex`. The
+Layout section is the target, not the tree. Update this paragraph when
+that changes.
+
+1. **The common header, the TLV framing, three Unknowns, and the parse
+   policy.** No real TLV yet. Two deliverables, and they are different
+   cases: a captured PDU of an **implemented** type parses into its layout
+   with a body of `Tlv::Unknown`s and re-encodes byte for byte, and a
+   captured PDU of an **unimplemented** type comes back as opaque octets
+   that re-encode byte for byte without being framed at all. Add the
+   truncation tests here rather than later, because the parse policy is
+   cheaper to design now than to retrofit under five layouts. If all of
+   that works, the hardest structural decisions are already right.
+2. **The hellos.** L1 LAN, L2 LAN, point to point. TLVs 1, 6, 8, 129, 132.
+   Enough to be seen by a real router, which is the first outside
+   confirmation worth having.
+3. **The LSP.** The checksum, the sequence number, the lifetime, the flags.
+   TLVs 2, 22, 128, 135. This is where the fixup step earns its design.
+4. **The sequence number PDUs.** CSNP, PSNP, TLV 9.
+5. **IPv6 and the extensions.** TLVs 232, 236, 242, and the sub-TLVs under
+   22 and 135. These are additions, not changes, if phase 1 was right.
+6. **Validation**, once there is enough implemented for a finding to mean
+   something.
+7. **A lab.** A real IS-IS speaker on the other end of a link, saying what
+   it makes of what isis4r sent. Two isis4r speakers agreeing proves only
+   that they agree: bgp4r had a capability field inverted for years because
+   both ends made the same mistake and cancelled it out.
+
+## Rules for agents
+
+* Work on a branch named `claude/<short-topic>`. Never push to master.
+* One topic per pull request. Small diffs.
+* Run the full unit suite before opening a pull request.
+* New behaviour needs a test. A fix needs a test that failed before it.
+* If you find a bug you are not fixing, say so in the pull request.
+* **Work out what the code was built to do before concluding it is wrong.**
+  A shape that looks odd is more often a decision whose reason was never
+  written down than a defect. Say "I do not know why this is like this"
+  rather than "this is wrong" until you have answered the first.
+* **A decision not to do something has to record the mechanism, not the
+  verdict.** "Cannot be done readably" is a conclusion. What a later reader
+  needs is the premise it came from and the bar it was measured against,
+  because the conclusion is the half that turns out to be wrong.
+* **Measure rather than recall.** Counts, timings, what a router does, what
+  a registry says. If a command can print it, do not write it in prose. If
+  prose must carry it, say when it was measured.
+* Keep this file true in the pull request that makes it false. A stale entry
+  is worse than no entry, because it sends the next reader after work that
+  no longer exists.
+
+## Corrections
+
+Every rule above is the rule as it stands. This is what was believed first,
+collected here so the rules read as rules. It is kept because a correction
+without its mechanism gets re-litigated, and moved out of the rules because
+twenty two of them inline buried the contract.
+
+| Believed first | Actually | Rule now in |
+|---|---|---|
+| An LSA is a leaf, an LSP is a container | Both are containers; the missing layer is OSPF's Link State Update. **For containment only**, LSA maps to TLV; identity, sequencing, aging and flooding map LSA to LSP | OSPF analogy |
+| ATT is one bit | Four, one per metric type | LSP flags octet |
+| OR-ing masks to `0xff` proves no overlap | OR is idempotent; needs union **and** pairwise AND, and neither proves the mapping | LSP flags octet |
+| A test setting only the default ATT bit misses a reversal | It catches it; the **round trip** is what misses it | LSP flags octet |
+| The narrow metric is one octet with a value, an I/E bit and an S bit | Four octets in two layouts, and S set means **not** supported | Narrow and wide metrics |
+| Invalidation follows size changes | It follows content changes at any depth; compare retained normalized bytes | How an edit invalidates |
+| One coverage span | Two, and they are **ordered**: digest, then checksum | One retained input per calculation |
+| A common header edit leaves the checksum | Only unauthenticated; otherwise it reaches the checksum through the digest | same |
+| ID Length scales TLV 6's entries | TLV 6 carries LAN addresses; TLV 2 is the System ID one | Parse-time inputs |
+| Declared length over the capture is the truncated-header case | Four distinct cases | Parse rule 6 |
+| A PDU replays its declared length | Its **consumed slice**, which need not match | Parse rule 7 |
+| The link MTU is the LSP budget | Configured receive capacity and circuit MTUs; 1492 is a default, not a ceiling | Packing |
+| TLV 14 advertises receive capacity | It advertises the **originating** size | Packing |
+| The builder predicts sizes arithmetically | It encodes once and measures | Packing |
+| Checksum and Remaining Lifetime are zeroed for the digest because both mutate in transit | Only the lifetime does; the checksum is a circular dependency | Authentication, step 3 |
+| The singleton override can keep a stale digest | It calls `super`, which raises first; use `replay` or `preserve_authentication!` | Authenticated edit without a key |
+| All authentication prepares its value by zeroing | Algorithm dependent, and only the Authentication Value, not the TLV | Authentication |
+| An unknown PDU can be framed into `Tlv::Unknown`s | Opaque; nothing establishes its body is TLVs | Keep what you cannot read |
+| `to_s` must feed `new` for every class | Identifier and address classes only | Five ways out |
+| The Area Addresses TLV for 49.0001 is `010449010001` | `010403490001`; the per-area length octet | Hex is canonical |
+| RFC 5120 and RFC 9681 were cited for the wrong thing | Both citations were correct; they were judged by title, not read | Codepoints |
+| A hash may carry a computed field when parsing found an unusual one | That is a `checksum:` option by another name; computed fields stay out of the hash and are replayed from octets | Computed fields |
+| `value.size` for a length field | `bytesize`, and `String#<<` expansion is encoding dependent | The idiom |
+
+**Three kinds, and knowing them is worth more than the list.** Almost every
+row is one of:
+
+1. **A field read narrower than it is.** ATT, the narrow metric octets,
+   `size` against `bytesize`. The summary everybody repeats is the singular
+   one, and the encoder written from the summary is wrong by a nibble.
+2. **A universal rule written before its exceptions were known.** One
+   coverage span, `to_s` reversibility, replay equals declared length, size
+   based invalidation. Each read as clean doctrine and each had a case it
+   could not express.
+3. **A check that validates structure mistaken for one that validates
+   meaning.** The tiling check, and both misjudged citations. Structure is
+   cheap to check and it is never the question.
+
+A new rule in this file is worth one pass against those three before it is
+written down as settled.
+
+## Things to verify before writing them down
+
+Written from memory while planning, so each is a lead and not a fact. Check
+each against the document and replace this list with what you found.
+
+* The ID Length encoding, including what zero means and which value means a
+  null System ID.
+* The exact span the LSP checksum covers, and that Remaining Lifetime is
+  outside it.
+* The Length Indicator value for each PDU type, and that it is the fixed
+  header length rather than the PDU length.
+* The PDU type numbers for all nine PDUs, and which bits of that octet are
+  the type and which are reserved.
+* Which TLVs are legal in which PDU, which is validation's business and not
+  the encoder's.
+* The order of the checksum and authentication fixups.
+* Whether the Maximum Area Addresses field of zero means three.
+* **The LSP flags octet masks.** The highest priority line here. Two
+  sources agree on the layout in the flags section above and neither is the
+  2002 edition, and the tiling checks there are **blind to the one error in
+  question**, since a reversed mapping tiles perfectly. So nothing has
+  confirmed which name goes with which mask. Read the edition, then delete
+  this line.
+* **RFC 5310 sections 3.3 and 3.4**, for how generic cryptographic
+  authentication prepares the Authentication Value, which is cited in the
+  authentication section and has not been read here. The design only needs
+  to know that the preparation is the algorithm's, which holds either way,
+  but the second algorithm cannot be written without it.
+* **RFC 1142 section 7.3.11**, cited in the authentication section for the
+  rule that another system must not modify an LSP's checksum. Not read
+  here. The conclusion it supports does not depend on it, since the
+  circular dependency is reason enough to zero the field, but the transit
+  rule itself is worth confirming before anyone leans on it.
+* **The four original metric octets**: that the default one carries an
+  internal/external bit and a reserved bit, that the other three carry an S
+  bit and a reserved bit, and that **S set means not supported**. The
+  inversion is the part most likely to be implemented backwards, so verify
+  it before writing the predicate and name the method for what it answers.
+* **The Circuit Type field** in the three hello PDUs: its width, its
+  position, and the encoding of L1, L2 and both. The design above depends
+  on it carrying all three, so if it does not, the hello level handling
+  changes.
+* **Whether TLV 6's entries are fixed at six octets** or carry a length,
+  since the design above says ID Length does not touch them.
+
+Already settled, with where each came from, so nobody pays for it twice.
+Each of these cost a fetch, and two of them overturned what this file
+confidently said:
+
+* **TLV 22 and TLV 135 field widths and sub-TLV framing**, quoted verbatim
+  from RFC 5305 sections 3 and 4 in the composition section above. First
+  hand, and the only first hand protocol reading in this file.
+* **RFC 5120 section 1.2** is "Definitions of Terms Used in This Document"
+  and defines CSNP, DIS, IIH, LSP, PSNP and SPF. Read.
+* **RFC 9681** is IS-IS Fast Flooding. Section 5.2 gives the three classes
+  of PDU, section 5.1 covers PSNPs acknowledging LSPs on point to point
+  networks, and section 8 says IS-IS runs directly over the link layer
+  rather than over IP. Read.
+* **RFC 3563** is the ISOC/IETF and ISO/IEC JTC1/SC6 cooperative
+  agreement, Informational, later updated by RFC 6233. Its section 2.1
+  does list core IS-IS mechanisms, but only to divide the two bodies'
+  scope, and its own security section calls it a non-protocol document. So
+  it is a correct citation for what the mechanism categories are named and
+  a useless one for how any of them works. Read, against the expectation
+  that it would turn out to be a misuse.
+* **RFC 5303** is point to point adjacencies, by title and by content, so
+  it does not support a claim about LAN behaviour.
+* **RFC 3719 section 5**, quoted in the packing section: the two
+  originating buffer sizes as "private management parameters", the rule
+  that each must be at or below `ReceiveLSPBufferSize` and within the link
+  MTUs, `ReceiveLSPBufferSize` given as **1492** octets by ISO 10589, a
+  default that RFC 3719 allows raising with care, the
+  consistency requirement being on that value and not on the originating
+  sizes, TLV 14 carrying the **originating** size for receivers to check,
+  and the recommendation not to discard oversized PDUs. Read.
+  * **It also exposes a numbering collision worth knowing.** RFC 3719
+    points at **ISO 10589:2002 section 9.8** for the originating buffer
+    size TLV, while this file carries a citation to **RFC 1142 section
+    9.8** for the LSP flags masks. Two different subjects under the same
+    number, in two documents twelve years apart. That is the RFC 1142
+    numbering hazard recorded under Codepoints, arriving with a concrete
+    example: never convert an RFC 1142 section number into an ISO 10589
+    one.
+* **RFC 5304** on the Authentication TLV, quoted in the authentication
+  section: TLV 10, first value octet is the authentication type, remainder
+  is the Authentication Value, type 54 and length 17 for HMAC-MD5, and
+  "Checksum and Remaining Lifetime fields are set to zero (0) before
+  authentication is computed". Read.
+  * **And what it does not say**, which is the useful half: it gives **no
+    sender-side ordering** between computing the digest and computing the
+    LSP checksum. The five step procedure in that section is RFC 5304's for
+    steps 1 to 4 and a derivation for step 5. Do not promote the
+    derivation to a citation later just because it is correct.
