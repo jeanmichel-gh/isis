@@ -1465,14 +1465,16 @@ that passes when the table is empty is not a guard.
 Each phase ends with something that works end to end. Record status here as
 it moves, because a plan that lives only in a chat is lost when the chat is.
 
-**Status, measured 2026-10-31.** The repository is still `isis-poc`, laid
-out under `lib/isis/` and not as the Layout section above describes. It
-has a LAN Hello encode and parse, a TLV helper, an LLC header and an L1 LAN
+**Status, measured 2026-10-31.** The tree now follows the Layout above,
+but only partly fills it: `isis4r.rb`, `isis/common.rb` (errors and
+`SystemId`), `isis/codepoints.rb`, `isis/link/llc.rb`, `isis/tlv/tlv.rb`,
+`isis/pdu/lan_hello.rb`, and `isis/adjacency/` with the adjacency and the
+circuit. Tests are under `test/unit/`, mirroring `isis/`. The code is
+still the proof of concept: a LAN Hello encode and parse and an L1 LAN
 adjacency over the datalink-socket loopback backend. None of the phases
-below is done in the form this file describes: there is no common header
-class, no `Unknown` at any level, no parse policy, and no `to_shex`. The
-Layout section is the target, not the tree. Update this paragraph when
-that changes.
+below is done in the form this file describes: there is no `isis/pdu/pdu.rb`
+with a common header class, no `Unknown` at any level, no parse policy, and
+no `to_shex`. Update this paragraph when that changes.
 
 1. **The common header, the TLV framing, three Unknowns, and the parse
    policy.** No real TLV yet. Two deliverables, and they are different
