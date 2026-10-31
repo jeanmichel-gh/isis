@@ -4,15 +4,29 @@ Guide for AI agents working on isis4r. Read this before writing anything.
 
 ## What this is
 
-isis4r is a pure Ruby library to build, parse and speak IS-IS (ISO/IEC
-10589 and RFC 1195, with the extensions that matter). It exists to script
-IS-IS speakers for testing and research: to put a PDU on a wire and watch
-a real router decide what to do with it.
+isis4r is a programmable IS-IS router and protocol testing platform, with
+a pure Ruby protocol core (ISO/IEC 10589 and RFC 1195, with the extensions
+that matter).
 
-**It is a protocol testing tool before it is a protocol implementation.**
-That sentence settles most design arguments in this file. A tool that can
-only send correct PDUs can only test the happy path, and the happy path is
-not where routers break.
+It can operate autonomously as a router, or let a test script control
+individual protocol mechanisms while the rest continue normally. The same
+packet formats, databases and state machines serve both uses.
+
+Normal operation follows the protocol. Explicit testing controls can
+override behaviour, manipulate time, inject failures and send malformed
+traffic. Received traffic remains available for exact replay.
+
+**Router functionality and testing control are both core requirements.**
+Adding automation must not remove control. Adding testing controls must not
+compromise ordinary router behaviour. The controls exist because a speaker
+that can only send correct PDUs can only test the happy path, and the happy
+path is not where routers break.
+
+Most of this file is about the codec: how a PDU is built, parsed and
+replayed. Those rules were written when isis4r was scoped as a test tool,
+and they still hold, because the codec serves both uses. Where router
+behaviour lives instead is in "Autonomous operation and testing controls"
+below. The scope change itself is under Decisions.
 
 ## The one rule the rest follow from
 
@@ -95,9 +109,16 @@ lib/isis/tlv/              one file per TLV, plus tlv.rb with the framing,
 lib/isis/subtlv/           sub-TLVs, grouped by the TLV that carries them,
                            since the same number means different things
                            under different parents
-lib/isis/link/             getting bytes on and off a link: raw socket, LLC
-                           framing, the interface
-lib/isis/adjacency/        the hello state machine, if and when it exists
+lib/isis/link/             getting bytes on and off a link: LLC framing,
+                           and the transports, real over datalink-socket
+                           and simulated for tests
+lib/isis/runtime/          the injected monotonic clock and the scheduler
+lib/isis/adjacency/        hello generation and the adjacency state machines
+lib/isis/database/         the per level LSP databases and flooding
+lib/isis/receive/          the receive policy: what a received PDU may change
+lib/isis/spf/              route calculation
+lib/isis/forwarding/       forwarding adapters, one per platform, each
+                           declaring its dependencies
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/functional/           tests that put PDUs on a real interface
@@ -113,6 +134,122 @@ gem is `isis4r`.
 
 Elsewhere in this file a path like `isis/validation.rb` means
 `lib/isis/validation.rb`.
+
+## Autonomous operation and testing controls
+
+**There is no testing switch.** Each protocol mechanism is an object with a
+default implementation, and a script can observe, replace, pause or drive
+it. At least these:
+
+| Mechanism | What the default does |
+|---|---|
+| Scheduling | runs timers on the injected clock |
+| Transmission | hands PDUs to the circuit's transport |
+| Hello generation | builds and sends hellos at the configured interval |
+| LSP origination | builds this system's LSPs from configuration and state |
+| Flooding | SRM and SSN handling, retransmission, CSNP and PSNP exchange |
+| Receive policy | decides what a received PDU may change |
+| SPF | computes routes when a database changes |
+| Route installation | hands route operations to a forwarding adapter |
+
+Controls compose at whatever granularity the mechanism has. A test can run
+ordinary routing on three circuits and manipulate hellos or flooding on a
+fourth. A global "test mode" flag cannot express that, and once it exists
+every mechanism grows a branch on it. Do not add one.
+
+### Ordinary production and deliberate overrides
+
+**The codec stays permissive.** Everything under "Building never
+validates" still holds, and the encoder never acquires checks "for router
+mode". Router behaviour is correct because the **originators** are
+correct: the hello generator, the LSP originator and the packing builders
+produce valid PDUs by construction, and their tests assert that against the
+specification.
+
+**A deliberately wrong PDU is a test override and looks like one**: a
+replaced originator, a singleton override on one object, or a hand built
+PDU handed to the transmission control. Never a flag on an originator that
+makes it produce something invalid. Ordinary production and deliberate
+overrides are separate code paths, so neither is reachable by accident from
+the other.
+
+### Receive: keep, report, then admit
+
+Three steps, in this order, and kept apart:
+
+1. **Keep.** The received octets are retained exactly, for inspection and
+   replay. Always, whatever follows.
+2. **Report.** Validation produces findings on its three channels, from
+   the octets. It decides nothing.
+3. **Admit.** The receive policy decides whether the PDU may affect
+   adjacency, database or routing state. Its inputs are the findings, the
+   circuit's configuration (levels, area addresses, circuit type) and the
+   authentication context (keys, expected types). Findings alone do not
+   carry enough to decide, which is why admission is its own step and not
+   a property of validation.
+
+**Keeping a PDU is not accepting it.** A capture holds everything that
+arrived. The adjacency, the database and SPF see only what the policy
+admitted. The default policy follows the specification, with the clause
+quoted beside each decision, including where the specification recommends
+keeping what a stricter reading would drop, such as an oversized LSP. A
+script can replace the policy per circuit.
+
+### Time and execution
+
+Time and execution are two injected things, not one:
+
+* **A monotonic clock** for every protocol time: holding times, LSP
+  lifetimes, retransmission intervals, SPF delays. Protocol code asks the
+  clock for the time and never reads the system's.
+* **A scheduler** for callbacks. A timer is a scheduled callback, never a
+  sleep.
+* **Wall clock time is for logs only**, never for a protocol decision.
+
+Transports sit at the edge. A real transport over datalink-socket may
+block waiting for a frame; that is its job. A simulated transport moves
+frames between circuits and lets the scheduler advance time without real
+waiting, which is what makes failure tests deterministic and fast.
+
+**Guard it with a test**: a source scan under `lib/isis/` that fails on
+direct calls to `Time.now`, `Process.clock_gettime` or `sleep`, with an
+explicit list of allowed files, which are the real transports and the
+logging. A new exception is a line in that list and is justified in the
+pull request that adds it.
+
+Today `Adjacency` reads `Process.clock_gettime` directly and `Circuit#poll`
+waits on real timeouts. Both move behind the clock and the transport in
+phase 1.
+
+### Pass-through equivalence
+
+This is how "testing controls must not compromise router behaviour" is
+checked rather than promised. Each router scenario runs twice, from the
+same initial state, simulated time and random seeds: once with no controls
+installed, and once with every control installed and passing everything
+through unchanged. The two runs must produce:
+
+* the same ordered packet events, sent and received, per circuit;
+* the same protocol state at each step: adjacencies, databases, flooding
+  flags;
+* the same ordered route operations: installs, replacements, withdrawals.
+
+**Final routes alone are not enough.** A hook that causes one transient
+withdrawal or one extra flood ends in the same routes and is still a
+defect.
+
+### Control plane and forwarding
+
+The protocol core computes routes and hands **route operations** to a
+forwarding adapter. It never touches a kernel itself. So the same core can
+compute and inspect routes without installing them, install them into a
+host, or drive a richer forwarding environment.
+
+**"Pure Ruby" means the protocol core.** Everything under `lib/isis/`
+except `forwarding/` runs on plain Ruby with no native extension. Adapters
+are declared per platform, each stating its dependencies. Whether an
+adapter may use a native dependency is an open decision, recorded under
+Decisions. Until it is made, none does.
 
 ## Nine PDU types, five layouts
 
@@ -973,6 +1110,9 @@ what was received.
 
 * One file, `isis/validation.rb`. A rule is added there with the clause it
   comes from, never in the class it is about.
+* **It decides nothing.** What a finding does to adjacency, database or
+  routing state is the receive policy's job, under "Autonomous operation
+  and testing controls".
 * It reports findings. It does not raise, except under an explicit strict
   policy a caller asks for.
 * **An `errors` finding, and only that channel, means the sender got
@@ -1061,8 +1201,9 @@ loops and black holes because LSPs do not propagate fully.
 **One recommendation there bears directly on this library's receive side**:
 do not discard an oversized PDU by default. Storing and processing it may
 keep a misconfigured network coherent. So an oversized PDU is a finding and
-not a reason to drop, which is also the only behaviour that lets the
-library be used to watch what a router does with one.
+not a reason to drop, and the default receive policy admits it. That is
+also the only behaviour that lets the library be used to watch what a
+router does with one.
 
 So the builder takes **two** budgets and keeps them apart: an originating
 LSP size budget, checked against the **configured** receive capacity and
@@ -1225,9 +1366,9 @@ original, send a knowingly stale digest, or fabricate a wrong field.
 
 **The rule that generalizes**, stated in full once here and used in the
 idiom and packing sections. The library refuses only when it **cannot
-produce the octets**, never when it disapproves of them. A value too large for its
-field and a digest with no key are both the first kind. Nothing anywhere is
-the second kind.
+produce the octets**, never when it disapproves of them. A value too large
+for its field and a digest with no key are both the first kind. Nothing
+anywhere is the second kind.
 
 The replay rule still holds for the untouched case: a parsed PDU keeps the
 authentication value it arrived with, so a capture with a bad digest can be
@@ -1480,8 +1621,15 @@ that passes when the table is empty is not a guard.
 
 ## Where to start
 
-Each phase ends with something that works end to end. Record status here as
-it moves, because a plan that lives only in a chat is lost when the chat is.
+Four phases, each with gates. **Every gate ends with a working behaviour
+shown against an independent implementation before the next layer goes
+on**, except the first, which is offline by design. Two isis4r speakers
+agreeing proves only that they agree: bgp4r had a capability field
+inverted for years because both ends made the same mistake and cancelled
+it out.
+
+Record status here as it moves, because a plan that lives only in a chat
+is lost when the chat is.
 
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
@@ -1490,35 +1638,88 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/pdu/lan_hello.rb`, and `lib/isis/adjacency/` with the adjacency
 and the circuit. Tests are under `test/unit/`. The code is still the proof
 of concept: a LAN Hello encode and parse and an L1 LAN adjacency over the
-datalink-socket loopback backend. None of the phases below is done in the
-form this file describes: there is no `pdu.rb` with a common header class,
-no `Unknown` at any level, no parse policy, and no `to_shex`. The gem has
-not been published and has no license set. Update this paragraph when that
+datalink-socket loopback backend. Phase 1 gate 1 is not met: there is no
+`pdu.rb` with a common header class, no `Unknown` at any level, no parse
+policy, no `to_shex`, and no injected clock. The gem has not been
+published and has no license set. Update this paragraph when that changes.
+
+### Phase 1, minimal speaker
+
+Router: one L1 point to point adjacency, local advertisements, database
+synchronization. Testing: exact replay, narrow and wide codecs,
+authentication, the injected clock, scripted packet exchange.
+
+1. **Offline.** The common header, the TLV framing, the three Unknowns and
+   the parse policy, with the truncation tests. A captured PDU of an
+   implemented type parses into its layout and re-encodes byte for byte; a
+   PDU of an unimplemented type comes back opaque and re-encodes byte for
+   byte. The clock, the scheduler and the simulated transport exist, and
+   the source scan guard passes. No network.
+2. **Hellos.** The point to point hello and the RFC 5303 three way
+   handshake. TLVs 1, 8, 129, 132 and 240. The existing LAN hello moves
+   onto the object contract. Gate: an independent router brings the
+   adjacency up and holds it, and losing the neighbour expires it.
+3. **LSP and SNP exchange.** The LSP with its checksum, sequence number,
+   lifetime and flags. TLVs 2, 22, 128 and 135, so narrow and wide both;
+   TLV 9 in CSNPs and PSNPs; TLV 10 with the RFC 5304 fixup. Repeated TLVs
+   follow RFC 9885: accept every part, and never split a sub-TLV across
+   parts when packing. The default receive policy for LSPs. Gate: the
+   independent router learns the advertised IPv4 prefix, a missing LSP is
+   requested and received ones acknowledged, and authentication succeeds
+   and fails as configured.
+
+### Phase 2, basic router
+
+Router: LAN adjacency and DIS, L1 and L2, IPv4 and IPv6 SPF, ECMP, route
+installation and withdrawal. Testing: override individual protocol
+actions; inject loss, delay, duplicates, malformed PDUs and topology
 changes.
 
-1. **The common header, the TLV framing, three Unknowns, and the parse
-   policy.** No real TLV yet. Two deliverables, and they are different
-   cases: a captured PDU of an **implemented** type parses into its layout
-   with a body of `Tlv::Unknown`s and re-encodes byte for byte, and a
-   captured PDU of an **unimplemented** type comes back as opaque octets
-   that re-encode byte for byte without being framed at all. Add the
-   truncation tests here rather than later, because the parse policy is
-   cheaper to design now than to retrofit under five layouts. If all of
-   that works, the hardest structural decisions are already right.
-2. **The hellos.** L1 LAN, L2 LAN, point to point. TLVs 1, 6, 8, 129, 132.
-   Enough to be seen by a real router, which is the first outside
-   confirmation worth having.
-3. **The LSP.** The checksum, the sequence number, the lifetime, the flags.
-   TLVs 2, 22, 128, 135. This is where the fixup step earns its design.
-4. **The sequence number PDUs.** CSNP, PSNP, TLV 9.
-5. **IPv6 and the extensions.** TLVs 232, 236, 242, and the sub-TLVs under
-   22 and 135. These are additions, not changes, if phase 1 was right.
-6. **Validation**, once there is enough implemented for a finding to mean
-   something.
-7. **A lab.** A real IS-IS speaker on the other end of a link, saying what
-   it makes of what isis4r sent. Two isis4r speakers agreeing proves only
-   that they agree: bgp4r had a capability field inverted for years because
-   both ends made the same mistake and cancelled it out.
+1. **LAN.** LAN hellos at both levels, DIS election and replacement,
+   pseudonode LSPs. Gate: adjacency and database agreement with an
+   independent router on a broadcast LAN, through a DIS change.
+2. **Two levels.** Separate L1 and L2 databases, L1/L2 operation,
+   flooding, refresh, aging, purge, several LSP Numbers. Gate: databases
+   agree with independent routers across an L1 area and the L2 backbone,
+   and the level boundaries hold.
+3. **Routes computed, not installed.** SPF, next hops, ECMP, IPv4 and IPv6
+   (TLVs 232 and 236), overload and attached handling. Gate: computed
+   routes match the independent router's on the same topology.
+4. **Routes installed.** The first forwarding adapter, and pass-through
+   equivalence running in the suite. Gate: hosts exchange IPv4 and IPv6
+   traffic through isis4r, and a link failure changes forwarding with no
+   stale entries left.
+
+### Phase 3, enhanced router
+
+Router: policy, multi topology, TE information, BFD integration, restart
+support. Testing: scripted transitions and failures, state inspection,
+comparison against expected routes and peer behaviour, reproducible
+scenarios.
+
+1. **Policy.** Leaking, summarization, redistribution through adapters.
+   Gate: a policy change withdraws obsolete advertisements and routes at
+   the independent peer.
+2. **Failure handling.** BFD feeding adjacency and SPF, and restart
+   signalling per RFC 8706. Gate: restart tests tell retained forwarding
+   from lost forwarding.
+3. **Topologies and TE.** Multi topology and TE attributes. Gate: different
+   topologies give the intended different paths, and TE attributes survive
+   origination, flooding and decoding at the peer.
+
+### Phase 4, modern router platform
+
+Selected capabilities, each its own gate: SR-MPLS (RFC 8667), SRv6 (RFC
+9352), Flex-Algo (RFC 9350), fast reroute, advanced convergence. A
+capability is done when it shows correct encoding, correct state and
+calculation, correct forwarding where that applies, and interoperation
+with an independent implementation. Advertising an SRv6 locator alone is
+not SRv6 support. Experimental mechanisms, such as fast flooding in RFC
+9681, stay out of the default profile.
+
+Testing: unusual extension combinations, compatibility and scale, and
+experimental mechanisms exercised on request. "Up to date" is a maintained
+compatibility statement, not a promise to implement every extension.
 
 ## Rules for agents
 
@@ -1541,6 +1742,35 @@ changes.
 * Keep this file true in the pull request that makes it false. A stale entry
   is worse than no entry, because it sends the next reader after work that
   no longer exists.
+
+## Decisions
+
+Architecture decisions, dated, with the premise each came from. Unlike the
+Corrections below, nothing here was a mistake. These are choices, and a
+later decision may change one.
+
+**2026-10-31. Scope: a programmable router with testing controls.**
+
+* Before: isis4r was scoped as "a protocol testing tool before it is a
+  protocol implementation". That was deliberate, and it is why the codec
+  rules in this file are permissive.
+* Now: router functionality and testing control are both core
+  requirements.
+* Premise: a router that keeps every mechanism controllable is a stronger
+  test platform than a packet tool, because a test can run real routing on
+  some circuits while manipulating others.
+* Consequence: the codec rules stand unchanged. Added: no global test
+  switch, correct originators, receive policy separate from validation, an
+  injected clock and scheduler, pass-through equivalence, and a forwarding
+  boundary. All under "Autonomous operation and testing controls".
+
+**Open. May a forwarding adapter use a native dependency?**
+
+* Against: "pure Ruby" is part of what the library is, and a native
+  extension changes how it installs and where it runs.
+* For: route programming is netlink on Linux and a routing socket on BSD.
+  Both are possible in pure Ruby, and both are large.
+* Until decided, no adapter uses one, and the protocol core never does.
 
 ## Corrections
 
@@ -1636,6 +1866,11 @@ each against the document and replace this list with what you found.
   changes.
 * **Whether TLV 6's entries are fixed at six octets** or carry a length,
   since the design above says ID Length does not touch them.
+* **The RFCs named in the phases.** RFC 8667, 9350, 9352 and 8706 are cited
+  by title for scope, not read here. RFC 9885 was read in part, sections 4
+  and 5 on what a Multi-Part TLV is and how it is received; the per TLV key
+  definitions it defers to other documents are not read. TLV 240 for the
+  RFC 5303 handshake is from memory. Check each before implementing it.
 
 Already settled, with where each came from, so nobody pays for it twice.
 Each of these cost a fetch, and two of them overturned what this file
