@@ -4,9 +4,9 @@
 # Two IS instances on one in-memory wire, forming an IS-IS adjacency with
 # no privileges and no real interface. Watch them go Down -> Init -> Up.
 #
-#   ruby -I. -I../datalink-socket/lib exe/isis-demo
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-demo
 #
-$LOAD_PATH.unshift File.expand_path("..", __dir__)
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
 
 require "isis4r"

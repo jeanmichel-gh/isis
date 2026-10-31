@@ -9,6 +9,7 @@
 
 require "datalink"
 
+require "isis/version"
 require "isis/common"
 require "isis/codepoints"
 require "isis/link/llc"
