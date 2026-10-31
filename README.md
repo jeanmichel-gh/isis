@@ -61,16 +61,18 @@ lib/isis/circuit.rb     # one IS instance on one link
 exe/isis-demo           # two-node adjacency demo over loopback
 ```
 
-## Notes toward the refactor
+## Boundary with datalink-socket
 
-Plumbing here that has no IS-IS knowledge, and so is a candidate to move
-down into datalink-socket:
+The generic link-layer plumbing lives in datalink-socket, not here:
 
-- LLC/SNAP framing (`lib/isis/llc.rb`).
-- Setting the 802.3 length field and trimming NIC padding (in
-  `Circuit#send_hello` and `Circuit#process`).
-- Polling the socket (`Circuit#poll`). A real daemon wants the socket FD
-  for an event loop, which datalink-socket does not expose yet.
+- LLC framing is `Datalink::LLC`. This repo only decides that the IS-IS
+  SAP (0xFE) means IS-IS.
+- The 802.3 length field and NIC-padding trim are `Frame.ieee_802_3` and
+  `Frame#sdu`.
 
-What stays here: the PDU structure, the TLVs, the adjacency FSM, and the
-timers.
+What stays here, because it knows it is IS-IS: the PDU structure, the
+TLVs, the adjacency FSM, and the timers.
+
+Still pending, for when this runs on a real NIC: datalink-socket does not
+yet expose the socket FD, so `Circuit#poll` drains with a timeout instead
+of joining an event loop. That is the next thing to move down.

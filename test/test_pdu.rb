@@ -28,24 +28,6 @@ class TestSystemId < Minitest::Test
   end
 end
 
-class TestLlc < Minitest::Test
-  def test_wrap_unwrap
-    pdu = "hello".b
-    wrapped = ISIS::Llc.wrap(pdu)
-    assert_equal "\xFE\xFE\x03".b, wrapped[0, 3]
-    assert_equal pdu, ISIS::Llc.unwrap(wrapped)
-  end
-
-  def test_isis_predicate
-    assert ISIS::Llc.isis?(ISIS::Llc.wrap("x"))
-    refute ISIS::Llc.isis?("\x00\x00\x00abc".b)
-  end
-
-  def test_unwrap_rejects_non_isis
-    assert_raises(ISIS::ParseError) { ISIS::Llc.unwrap("\xAA\xAA\x03".b) }
-  end
-end
-
 class TestTlv < Minitest::Test
   def test_roundtrip
     entries = [[1, "\x03\x49\x00\x01".b], [129, "\xCC".b]]

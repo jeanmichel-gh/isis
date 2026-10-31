@@ -39,13 +39,8 @@ module ISIS
         protocols: [NLPID_IPV4],
         pdu_type: @level == 2 ? L2_LAN_IIH : L1_LAN_IIH
       )
-      payload = Llc.wrap(hello.encode)
-      frame = Datalink::Frame.new(
-        dst: @all_iss,
-        src: @snpa,
-        ether_type: payload.bytesize, # 802.3: the type field carries the length
-        payload: payload
-      )
+      payload = isis_llc.wrap(hello.encode)
+      frame = Datalink::Frame.ieee_802_3(dst: @all_iss, src: @snpa, payload: payload)
       @socket.send(frame)
       hello
     end
@@ -94,14 +89,10 @@ module ISIS
     def process(frame)
       return nil unless frame.dst == @all_iss || frame.dst == @snpa
 
-      payload = frame.payload
-      # On 802.3 the type field is the length. Trim any NIC padding.
-      if frame.ieee_802_3? && frame.ether_type <= payload.bytesize
-        payload = payload[0, frame.ether_type]
-      end
-      return nil unless Llc.isis?(payload)
+      sdu = frame.sdu # datalink-socket trims any 802.3 NIC padding for us
+      return nil unless isis_llc?(sdu)
 
-      pdu = Llc.unwrap(payload)
+      _llc, pdu = Datalink::LLC.parse(sdu)
       return nil if pdu.empty? || pdu.getbyte(0) != IRPD
       return nil unless [L1_LAN_IIH, L2_LAN_IIH].include?(pdu.getbyte(4))
 
@@ -110,12 +101,28 @@ module ISIS
 
       update_adjacency(hello, frame.src)
       hello
-    rescue ParseError => e
+    rescue ParseError, Datalink::ParseError => e
       log("dropped malformed PDU: #{e.message}")
       nil
     end
 
     private
+
+    # The LLC header IS-IS puts in front of its PDUs: DSAP and SSAP both
+    # the IS-IS SAP, UI control.
+    def isis_llc
+      @isis_llc ||= Datalink::LLC.new(dsap: Datalink::LLC::SAP_ISIS,
+                                      ssap: Datalink::LLC::SAP_ISIS)
+    end
+
+    # True if a frame's SDU begins with the IS-IS LLC SAPs. Keeping this
+    # check here is deliberate: datalink-socket parses LLC generically, and
+    # deciding that a given SAP means IS-IS is the protocol's job.
+    def isis_llc?(sdu)
+      sdu.bytesize >= Datalink::LLC::SIZE &&
+        sdu.getbyte(0) == Datalink::LLC::SAP_ISIS &&
+        sdu.getbyte(1) == Datalink::LLC::SAP_ISIS
+    end
 
     def update_adjacency(hello, src_mac)
       key = hello.source_id.to_s

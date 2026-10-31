@@ -45,7 +45,6 @@ module ISIS
 end
 
 require "isis/system_id"
-require "isis/llc"
 require "isis/tlv"
 require "isis/pdu"
 require "isis/adjacency"
