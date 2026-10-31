@@ -9,7 +9,7 @@
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
 
-require "isis"
+require "isis4r"
 require "datalink/backends/loopback"
 
 wire = Datalink::Backends::Loopback::Wire.new

@@ -23,7 +23,7 @@ module ISIS
       @priority = priority
       @logger = logger
       @adjacencies = {} # system id string => Adjacency
-      @all_iss = Datalink::MAC.new(level == 2 ? ALL_L2_ISS : ALL_L1_ISS)
+      @all_iss = Link.all_iss(level)
     end
 
     # Build and send one Hello. Its IS Neighbors TLV lists every neighbor
@@ -39,7 +39,7 @@ module ISIS
         protocols: [NLPID_IPV4],
         pdu_type: @level == 2 ? L2_LAN_IIH : L1_LAN_IIH
       )
-      payload = isis_llc.wrap(hello.encode)
+      payload = Link.llc.wrap(hello.encode)
       frame = Datalink::Frame.ieee_802_3(dst: @all_iss, src: @snpa, payload: payload)
       @socket.send(frame)
       hello
@@ -90,7 +90,7 @@ module ISIS
       return nil unless frame.dst == @all_iss || frame.dst == @snpa
 
       sdu = frame.sdu # datalink-socket trims any 802.3 NIC padding for us
-      return nil unless isis_llc?(sdu)
+      return nil unless Link.isis_llc?(sdu)
 
       _llc, pdu = Datalink::LLC.parse(sdu)
       return nil if pdu.empty? || pdu.getbyte(0) != IRPD
@@ -107,22 +107,6 @@ module ISIS
     end
 
     private
-
-    # The LLC header IS-IS puts in front of its PDUs: DSAP and SSAP both
-    # the IS-IS SAP, UI control.
-    def isis_llc
-      @isis_llc ||= Datalink::LLC.new(dsap: Datalink::LLC::SAP_ISIS,
-                                      ssap: Datalink::LLC::SAP_ISIS)
-    end
-
-    # True if a frame's SDU begins with the IS-IS LLC SAPs. Keeping this
-    # check here is deliberate: datalink-socket parses LLC generically, and
-    # deciding that a given SAP means IS-IS is the protocol's job.
-    def isis_llc?(sdu)
-      sdu.bytesize >= Datalink::LLC::SIZE &&
-        sdu.getbyte(0) == Datalink::LLC::SAP_ISIS &&
-        sdu.getbyte(1) == Datalink::LLC::SAP_ISIS
-    end
 
     def update_adjacency(hello, src_mac)
       key = hello.source_id.to_s

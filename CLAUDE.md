@@ -72,29 +72,47 @@ labelled as hazards rather than conveniences.
 
 ## Layout
 
+isis4r is published as a gem, so the library lives under `lib/` and the
+gem is named after its entry point. The tree below `lib/` is the design.
+
 ```
-isis4r.rb              entry point, requires everything
-isis/common.rb         shared helpers: hex dumps, the packed-string mark,
-                       Fletcher checksum, System ID and LSP ID formatting
-isis/codepoints.rb     the IANA numbers in one place: PDU types, TLV types,
-                       sub-TLV types per parent TLV, with the registry's
-                       own names beside them
-isis/pdu/              one file per PDU layout, which is five and not nine,
-                       plus pdu.rb with the common header, the type
-                       registry and Pdu::Unknown
-isis/tlv/              one file per TLV, plus tlv.rb with the framing,
-                       the registry, Tlv::Unknown and the TLV list
-isis/subtlv/           sub-TLVs, grouped by the TLV that carries them,
-                       since the same number means different things under
-                       different parents
-isis/link/             getting bytes on and off a link: raw socket, LLC
-                       framing, the interface
-isis/adjacency/        the hello state machine, if and when it exists
-test/unit/             mirrors isis/, one test file per source file
-test/functional/       tests that put PDUs on a real interface
-docs/                  the guides, each with a test that asserts its
-                       load-bearing claims
+isis4r.gemspec             the gem: name isis4r, require_paths ["lib"]
+Gemfile                    gemspec, plus local overrides for development
+lib/isis4r.rb              entry point, requires everything; what
+                           `require "isis4r"` loads
+lib/isis/version.rb        ISIS::VERSION, read by the gemspec
+lib/isis/common.rb         shared helpers: hex dumps, the packed-string
+                           mark, Fletcher checksum, System ID and LSP ID
+                           formatting
+lib/isis/codepoints.rb     the IANA numbers in one place: PDU types, TLV
+                           types, sub-TLV types per parent TLV, with the
+                           registry's own names beside them
+lib/isis/pdu/              one file per PDU layout, which is five and not
+                           nine, plus pdu.rb with the common header, the
+                           type registry and Pdu::Unknown
+lib/isis/tlv/              one file per TLV, plus tlv.rb with the framing,
+                           the registry, Tlv::Unknown and the TLV list
+lib/isis/subtlv/           sub-TLVs, grouped by the TLV that carries them,
+                           since the same number means different things
+                           under different parents
+lib/isis/link/             getting bytes on and off a link: raw socket, LLC
+                           framing, the interface
+lib/isis/adjacency/        the hello state machine, if and when it exists
+exe/                       command line tools shipped with the gem
+test/unit/                 mirrors lib/isis/, one test file per source file
+test/functional/           tests that put PDUs on a real interface
+docs/                      the guides, each with a test that asserts its
+                           load-bearing claims
 ```
+
+**Everything under `lib/` is namespaced under `isis/`, except the entry
+point.** A gem's `lib/` is added to every user's load path, so a file at
+`lib/common.rb` would collide with any other gem that ships one. Keep
+`lib/isis4r.rb` as the only top level file. The module is `ISIS` and the
+gem is `isis4r`.
+
+Elsewhere in this file a path like `isis/validation.rb` means
+`lib/isis/validation.rb`.
 
 ## Nine PDU types, five layouts
 
@@ -141,8 +159,8 @@ a licence to assume every level distinction is the same distinction.
 
 ## The object contract
 
-Every class in `isis/pdu/`, `isis/tlv/` and `isis/subtlv/` is built the
-same four ways and answers the same five questions. Keep all of them
+Every class in `lib/isis/pdu/`, `lib/isis/tlv/` and `lib/isis/subtlv/` is
+built the same four ways and answers the same five questions. Keep all of them
 working in every change.
 
 ### Four ways in
@@ -1465,14 +1483,18 @@ that passes when the table is empty is not a guard.
 Each phase ends with something that works end to end. Record status here as
 it moves, because a plan that lives only in a chat is lost when the chat is.
 
-**Status, measured 2026-10-31.** The repository is still `isis-poc`, laid
-out under `lib/isis/` and not as the Layout section above describes. It
-has a LAN Hello encode and parse, a TLV helper, an LLC header and an L1 LAN
-adjacency over the datalink-socket loopback backend. None of the phases
-below is done in the form this file describes: there is no common header
-class, no `Unknown` at any level, no parse policy, and no `to_shex`. The
-Layout section is the target, not the tree. Update this paragraph when
-that changes.
+**Status, measured 2026-10-31.** The tree follows the Layout above but
+only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
+`lib/isis/version.rb`, `lib/isis/common.rb` (errors and `SystemId`),
+`lib/isis/codepoints.rb`, `lib/isis/link/llc.rb`, `lib/isis/tlv/tlv.rb`,
+`lib/isis/pdu/lan_hello.rb`, and `lib/isis/adjacency/` with the adjacency
+and the circuit. Tests are under `test/unit/`. The code is still the proof
+of concept: a LAN Hello encode and parse and an L1 LAN adjacency over the
+datalink-socket loopback backend. None of the phases below is done in the
+form this file describes: there is no `pdu.rb` with a common header class,
+no `Unknown` at any level, no parse policy, and no `to_shex`. The gem has
+not been published and has no license set. Update this paragraph when that
+changes.
 
 1. **The common header, the TLV framing, three Unknowns, and the parse
    policy.** No real TLV yet. Two deliverables, and they are different

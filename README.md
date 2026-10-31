@@ -42,23 +42,31 @@ Expected output ends with both sides `up`.
 ```sh
 rake test
 # or, without bundler:
-ruby -Ilib -I../datalink-socket/lib -Itest test/test_pdu.rb
-ruby -Ilib -I../datalink-socket/lib -Itest test/test_adjacency.rb
+ruby -Ilib -I../datalink-socket/lib -Itest test/unit/pdu/lan_hello_test.rb
+ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/circuit_test.rb
 ```
 
-`test/test_adjacency.rb` brings two instances to a full adjacency over the
+`test/unit/adjacency/circuit_test.rb` brings two instances to a full adjacency over the
 loopback backend.
 
 ## Layout
 
+The tree follows the Layout section of CLAUDE.md. Only the files below
+exist so far.
+
 ```
-lib/isis/system_id.rb   # 6-byte IS-IS system ID
-lib/isis/llc.rb         # IEEE 802.2 LLC header (0xFE/0xFE/0x03)
-lib/isis/tlv.rb         # TLV encode/parse
-lib/isis/pdu.rb         # LAN Hello (IIH) encode/parse
-lib/isis/adjacency.rb   # one neighbor relationship and its state
-lib/isis/circuit.rb     # one IS instance on one link
-exe/isis-demo           # two-node adjacency demo over loopback
+isis4r.gemspec                  # gem name isis4r
+lib/isis4r.rb                   # entry point, requires everything
+lib/isis/version.rb             # ISIS::VERSION
+lib/isis/common.rb              # errors, and the 6-byte IS-IS system ID
+lib/isis/codepoints.rb          # PDU types, TLV types, NLPIDs
+lib/isis/link/llc.rb            # IS-IS LLC header and AllL1ISs/AllL2ISs MACs
+lib/isis/tlv/tlv.rb             # TLV encode/parse
+lib/isis/pdu/lan_hello.rb       # LAN Hello (IIH) encode/parse
+lib/isis/adjacency/adjacency.rb # one neighbor relationship and its state
+lib/isis/adjacency/circuit.rb   # one IS instance on one link
+test/unit/                      # mirrors lib/isis/, one test file per source file
+exe/isis-demo                   # two-node adjacency demo over loopback
 ```
 
 ## Boundary with datalink-socket

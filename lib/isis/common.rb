@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
 module ISIS
+  class Error < StandardError; end
+  class ParseError < Error; end
+
   # A 6-byte IS-IS system ID. Written as three dotted hex groups, for
   # example "1921.6800.1001". Immutable, compares by value.
   class SystemId

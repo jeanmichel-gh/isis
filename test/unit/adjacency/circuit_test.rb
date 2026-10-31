@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "test_helper"
+require_relative "../../test_helper"
 
 # Two IS instances on one shared loopback wire should form an adjacency
 # and both reach :up, with no privileges and no real interface.

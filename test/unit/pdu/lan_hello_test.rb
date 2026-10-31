@@ -1,44 +1,6 @@
 # frozen_string_literal: true
 
-require_relative "test_helper"
-
-class TestSystemId < Minitest::Test
-  def test_parse_and_render
-    assert_equal "1921.6800.1001", ISIS::SystemId.new("1921.6800.1001").to_s
-  end
-
-  def test_encode_is_six_bytes
-    assert_equal "192168001001", ISIS::SystemId.new("1921.6800.1001").encode.unpack1("H*")
-  end
-
-  def test_from_bytes_roundtrip
-    sid = ISIS::SystemId.new("0000.0000.0001")
-    assert_equal sid, ISIS::SystemId.from_bytes(sid.encode)
-  end
-
-  def test_equality_and_hash
-    a = ISIS::SystemId.new("0000.0000.0001")
-    b = ISIS::SystemId.new("0000.0000.0001")
-    assert_equal a, b
-    assert_equal a.hash, b.hash
-  end
-
-  def test_rejects_bad
-    assert_raises(ArgumentError) { ISIS::SystemId.new("12.34") }
-  end
-end
-
-class TestTlv < Minitest::Test
-  def test_roundtrip
-    entries = [[1, "\x03\x49\x00\x01".b], [129, "\xCC".b]]
-    assert_equal entries, ISIS::Tlv.parse(ISIS::Tlv.encode(entries))
-  end
-
-  def test_truncated_tail_is_dropped
-    # type 1, length 5, but only 2 value bytes present
-    assert_equal [], ISIS::Tlv.parse("\x01\x05ab".b)
-  end
-end
+require_relative "../../test_helper"
 
 class TestLanHello < Minitest::Test
   def build
