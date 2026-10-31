@@ -2,29 +2,23 @@
 
 require_relative "../../test_helper"
 
-# Two IS instances on one shared loopback wire should form an adjacency
-# and both reach :up, with no privileges and no real interface.
-class TestAdjacency < Minitest::Test
+# Two IS instances on one simulated wire should form an adjacency and both
+# reach :up. Protocol time is a ManualClock, so nothing here waits in real
+# time.
+class TestCircuit < Minitest::Test
   def setup
-    @wire = Datalink::Backends::Loopback::Wire.new
+    @clock = ISIS::Runtime::ManualClock.new
+    @wire = ISIS::Link::SimulatedWire.new
     @a = circuit("0000.0000.0001", "00:00:00:00:00:01")
     @b = circuit("0000.0000.0002", "00:00:00:00:00:02")
     @sid_a = ISIS::SystemId.new("0000.0000.0001")
     @sid_b = ISIS::SystemId.new("0000.0000.0002")
   end
 
-  def teardown
-    @a_sock.close
-    @b_sock.close
-  end
-
-  def circuit(sysid, mac)
-    sock = Datalink::Socket.new("c", backend: :loopback, wire: @wire, recv_timeout: 0.05).open
-    case sysid
-    when "0000.0000.0001" then @a_sock = sock
-    when "0000.0000.0002" then @b_sock = sock
-    end
-    ISIS::Circuit.new(sock, system_id: sysid, snpa: mac, holding_time: 30)
+  def circuit(sysid, mac, holding_time: 30)
+    ISIS::Circuit.new(ISIS::Link::SimulatedTransport.new(@wire),
+                      system_id: sysid, snpa: mac,
+                      holding_time: holding_time, clock: @clock)
   end
 
   def pump(rounds)
@@ -56,7 +50,7 @@ class TestAdjacency < Minitest::Test
 
   def test_no_adjacency_to_self
     @a.send_hello
-    @a.poll # A's own hello is not echoed back by the hub, and is ignored anyway
+    @a.poll # the wire does not echo A's own hello, and A ignores it anyway
     assert_nil @a.adjacency(@sid_a)
     refute @a.up?
   end
@@ -65,5 +59,29 @@ class TestAdjacency < Minitest::Test
     pump(5)
     adj = @a.adjacency(@sid_b)
     assert_equal Datalink::MAC.new("00:00:00:00:00:02"), adj.snpa
+  end
+
+  # The holding time is B's, carried in its hello (30 s here). Expiry is
+  # driven by the injected clock alone, so the test advances it instead of
+  # sleeping.
+  def test_adjacency_expires_on_protocol_time
+    pump(5)
+    @clock.advance(30)
+    @a.expire_adjacencies
+    refute_nil @a.adjacency(@sid_b), "not expired at exactly the holding time"
+
+    @clock.advance(0.001)
+    @a.expire_adjacencies
+    assert_nil @a.adjacency(@sid_b), "expired just past the holding time"
+  end
+
+  def test_a_hello_refreshes_the_adjacency
+    pump(5)
+    @clock.advance(20)
+    @b.send_hello
+    @a.poll
+    @clock.advance(20) # 40 s since the first hello, 20 s since the last
+    @a.expire_adjacencies
+    refute_nil @a.adjacency(@sid_b)
   end
 end

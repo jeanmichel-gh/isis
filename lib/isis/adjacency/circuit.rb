@@ -1,20 +1,24 @@
 # frozen_string_literal: true
 
 module ISIS
-  # A circuit is one IS instance on one link. It owns a datalink socket,
-  # sends periodic Hellos, receives them, and runs the adjacency handshake.
+  # A circuit is one IS instance on one link. It sends Hellos, receives
+  # them, and runs the adjacency handshake.
   #
-  # The socket is any open Datalink::Socket. For the PoC it is usually the
-  # loopback backend, so two circuits share one in-memory wire with no
-  # privileges.
+  # Two things are injected. The transport moves frames: a
+  # Link::SocketTransport over a real Datalink::Socket, or a
+  # Link::SimulatedTransport on an in-memory wire. The clock gives protocol
+  # time: a Runtime::MonotonicClock by default, or a Runtime::ManualClock in
+  # tests, so holding times expire without real waiting.
   class Circuit
     DEFAULT_AREA = "49.0001"
 
-    attr_reader :system_id, :snpa, :area, :adjacencies
+    attr_reader :system_id, :snpa, :area, :adjacencies, :transport, :clock
 
-    def initialize(socket, system_id:, snpa:, area: DEFAULT_AREA,
-                   level: 1, holding_time: 30, priority: 64, logger: nil)
-      @socket = socket
+    def initialize(transport, system_id:, snpa:, area: DEFAULT_AREA,
+                   level: 1, holding_time: 30, priority: 64, logger: nil,
+                   clock: Runtime::MonotonicClock.new)
+      @transport = transport
+      @clock = clock
       @system_id = system_id.is_a?(SystemId) ? system_id : SystemId.new(system_id)
       @snpa = snpa.is_a?(Datalink::MAC) ? snpa : Datalink::MAC.new(snpa)
       @area = area
@@ -41,20 +45,17 @@ module ISIS
       )
       payload = Link.llc.wrap(hello.encode)
       frame = Datalink::Frame.ieee_802_3(dst: @all_iss, src: @snpa, payload: payload)
-      @socket.send(frame)
+      @transport.send(frame)
       hello
     end
 
-    # Drain all frames currently available, updating adjacencies. Returns
-    # the number of IS-IS Hellos processed.
+    # Drain the frames the transport has, updating adjacencies. Returns the
+    # number of IS-IS Hellos processed. A real transport may wait up to
+    # +timeout+ for each frame; a simulated one never waits.
     def poll(timeout: nil)
-      @socket.recv_timeout = timeout unless timeout.nil?
       processed = 0
-      loop do
-        captured = @socket.recv
-        processed += 1 if process(captured.frame)
-      rescue Datalink::TimeoutError
-        break
+      while (frame = @transport.receive(timeout: timeout))
+        processed += 1 if process(frame)
       end
       processed
     end
@@ -117,7 +118,7 @@ module ISIS
       if adj.nil?
         @adjacencies[key] = Adjacency.new(
           system_id: hello.source_id, snpa: src_mac,
-          state: new_state, holding_time: hello.holding_time
+          state: new_state, holding_time: hello.holding_time, clock: @clock
         )
         log("adj #{key} -> #{new_state}")
       else

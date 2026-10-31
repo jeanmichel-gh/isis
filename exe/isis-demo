@@ -21,10 +21,12 @@ end
 a_sock = socket(wire)
 b_sock = socket(wire)
 
-a = ISIS::Circuit.new(a_sock, system_id: "0000.0000.0001",
-                      snpa: "00:00:00:00:00:01", holding_time: 30, logger: $stdout)
-b = ISIS::Circuit.new(b_sock, system_id: "0000.0000.0002",
-                      snpa: "00:00:00:00:00:02", holding_time: 30, logger: $stdout)
+a = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(a_sock),
+                      system_id: "0000.0000.0001", snpa: "00:00:00:00:00:01",
+                      holding_time: 30, logger: $stdout)
+b = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(b_sock),
+                      system_id: "0000.0000.0002", snpa: "00:00:00:00:00:02",
+                      holding_time: 30, logger: $stdout)
 
 sid_a = ISIS::SystemId.new("0000.0000.0001")
 sid_b = ISIS::SystemId.new("0000.0000.0002")
