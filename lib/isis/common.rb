@@ -39,6 +39,40 @@ module ISIS
     String.new(encoding: Encoding::BINARY)
   end
 
+  # The checksum function of ISO 8473, which RFC 1142 clause 7.3.11 names
+  # for the LSP checksum. Returns the two checksum octets for +octets+,
+  # whose checksum field starts at +offset+ and must be zero on the way
+  # in. ISO 8473 itself is not read here: this is the usual statement of
+  # its generation step, and it is checked against LSPs captured from FRR.
+  #
+  # The two running sums, C0 and C1, are taken modulo 255. The checksum
+  # octets X and Y are chosen so that both sums come out zero over the
+  # whole span with them in place, and a zero octet is written as 255,
+  # since 0 and 255 are the same modulo 255 and a checksum of zero means
+  # "not computed".
+  def self.fletcher(octets, offset)
+    c0 = c1 = 0
+    octets.each_byte do |b|
+      c0 = (c0 + b) % 255
+      c1 = (c1 + c0) % 255
+    end
+    after = octets.bytesize - offset - 1
+    x = (after * c0 - c1) % 255
+    y = (c1 - (after + 1) * c0) % 255
+    [x.zero? ? 255 : x, y.zero? ? 255 : y].pack("CC")
+  end
+
+  # True when both running sums over +octets+, checksum in place, are zero:
+  # the receiver's test.
+  def self.fletcher_ok?(octets)
+    c0 = c1 = 0
+    octets.each_byte do |b|
+      c0 = (c0 + b) % 255
+      c1 = (c1 + c0) % 255
+    end
+    c0.zero? && c1.zero?
+  end
+
   # The constructor contract shared by every node of a PDU tree. See
   # docs/building-objects.md for the order and why it is fixed.
   #

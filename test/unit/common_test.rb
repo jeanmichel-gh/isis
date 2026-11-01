@@ -98,3 +98,33 @@ class TestAreaAddress < Minitest::Test
     assert_raises(ArgumentError) { ISIS::AreaAddress.new("00" * 256) }
   end
 end
+
+# The ISO 8473 checksum, checked against an LSP captured from FRR 8.4.4:
+# FRR wrote 6c27 over the span from the LSP ID to the end.
+class TestFletcher < Minitest::Test
+  SPAN = "0000000000020000" "00000002" "6c27" "01" "010403490001" "89066c7370636170"
+
+  def span(hex = SPAN)
+    [hex].pack("H*")
+  end
+
+  def test_frr_checksum
+    zeroed = span(SPAN.sub("6c27", "0000"))
+    assert_equal "6c27", ISIS.fletcher(zeroed, 12).unpack1("H*")
+  end
+
+  def test_receiver_check
+    assert ISIS.fletcher_ok?(span)
+    refute ISIS.fletcher_ok?(span(SPAN.sub("6c27", "6c28")))
+  end
+
+  # A checksum octet that comes out 0 is written as 255, the same value
+  # modulo 255, since zero would read as "not computed". Over 01 7e 00 00,
+  # C0 runs 1, 127, 127, 127 and C1 runs 1, 128, 0, 127. With one octet
+  # after X, X = (1 * 127 - 127) % 255 = 0, written ff, and Y = (127 - 2 *
+  # 127) % 255 = 128, 80. The sums still check out with ff in place.
+  def test_zero_octet_is_written_as_255
+    assert_equal "ff80", ISIS.fletcher(["017e0000"].pack("H*"), 2).unpack1("H*")
+    assert ISIS.fletcher_ok?(["017eff80"].pack("H*"))
+  end
+end

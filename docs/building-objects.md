@@ -57,6 +57,7 @@ them and fails if one is missing.
 - `ISIS::Pdu`
 - `ISIS::Pdu::LanHello`
 - `ISIS::Pdu::Layout`
+- `ISIS::Pdu::Lsp`
 - `ISIS::Pdu::Malformed`
 - `ISIS::Pdu::P2pHello`
 - `ISIS::Pdu::Psnp`

@@ -64,16 +64,17 @@ class TestPduFactory < Minitest::Test
     assert_equal l2, pdu.to_shex
   end
 
-  # Type 18, an L1 LSP, has no layout yet. Its body is not framed into
-  # TLVs, because nothing establishes that it is TLVs or where they start.
+  # Type 19 sits between the two LSP types and is no PDU type at all, so
+  # it has no layout and never will. Its body is not framed into TLVs,
+  # because nothing establishes that it is TLVs or where they start.
   def test_unimplemented_type_is_opaque_and_replays
-    lsp = "831b 0100 1201 0000 001d 04b0 1921 6800 1001 0000 0000 0001 0000 03 0800"
-    pdu = factory(lsp.delete(" "))
+    hex = "831b 0100 1301 0000 001d 04b0 1921 6800 1001 0000 0000 0001 0000 03 0800".delete(" ")
+    pdu = factory(hex)
     assert_instance_of ISIS::Pdu::Unknown, pdu
-    assert_equal 18, pdu.type
+    assert_equal 19, pdu.type
     refute_respond_to pdu, :tlvs
-    assert_equal lsp.delete(" "), pdu.to_shex
-    assert_equal "PDU type 18, 29 octets, no layout", pdu.to_s
+    assert_equal hex, pdu.to_shex
+    assert_equal "PDU type 19, 29 octets, no layout", pdu.to_s
   end
 
   # The top three bits of the type octet are reserved. Set, they are kept
