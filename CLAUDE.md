@@ -631,8 +631,12 @@ and an S bit. Four octets, two layouts. For TLV 2, read in RFC 1142 clause
   does not support this metric it shall set the bit S to 1".
 
 So in TLV 2 every one of the four has an I/E bit, and only the high bit
-differs. The IP reachability TLVs of RFC 1195 are not read here and may
-not match; that is the per TLV point below.
+differs. **TLV 128 does not match.** RFC 1195 section 5.3.4, read: the
+default octet has bit 8 reserved and bit 7 I/E, "the metric type ...
+for all four TOS metrics", while in the delay, expense and error octets
+"Bit 7 of this field is reserved". So TLV 128 has one I/E bit for the
+entry and TLV 2 has four. That is the per TLV point below, with an
+example.
 
 And **S set means the metric is not supported**, which is the reverse of
 what the name suggests and is the single most likely thing to be
@@ -1654,7 +1658,8 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
 scheduler, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
-registry, `Tlv::Unknown` and the TLV list, `lib/isis/pdu/pdu.rb` with the
+registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129
+and 132, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
 layout, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
@@ -1878,7 +1883,7 @@ twenty two of them inline buried the contract.
 | OR-ing masks to `0xff` proves no overlap | OR is idempotent; needs union **and** pairwise AND, and neither proves the mapping | LSP flags octet |
 | A test setting only the default ATT bit misses a reversal | It catches it; the **round trip** is what misses it | LSP flags octet |
 | The narrow metric is one octet with a value, an I/E bit and an S bit | Four octets in two layouts, and S set means **not** supported | Narrow and wide metrics |
-| In those four, delay, expense and error carry an S bit and a reserved bit | In TLV 2, RFC 1142 gives all four an I/E bit; only bit 8 differs, reserved in the default and S in the others | Narrow and wide metrics |
+| In those four, delay, expense and error carry an S bit and a reserved bit | In TLV 2, RFC 1142 gives all four an I/E bit. In TLV 128, RFC 1195 gives only the default one an I/E bit, and bit 7 of the others is reserved | Narrow and wide metrics |
 | Invalidation follows size changes | It follows content changes at any depth; compare retained normalized bytes | How an edit invalidates |
 | One coverage span | Two, and they are **ordered**: digest, then checksum | One retained input per calculation |
 | A common header edit leaves the checksum | Only unauthenticated; otherwise it reaches the checksum through the digest | same |
@@ -1974,8 +1979,11 @@ Still unread:
   authentication section and has not been read here. The design only needs
   to know that the preparation is the algorithm's, which holds either way,
   but the second algorithm cannot be written without it.
-* **RFC 1195 sections 5.3.4 and 5.3.5**, the metric octets in TLVs 128
-  and 130, which may not match TLV 2.
+* **RFC 1195 section 5.3.5**, the metric octets in TLV 130. Section 5.3.4,
+  TLV 128, is read and quoted in the metrics section.
+* **The NLPID numbers** in `Tlv::ProtocolsSupported`. RFC 1195 section
+  5.3.1 says only "as assigned by ISO/TR 9577". 0xcc and 0x81 are what
+  Wireshark and FRR use, and 0x8e for IPv6 is RFC 5308's, not read here.
 * **The RFCs named in the phases.** RFC 8667, 9350, 9352 and 8706 are cited
   by title for scope, not read here. RFC 9885 was read in part, sections 4
   and 5 on what a Multi-Part TLV is and how it is received; the per TLV key
@@ -2020,6 +2028,11 @@ confidently said:
     numbering hazard recorded under Codepoints, arriving with a concrete
     example: never convert an RFC 1142 section number into an ISO 10589
     one.
+* **RFC 1195 section 5.3.1** for TLV 129, "one octet per protocol", and
+  TLV 132, "four octets per address", with a hello carrying TLV 132 "once
+  only" and "up to a maximum of 63 IP addresses". Read through the
+  datatracker copy, since rfc-editor.org is blocked. Quoted in the
+  classes.
 * **RFC 5304** on the Authentication TLV, quoted in the authentication
   section: TLV 10, first value octet is the authentication type, remainder
   is the Authentication Value, type 54 and length 17 for HMAC-MD5, and

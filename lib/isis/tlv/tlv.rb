@@ -25,7 +25,13 @@ module ISIS
       def register(type, key, klass)
         @by_type[type] = klass
         @by_key[key] = klass
+        klass.instance_variable_set(:@hash_key, key)
         klass
+      end
+
+      # The key this class's entries take in a TLV list hash.
+      def hash_key
+        @hash_key
       end
 
       # The class for a type number: a registered one, else Unknown.
@@ -58,11 +64,24 @@ module ISIS
       end
     end
 
-    # Frame +value+ as this TLV. Refuses only a value it cannot frame: a
-    # length over 255 cannot be written in one octet, and writing it
-    # truncated would put a different TLV on the wire than was asked for.
-    # Splitting an oversized value is a builder's job, not this one's.
-    def encode(value, length: nil)
+    # The type number. A class sets TYPE; a TLV parsed from octets keeps
+    # the type octet it arrived with, so it replays whatever it was handed.
+    def type
+      @type || self.class::TYPE
+    end
+
+    # Frame +value+ as this TLV. A subclass either defines encode_value and
+    # inherits this, or overrides encode and calls super with its value.
+    #
+    # The length is a computed field. A TLV parsed with a declared length
+    # that ran past what arrived replays that length while its value is
+    # unchanged, and computes it once the value moves.
+    #
+    # Refuses only a value it cannot frame: a length over 255 cannot be
+    # written in one octet, and writing it truncated would put a different
+    # TLV on the wire than was asked for. Splitting an oversized value is a
+    # builder's job, not this one's.
+    def encode(value = encode_value, length: replay_length(value))
       n = value.bytesize
       raise ArgumentError, "TLV #{type} value is #{n} octets, max #{MAX_VALUE}" if n > MAX_VALUE
 
@@ -71,25 +90,55 @@ module ISIS
       out
     end
 
+    # The value octets, as encode would write them.
+    def value
+      encode_value
+    end
+
+    # The declared length, when it ran past the octets that arrived.
+    attr_reader :declared_length
+
+    # True when the declared length ran past the octets that arrived.
+    def clamped?
+      !@declared_length.nil?
+    end
+
+    private
+
+    def replay_length(value)
+      @declared_length if @declared_length && value == @parsed_value
+    end
+
+    # Split one framed TLV off +octets+ and return its value, keeping the
+    # type octet and any clamp. Every implemented TLV parses through this,
+    # so none of them knows the framing.
+    def read_frame(octets)
+      raise ArgumentError, "a TLV needs at least #{HEADER} octets" if octets.bytesize < HEADER
+
+      @type = octets.getbyte(0)
+      declared = octets.getbyte(1)
+      value = (octets.byteslice(HEADER, declared) || "").b
+      @declared_length = (declared unless value.bytesize == declared)
+      @parsed_value = value
+      octets.replace(octets.byteslice(HEADER + value.bytesize..) || "")
+      value
+    end
+
+    # The type octet, for a hash, when it is not this class's own.
+    def unusual_type
+      @type if @type && @type != self.class::TYPE
+    end
+
+    public
+
     # A TLV whose type isis4r does not implement. It keeps its value whole,
     # and if its declared length ran past the end of what arrived, it keeps
     # that declared length too, so it replays exactly what it was given.
     class Unknown < Tlv
-      attr_reader :type, :value, :declared_length
+      attr_reader :type, :value
 
       def self.hash_key
         :unknown
-      end
-
-      # Replays a clamped length as declared, so a malformed capture goes
-      # back out malformed.
-      def encode
-        super(@value, length: @declared_length)
-      end
-
-      # True when the declared length ran past the octets that arrived.
-      def clamped?
-        !@declared_length.nil?
       end
 
       def to_hash
@@ -103,14 +152,12 @@ module ISIS
 
       private
 
-      def parse(octets)
-        raise ArgumentError, "a TLV needs at least #{HEADER} octets" if octets.bytesize < HEADER
+      def encode_value
+        @value
+      end
 
-        @type = octets.getbyte(0)
-        declared = octets.getbyte(1)
-        @value = octets.byteslice(HEADER, declared).b
-        @declared_length = declared unless @value.bytesize == declared
-        octets.replace(octets.byteslice(HEADER + @value.bytesize..) || "")
+      def parse(octets)
+        @value = read_frame(octets)
       end
 
       def from_fields(type, value)

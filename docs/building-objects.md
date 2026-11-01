@@ -49,5 +49,9 @@ them and fails if one is missing.
 - `ISIS::Pdu::Truncated`
 - `ISIS::Pdu::Unknown`
 - `ISIS::Tlv`
-- `ISIS::Tlv::Unknown`
+- `ISIS::Tlv::AreaAddresses`
+- `ISIS::Tlv::IpInterfaceAddresses`
 - `ISIS::Tlv::List`
+- `ISIS::Tlv::Padding`
+- `ISIS::Tlv::ProtocolsSupported`
+- `ISIS::Tlv::Unknown`
