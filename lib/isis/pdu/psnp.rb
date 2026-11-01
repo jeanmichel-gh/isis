@@ -12,7 +12,7 @@ module ISIS
     #   Source ID   ID Length + 1 octets: "the system ID of Intermediate
     #               system (with zero Circuit ID)"
     #
-    # Its TLVs are read as Tlv::Unknown until the TLV 9 class exists.
+    # Its LSP Entries are TLV 9, Tlv::LspEntries.
     class Psnp < Layout
       LEVEL_TYPES = { 1 => 26, 2 => 27 }.freeze
 

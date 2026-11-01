@@ -55,6 +55,7 @@ them and fails if one is missing.
 
 - `ISIS::Capture`
 - `ISIS::Pdu`
+- `ISIS::Pdu::Csnp`
 - `ISIS::Pdu::LanHello`
 - `ISIS::Pdu::Layout`
 - `ISIS::Pdu::Lsp`
@@ -68,6 +69,7 @@ them and fails if one is missing.
 - `ISIS::Tlv::IpInterfaceAddresses`
 - `ISIS::Tlv::IsNeighbors`
 - `ISIS::Tlv::List`
+- `ISIS::Tlv::LspEntries`
 - `ISIS::Tlv::Padding`
 - `ISIS::Tlv::ProtocolsSupported`
 - `ISIS::Tlv::ThreeWayAdjacency`

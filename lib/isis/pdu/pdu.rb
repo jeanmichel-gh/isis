@@ -57,6 +57,21 @@ module ISIS
       [hex].pack("H*").b
     end
 
+    # An LSP ID as routers print it, "1921.6800.1001.00-00": the System ID
+    # in groups of four hex digits, the pseudonode octet after a dot and the
+    # LSP Number after a hyphen. A convention with no clause behind it, and
+    # lsp_id_octets reads it back.
+    def self.lsp_id_s(octets)
+      hex = octets.unpack1("H*")
+      "#{(hex[0...-4].scan(/.{1,4}/) + [hex[-4, 2]]).join('.')}-#{hex[-2, 2]}"
+    end
+
+    # "1921.6800.1001.00-00" to octets. The hyphen is a separator like the
+    # dots.
+    def self.lsp_id_octets(text)
+      dotted_octets(text.to_s.tr("-", "."))
+    end
+
     # The ID Length octet to write for a System ID of +width+ octets: the
     # default spelling for six, 255 for none.
     def self.id_length_for(width)

@@ -954,8 +954,11 @@ if the class names it in `PARSE_INPUTS`, and wire octets take it as a
 keyword, `Klass.new(octets, id_width: 8)`. The first class to need it is
 TLV 240, whose Neighbor System ID is ID Length octets wide and whose own
 length cannot say which: 11 octets is a six octet ID alone or a two octet
-ID with a circuit ID after it. `docs/building-objects.md` has the rule. If a second one appears, that is a design event worth a
-paragraph in the guide, not a quiet extra argument.
+ID with a circuit ID after it. The second is TLV 9, whose LSP entries are
+ID Length plus ten octets each, so the same octets read as a different
+number of entries at a different width. Both take the same one input.
+`docs/building-objects.md` has the rule. If a second input appears, that is
+a design event worth a paragraph in the guide, not a quiet extra argument.
 
 **The ID Length encoding is a trap and must be verified in the spec, not
 recalled.** The field does not mean what it appears to. A value of zero
@@ -1725,12 +1728,13 @@ ISO 8473 checksum),
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 6, 8,
-129, 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
+9, 129, 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
 layout, `lib/isis/pdu/lsp.rb`, the LSP for both levels with its checksum
 replayed on parse and recomputed when the span moves, and the flags octet
-asserted mask by mask against RFC 1142, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
+asserted mask by mask against RFC 1142, `lib/isis/pdu/csnp.rb`, the CSNP
+for both levels, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
 for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
 the hellos share, and
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
@@ -1754,8 +1758,9 @@ check waits for. The LAN hello is on the contract, and replays a hello
 captured from FRR 8.4.4 byte for byte. The LAN `Circuit` builds and reads
 it and logs through `Runtime::Log`, and `exe/isis-demo` runs two of them
 with `--log` and `--debug`. That closes gate 2's list. **Gate 3 has
-begun**: the LSP layout parses, replays and rebuilds an LSP captured from
-FRR 8.4.4 byte for byte, checksum included. One thing measured for the
+begun**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
+CSNP captured from FRR 8.4.4 byte for byte, the LSP's checksum included,
+and TLV 9 reads the CSNP's entries at the PDU's ID Length. One thing measured for the
 rest of the gate: on a point to point circuit FRR 8.4.4 does not flood its
 own LSP when the adjacency comes up. It lists it in a CSNP and sends it
 only when a PSNP asks, so isis4r has to answer CSNPs before FRR will tell

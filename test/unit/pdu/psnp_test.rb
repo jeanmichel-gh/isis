@@ -73,7 +73,8 @@ class TestPsnp < Minitest::Test
   def test_a_same_size_edit_below_recomputes
     hex = PSNP.sub(/0900\z/, "0901aa").sub(/0013/, "0014").sub(/\A8311/, "83ee")
     pdu = factory(hex)
-    pdu.tlvs.first.instance_variable_set(:@value, "\xbb".b)
+    # TLV 9 with one octet holds no whole entry, so the octet is its tail.
+    pdu.tlvs.first.tail = "\xbb".b
     refute pdu.preserved?
     assert_equal "8311", pdu.to_shex[0, 4]
     assert_equal "0014", pdu.to_shex[16, 4]
