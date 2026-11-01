@@ -21,6 +21,9 @@ class FrrLab
   FRR = "/usr/lib/frr"
   ROOT = File.expand_path("../..", __dir__)
   FRR_ID = "0000.0000.0002"
+  # A second FRR, with frr2: in start, behind the first: 0000.0000.0003 at
+  # 10.0.23.3, joined to the first FRR's veth1 at 10.0.23.2.
+  FRR2_ID = "0000.0000.0003"
   ISIS4R_ID = "0000.0000.0001"
   # What isis4r advertises in TLV 135: the link's subnet, and a prefix that
   # exists nowhere but in its LSP, so FRR can only have it from IS-IS.
@@ -64,6 +67,10 @@ class FrrLab
     @dir = Dir.mktmpdir("isis4r-#{name}")
     @run = "/var/run/frr/#{name}"
     @etc = "/etc/frr/#{name}"
+    @name2 = "#{name}2"
+    @frr2_ns = "#{name}-frr2"
+    @run2 = "/var/run/frr/#{@name2}"
+    @etc2 = "/etc/frr/#{@name2}"
   end
 
   # Brings both sides up. +hello_interval+ and +hello_multiplier+ apply to
@@ -72,11 +79,17 @@ class FrrLab
   # adds lines under FRR's interface and +frr_router+ under its router isis.
   # +frr_loopback+, a prefix such as "198.51.100.2/32", goes on FRR's lo
   # and into IS-IS as a passive circuit.
+  # +frr_is_type+ overrides the first FRR's is-type, which is otherwise
+  # the lab's level.
+  # +frr2+ adds a second FRR behind the first, on a point to point link:
+  # { is_type: "level-2-only", area: "49.0002", loopback: "198.51.100.3/32",
+  # interface: [lines] }. The link runs the levels is_type names, on both
+  # its ends.
   # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
   # 1 or 2, which FRR and isis4r's LAN circuit run alone, or "1-2", which
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
-            network: :point_to_point, level: 1, frr_loopback: nil)
+            network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -91,7 +104,11 @@ class FrrLab
     @network = network
     @level = level
     @frr_loopback = frr_loopback
+    @frr_is_type = frr_is_type
+    @frr2 = frr2
+    link_frr2 if frr2
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
+    start_frr2(hello_interval, hello_multiplier) if frr2
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
                    prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
@@ -164,15 +181,15 @@ class FrrLab
   #
   # With +level+, only that level's section, which FRR heads "IS-IS
   # Level-1 link-state database:" or "Level-2".
-  def frr_database(level = nil)
+  def frr_database(level = nil, router: @name)
     section = nil
-    vtysh("show isis database").lines.filter_map do |line|
+    vtysh("show isis database", router: router).lines.filter_map do |line|
       section = Regexp.last_match(1).to_i if line =~ /Level-(\d) link-state database/
       next if level && section != level
       next unless (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x(\h{8})\s+0x(\h{4})\s+(\(?)\d+/))
 
       host, pseudonode, number, sequence, checksum, paren = m.captures
-      system = host == @name ? FRR_ID : host
+      system = system_for(host)
       ["#{system}.#{pseudonode}-#{number}",
        { "sequence" => sequence.hex, "checksum" => checksum.hex, "purged" => paren == "(" }]
     end.to_h
@@ -193,7 +210,7 @@ class FrrLab
         current = nil
       elsif (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x\h{8}/))
         host, pseudonode, number = m.captures
-        current = blocks["#{host == @name ? FRR_ID : host}.#{pseudonode}-#{number}"] = +""
+        current = blocks["#{system_for(host)}.#{pseudonode}-#{number}"] = +""
       elsif current && line.start_with?("  ")
         current << line
       else
@@ -208,9 +225,9 @@ class FrrLab
   # 8.4.4, which has no json form of this command: one table per level,
   # headed "IS-IS L1 IPv4 routing table:", with rows of prefix, metric,
   # interface, next hop and labels.
-  def frr_isis_routes(level = 1)
+  def frr_isis_routes(level = 1, router: @name)
     section = nil
-    vtysh("show isis route").lines.filter_map do |line|
+    vtysh("show isis route", router: router).lines.filter_map do |line|
       section = Regexp.last_match(1).to_i if line =~ /IS-IS L(\d) IPv4 routing table/
       next unless section == level && (m = line.match(%r{^\s*(\d+\.\d+\.\d+\.\d+/\d+)\s+(\d+)\s+(\S+)\s+(\S+)}))
 
@@ -234,10 +251,21 @@ class FrrLab
 
   # ---- FRR's side ----
 
-  def vtysh(cmd)
+  # +router+ is the first FRR's name, the default, or frr2_name.
+  def vtysh(cmd, router: @name)
     # stdout only: vtysh warns on stderr about a missing vtysh.conf.
-    out, = Open3.capture3("vtysh", "-N", @name, "-c", cmd)
+    out, = Open3.capture3("vtysh", "-N", router, "-c", cmd)
     out
+  end
+
+  # The second FRR's name, for vtysh's router:.
+  def frr2_name = @name2
+
+  # A hostname FRR prints in place of a System ID, as the System ID. FRR
+  # learns the other FRR's name from its Dynamic Hostname TLV; isis4r sends
+  # none, so it prints as its System ID.
+  def system_for(host)
+    { @name => FRR_ID, @name2 => FRR2_ID }.fetch(host, host)
   end
 
   # Configuration lines for FRR's running daemon, under "configure".
@@ -295,6 +323,9 @@ class FrrLab
       #{vtysh('show ip route')}
       --- FRR isisd log
       #{frr_log.lines.last(40).join}
+      #{@frr2 ? "--- FRR2: show isis neighbor\n#{vtysh('show isis neighbor', router: @name2)}\n" \
+                 "--- FRR2: show isis database\n#{vtysh('show isis database', router: @name2)}\n" \
+                 "--- FRR2: show isis route\n#{vtysh('show isis route', router: @name2)}" : ''}
       --- isis4r state
       #{isis4r_state_doc}
       --- isis4r log
@@ -337,9 +368,10 @@ class FrrLab
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
       #{@frr_loopback ? "interface lo\n ip router isis LAB\n isis passive" : ''}
+      #{@frr2 ? frr2_link_stanza("veth1", hello_interval, hello_multiplier, []) : ''}
       router isis LAB
        net 49.0001.#{FRR_ID}.00
-       is-type #{frr_level}
+       is-type #{@frr_is_type || frr_level}
       #{router_lines.map { |l| " #{l}" }.join("\n")}
     CONF
     # zebra gets a file of its own: given isisd's, it rejects every IS-IS line.
@@ -350,11 +382,51 @@ class FrrLab
     { "zebra" => zebra_conf, "isisd" => conf }.each { |d, file| start_daemon(d, file) }
   end
 
+  # The second FRR's namespace and its link to the first's veth1.
+  def link_frr2
+    sh "ip netns add #{@frr2_ns}"
+    sh "ip link add veth1 netns #{@frr_ns} type veth peer name veth0 netns #{@frr2_ns}"
+    sh "ip -n #{@frr_ns} addr add 10.0.23.2/24 dev veth1"
+    sh "ip -n #{@frr2_ns} addr add 10.0.23.3/24 dev veth0"
+    sh "ip -n #{@frr_ns} link set veth1 up"
+    %w[lo veth0].each { |l| sh "ip -n #{@frr2_ns} link set #{l} up" }
+    sh "ip -n #{@frr2_ns} addr add #{@frr2[:loopback]} dev lo" if @frr2[:loopback]
+  end
+
+  # One end of the link between the two FRRs, point to point, at the
+  # levels the second FRR's is-type names.
+  def frr2_link_stanza(iface, hello_interval, hello_multiplier, lines)
+    (["interface #{iface}", " ip router isis LAB", " isis circuit-type #{@frr2.fetch(:is_type)}",
+      " isis network point-to-point", " isis hello-interval #{hello_interval}",
+      " isis hello-multiplier #{hello_multiplier}"] + lines.map { |l| " #{l}" }).join("\n")
+  end
+
+  def start_frr2(hello_interval, hello_multiplier)
+    FileUtils.mkdir_p([@run2, @etc2])
+    conf = File.join(@etc2, "frr.conf")
+    File.write(conf, <<~CONF)
+      hostname #{@name2}
+      log file #{File.join(@dir, 'isisd2.log')} debugging
+      #{frr2_link_stanza('veth0', hello_interval, hello_multiplier, @frr2.fetch(:interface, []))}
+      #{@frr2[:loopback] ? "interface lo\n ip router isis LAB\n isis passive" : ''}
+      router isis LAB
+       net #{@frr2.fetch(:area, '49.0001')}.#{FRR2_ID}.00
+       is-type #{@frr2.fetch(:is_type)}
+    CONF
+    zebra_conf = File.join(@etc2, "zebra.conf")
+    File.write(zebra_conf, "hostname #{@name2}\n")
+    FileUtils.touch(File.join(@dir, "isisd2.log"))
+    sh "chown -R frr:frr #{@run2} #{@etc2} #{@dir}"
+    { "zebra" => zebra_conf, "isisd" => conf }.each do |d, file|
+      start_daemon(d, file, ns: @frr2_ns, name: @name2, run: @run2)
+    end
+  end
+
   # A daemon that will not start says why on its own output, before it
   # forks, so keep that output and put it in the error.
-  def start_daemon(daemon, file)
-    out = File.join(@dir, "#{daemon}.start.log")
-    cmd = "ip netns exec #{@frr_ns} #{FRR}/#{daemon} -N #{@name} -d -f #{file} -i #{@run}/#{daemon}.pid"
+  def start_daemon(daemon, file, ns: @frr_ns, name: @name, run: @run)
+    out = File.join(@dir, "#{name}-#{daemon}.start.log")
+    cmd = "ip netns exec #{ns} #{FRR}/#{daemon} -N #{name} -d -f #{file} -i #{run}/#{daemon}.pid"
     return if system("#{cmd} > #{out} 2>&1")
 
     raise "failed (#{$?.exitstatus}): #{cmd}\n#{File.read(out)}"
@@ -368,8 +440,8 @@ class FrrLab
   end
 
   def cleanup
-    %w[isisd zebra].each do |d|
-      pid_file = "#{@run}/#{d}.pid"
+    [@run, @run2].product(%w[isisd zebra]).each do |run, d|
+      pid_file = "#{run}/#{d}.pid"
       next unless File.exist?(pid_file)
 
       begin
@@ -380,7 +452,7 @@ class FrrLab
       File.delete(pid_file)
     end
     sleep 0.3
-    [@frr_ns, @isis_ns].each { |ns| system("ip netns del #{ns} 2>/dev/null") }
+    [@frr_ns, @frr2_ns, @isis_ns].each { |ns| system("ip netns del #{ns} 2>/dev/null") }
   end
 
   def sh(cmd)

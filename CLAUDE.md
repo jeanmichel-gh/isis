@@ -1890,8 +1890,41 @@ Measured 2026-11-01 against FRR 8.4.4 with two nets, 49.0001 and 49.0002:
 FRR holds isis4r's Level 2 LSP with both and its Level 1 LSP with 49.0001
 alone. Measured on the way: FRR 8.4.4's own Level 2 LSP lists only its
 manual areas, so it does not do 7.2.11. That closes the items gate 2
-lists. Not shown: an L1 area and a backbone with more than one independent
-router, since the lab runs one FRR. The
+lists. **The lab runs a second FRR** behind the first (`frr2:` in
+`FrrLab#start`, `test/integration/frr_two_routers_test.rb`), and with it
+**Phase 2 gate 2 is met against FRR 8.4.4**, measured 2026-11-01: isis4r
+Level 1 in 49.0001, the first FRR Level 1 and 2, the second Level 2 only
+in 49.0002; isis4r's Level 1 database and the first FRR's hold the area's
+two LSPs, the second FRR's Level 2 database holds the two Level 2 LSPs,
+and nothing crosses either way. Measured on the way: FRR 8.4.4's Level 2
+LSP carries only its own prefixes, not its area's, and its Level 1 LSP
+sets the attached bit. **Phase 2 gate 3 has begun**:
+`lib/isis/spf/spf.rb` is RFC 1142 Annex C.2's calculation for one level
+and the default metric, over TLVs 22 and 2 for links and 135 and 128 for
+IPv4 prefixes: equal cost paths pruned to maximumPathSplits by 7.2.7's
+order, the two-way check (7.2.8.2), overload (7.2.8.1), LSP Number 0
+rules (7.2.5), a pseudonode first at one distance, and RFC 5305's
+maximum metrics. `lib/isis/spf/decision.rb` runs it when the database
+stores an LSP or a circuit's adjacencies or DIS change, keeps the routes,
+and logs each change at info; it installs nothing. Next hops carry the
+neighbour's address from its hellos' TLV 132. Measured 2026-11-01 against
+FRR 8.4.4: on a point to point link and on a LAN with either side as DIS,
+isis4r reaches FRR's loopback at FRR's prefix metric plus its own link
+metric, through FRR's address; with FRR's link metric at 30 the routes
+differ each way, as 7.2.8.2 allows; and the route goes when FRR stops.
+Measured on the way: FRR 8.4.4 lists the shared subnet through isis4r and
+not its own copy, and `show isis route` has no json form. Fixed on the
+way: a point to point adjacency leaving Up by the neighbour's TLV 240,
+not by its holding timer, did not tell its levels, so the originator kept
+the neighbour in TLV 22. With the second FRR, all Level 1, isis4r's routes match
+the FRR in the middle: each prefix it reaches through the far FRR, isis4r
+reaches at its metric plus 10 through it, and each it reaches through
+isis4r, the far FRR reaches at its metric plus 10. Measured on the way:
+FRR 8.4.4 lists a prefix it advertises itself through a neighbour, so
+those are left out of the comparison. Still owed by gate 3: equal cost
+paths against FRR, which needs a second link from isis4r; IPv6 (TLVs
+232 and 236); the nearest Level 2 system (7.2.9.1) and the attached bit;
+overload against FRR; external routes and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
 clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
