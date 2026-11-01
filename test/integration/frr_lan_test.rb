@@ -7,8 +7,9 @@ require_relative "../support/frr_lab"
 # come up, agree on the Level 1 DIS and its LAN ID, and agree again when
 # the DIS changes (RFC 1142 clauses 8.4.1 to 8.4.4); and with either side
 # as DIS the databases agree, the DIS's pseudonode LSP included, and FRR
-# routes to isis4r's prefix through the pseudonode (7.3.7, 7.3.8, 7.3.15).
-# Database agreement through a DIS change needs purges, which are next.
+# routes to isis4r's prefix through the pseudonode (7.3.7, 7.3.8, 7.3.15);
+# and they agree again through a DIS change either way, the old DIS's
+# pseudonode purged on both sides (7.2.3, 7.3.16.4).
 #
 # Runs only as root with FRR installed and ISIS_FRR=1, like
 # frr_p2p_test.rb. LAN addresses are random per run, so each test sets the
@@ -104,6 +105,17 @@ class TestFrrLan < Minitest::Test
     @lab.frr_database.transform_values { |e| e["sequence"] }
   end
 
+  # Each side's LSPs as LSP ID => [sequence, purged], so a purge on one
+  # side and a live LSP on the other do not count as agreeing.
+  def isis4r_view
+    @lab.isis4r_database.reject { |_, e| e["sequence"].zero? }
+        .transform_values { |e| [e["sequence"], e["lifetime"].zero?] }
+  end
+
+  def frr_view
+    @lab.frr_database.transform_values { |e| [e["sequence"], e["purged"]] }
+  end
+
   def frr_routes_isis4rs_prefix?
     route = @lab.frr_route("192.0.2.1/32")
     route && route["protocol"] == "isis" && route["installed"] &&
@@ -155,5 +167,47 @@ class TestFrrLan < Minitest::Test
     assert_eventually("FRR did not route to 192.0.2.1/32 through its pseudonode", 60) do
       frr_routes_isis4rs_prefix?
     end
+  end
+
+  # isis4r is DIS, then FRR's priority goes past it: isis4r resigns and
+  # purges its pseudonode (7.2.3), FRR generates its own, and both sides
+  # hold the same LSPs, isis4r's old pseudonode as a purge on both.
+  def test_databases_agree_through_a_dis_change_to_frr
+    @lab.start(network: :broadcast, isis4r: { priority: 100 })
+    assert_eventually("isis4r did not become DIS") { both_up? && isis4r["dis"] == "self" }
+    old = "#{FrrLab::ISIS4R_ID}.01-00"
+    assert_eventually("the databases do not agree before the change", 30) do
+      isis4r_view.key?(old) && isis4r_view == frr_view
+    end
+    @lab.vtysh_config("interface veth0", "isis priority 127")
+    assert_eventually("the DIS did not move to FRR") { isis4r["dis"] == FrrLab::FRR_ID && @lab.frr_is_dis? }
+    assert_eventually("the databases do not agree after the change", 30) do
+      view = isis4r_view
+      view[old]&.last && view.keys.grep(/\A#{Regexp.escape(FrrLab::FRR_ID)}\.(?!00)\h\h-00\z/).size == 1 &&
+        view == frr_view
+    end
+    assert_frr_holds_isis4r_naming(isis4r["lan_id"])
+    assert_match(/purged: this system resigned as DIS/, @lab.isis4r_log)
+  end
+
+  # FRR is DIS, then its priority drops below isis4r's: isis4r takes over
+  # and purges FRR's pseudonode (7.2.3), FRR purges it too on resigning,
+  # and both sides agree, FRR's old pseudonode a purge on both.
+  def test_databases_agree_through_a_dis_change_to_isis4r
+    @lab.start(network: :broadcast, isis4r: { priority: 10 })
+    assert_eventually("FRR did not become DIS") { both_up? && isis4r["dis"] == FrrLab::FRR_ID }
+    pattern = /\A#{Regexp.escape(FrrLab::FRR_ID)}\.(?!00)\h\h-00\z/
+    assert_eventually("the databases do not agree before the change", 30) do
+      isis4r_view.keys.grep(pattern).size == 1 && isis4r_view == frr_view
+    end
+    old = isis4r_view.keys.grep(pattern).first
+    @lab.vtysh_config("interface veth0", "isis priority 1")
+    assert_eventually("the DIS did not move to isis4r") { isis4r["dis"] == "self" && @lab.frr_is_dis? == false }
+    assert_eventually("the databases do not agree after the change", 30) do
+      view = isis4r_view
+      view[old]&.last && view.key?("#{FrrLab::ISIS4R_ID}.01-00") && !view["#{FrrLab::ISIS4R_ID}.01-00"].last &&
+        view == frr_view
+    end
+    assert_frr_holds_isis4r_naming(ISIS4R_LAN_ID)
   end
 end

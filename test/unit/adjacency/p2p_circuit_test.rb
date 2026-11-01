@@ -310,11 +310,9 @@ class TestP2pCircuit < Minitest::Test
     up_both
     bad = ISIS::Pdu.factory(ISIS::Octets.new(lsp.encode.tap { |o| o[24, 2] = "\xde\xad".b }))
     assert_equal :checksum, @a.receive_lsp(bad)
-    assert_equal :purge, @a.receive_lsp(lsp(lifetime: 0))
-    assert_equal :own, @a.receive_lsp(lsp(id: "0000.0000.000a.00-00"))
     assert_equal :id_length, @a.receive_lsp(lsp(id: "0000.0000.0000.000a.00-00"))
     reasons = @log_a.events.select { |e| e.kind == :refused }.map { |e| e.data[:reason] }
-    assert_equal %i[checksum purge own id_length], reasons.last(4)
+    assert_equal %i[checksum id_length], reasons.last(2)
     assert_nil held(@a)
   end
 

@@ -21,10 +21,9 @@ module ISIS
   # Generation follows Originator's rules: refreshed every
   # maximumLSPGenerationInterval, generated again on a change no sooner
   # than minimumLSPGenerationInterval, and moved past a newer copy of
-  # itself. start is becoming DIS and stop is resigning. After stop, this
-  # system no longer generates the LSP (7.3.15.1 c), and the copy already
-  # flooded is left to age out: purging it, as clause 8.4.4 asks of a new
-  # DIS for its predecessor's, is not here yet.
+  # itself. start is becoming DIS and stop is resigning, which purges the
+  # LSP network wide (7.2.3). After stop, this system no longer generates
+  # it (7.3.15.1 c).
   class Pseudonode < Originator
     attr_reader :circuit
 
@@ -51,10 +50,20 @@ module ISIS
       self
     end
 
-    # This system resigned as DIS.
+    # This system resigned as DIS: "it shall initiate a network wide purge
+    # of its pseudonode Link State PDU(s) by setting their Remaining
+    # Lifetime to zero" (RFC 1142 7.2.3). The header is kept for
+    # MaxAge, as for any purge of an LSP whose lifetime had not run out.
     def stop
+      was = @active
       @active = false
       super
+      held = @database[@lsp_id]
+      if was && held && !held.placeholder? && !held.remaining_lifetime.zero?
+        @database.purge(held, "this system resigned as DIS on #{@circuit.name} (RFC 1142 7.2.3)",
+                        retain: Database::MAX_AGE)
+      end
+      self
     end
 
     def generates?(lsp_id)

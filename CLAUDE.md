@@ -1834,12 +1834,24 @@ FRR 8.4.4: with either side as DIS, both databases hold the same LSPs at
 the same sequences, the pseudonode included, and FRR installs isis4r's
 prefix. Measured on the way: FRR 8.4.4 installs that route even when
 isis4r's LSP names no pseudonode, so the test asserts the TLV 22 line FRR
-holds. **Still owed by gate 1**: agreement through a DIS change, which
-needs purges, since the old DIS's pseudonode LSP has to go. Not yet in the
-originator: a second LSP Number when one LSP is full, and jitter on the
-refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
-confusion over another system's LSP (7.3.16.2) and a stale LSP with this
-system's ID (7.3.15.1 c) are refused; PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
+holds. Purges are in, RFC 1142 clause 7.3.16.4: with a scheduler the database
+expires an LSP whose lifetime runs out and removes a purge's header
+after ZeroAgeLifetime, or MaxAge for one this system starts; the update
+process handles received purges, purges on LSP confusion (7.3.16.2) and
+on an LSP with this system's ID that it does not generate (7.3.15.1 c);
+and a resigning DIS purges its pseudonode, a new one its predecessor's
+(7.2.3). A purge is the header alone with its checksum computed again,
+which is what FRR 8.4.4 sends, byte for byte
+(`test/fixtures/frr-8.4.4-l1-lsp-purge.hex`); with an area key it
+carries TLV 10 (RFC 5304 section 2). A corrupted LSP is dropped and not
+purged, although RFC 1142 7.3.14 e asks for a purge. **Phase 2 gate 1 is
+met against FRR 8.4.4**, measured 2026-11-01:
+`test_databases_agree_through_a_dis_change_to_frr` and `..._to_isis4r`
+have the databases agree through a DIS change either way, the old DIS's
+pseudonode a purge on both sides. Not yet in the originator: a second LSP
+Number when one LSP is full, and jitter on the refresh timer (clause
+10.1). Not yet in the update process: PSNP jitter, and a database too
+large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
