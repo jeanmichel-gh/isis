@@ -148,6 +148,26 @@ class FrrLab
     end.to_h
   end
 
+  # What FRR shows of each LSP in `show isis database detail`, the lines
+  # under its header joined, keyed by LSP ID as frr_database keys it. For
+  # an IS reachability line, FRR 8.4.4 prints "Extended Reachability:
+  # 0000.0000.0001.01 (Metric: 10)".
+  def frr_database_detail
+    blocks = {}
+    current = nil
+    vtysh("show isis database detail").each_line do |line|
+      if (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x\h{8}/))
+        host, pseudonode, number = m.captures
+        current = blocks["#{host == @name ? FRR_ID : host}.#{pseudonode}-#{number}"] = +""
+      elsif current && line.start_with?("  ")
+        current << line
+      else
+        current = nil
+      end
+    end
+    blocks
+  end
+
   # FRR's route to +prefix+ from `show ip route PREFIX json`: the first
   # entry, a Hash with "protocol", "installed" and "nexthops", or nil.
   def frr_route(prefix)

@@ -12,9 +12,11 @@ module ISIS
   #   TLV 1    the manual area addresses
   #   TLV 129  the protocols supported
   #   TLV 132  the IP interface addresses, when there are any
-  #   TLV 22   one entry per adjacency Up, the neighbour's System ID with
-  #            "an appended zero octet (indicating non-pseudonode)"
-  #            (7.3.7), at the circuit's metric
+  #   TLV 22   one entry per circuit's is_neighbor: on a point to point
+  #            circuit with an adjacency Up, the neighbour's System ID
+  #            with "an appended zero octet (indicating non-pseudonode)",
+  #            and on a LAN with a DIS, the DIS's LAN ID, the pseudonode
+  #            (7.3.7); at the circuit's metric
   #   TLV 135  the configured prefixes
   #
   # That is metric_style :wide, the default. :narrow sends TLV 2 and TLV
@@ -37,7 +39,8 @@ module ISIS
     # 255 octet limit is a packing problem".
     LSP_BUFFER_SIZE = 1492
 
-    attr_reader :system_id, :database, :sequence, :circuits, :lsp_id
+    attr_reader :system_id, :database, :sequence, :circuits, :lsp_id, :refresh_interval, :minimum_interval,
+                :buffer_size
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key
@@ -120,24 +123,7 @@ module ISIS
     def tlvs
       list = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
-      neighbors = @circuits.filter_map(&:is_neighbor)
-      if @metric_style != :wide
-        # The Virtual Flag takes the first octet of each TLV 2's value, and
-        # a Level 1 system writes 0 (RFC 1142 9.8).
-        narrow = neighbors.map do |id, metric|
-          metrics = Tlv::NarrowMetrics.build(metric: metric, ie_octets: Tlv::IsReachability::IE_OCTETS)
-          Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)
-        end
-        list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
-        reach = @prefixes.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
-        list.concat(pack(Tlv::IpInternalReachability, reach))
-      end
-      if @metric_style != :narrow
-        wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
-        list.concat(pack(Tlv::ExtendedIsReachability, wide))
-        reach = @prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
-        list.concat(pack(Tlv::ExtendedIpReachability, reach))
-      end
+      list.concat(reachability(@circuits.filter_map(&:is_neighbor), @prefixes))
       list
     end
 
@@ -189,6 +175,30 @@ module ISIS
     end
 
     private
+
+    # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
+    # and +prefixes+, in the metric style.
+    def reachability(neighbors, prefixes)
+      list = []
+      if @metric_style != :wide
+        # The Virtual Flag takes the first octet of each TLV 2's value, and
+        # a Level 1 system writes 0 (RFC 1142 9.8).
+        narrow = neighbors.map do |id, metric|
+          metrics = Tlv::NarrowMetrics.build(metric: metric, ie_octets: Tlv::IsReachability::IE_OCTETS)
+          Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)
+        end
+        list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
+        reach = prefixes.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
+        list.concat(pack(Tlv::IpInternalReachability, reach))
+      end
+      if @metric_style != :narrow
+        wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
+        list.concat(pack(Tlv::ExtendedIsReachability, wide))
+        reach = prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
+        list.concat(pack(Tlv::ExtendedIpReachability, reach))
+      end
+      list
+    end
 
     def generate(reason, unless_unchanged: false)
       held = @database[@lsp_id]

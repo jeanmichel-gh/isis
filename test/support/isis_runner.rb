@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Runs one isis4r point to point circuit on a real interface, on the real
+# Runs one isis4r circuit, point to point or broadcast, on a real interface, on the real
 # clock, until it is told to stop. FrrLab starts it inside a network
 # namespace with `ip netns exec`, so it sees only that namespace's links.
 #
@@ -31,22 +31,22 @@ socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
 database = ISIS::Database.new(level: 1, clock: clock)
 transport = ISIS::Link::SocketTransport.new(socket)
 lan = config[:network] == "broadcast"
-originator = nil
+originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
+                                  log: log, areas: config.fetch(:areas),
+                                  ip_addresses: config.fetch(:ip_addresses, []),
+                                  prefixes: config.fetch(:prefixes, []),
+                                  metric_style: config.fetch(:metric_style, "wide").to_sym,
+                                  area_key: config[:area_key],
+                                  minimum_interval: config.fetch(:minimum_lsp_interval, 1))
 circuit =
   if lan
     ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log, name: iface,
+                         database: database, originator: originator, area_key: config[:area_key],
                          system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
                          ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
                          hello_interval: config.fetch(:hello_interval),
                          hello_multiplier: config.fetch(:hello_multiplier), hello_key: config[:hello_key])
   else
-    originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
-                                      log: log, areas: config.fetch(:areas),
-                                      ip_addresses: config.fetch(:ip_addresses, []),
-                                      prefixes: config.fetch(:prefixes, []),
-                                      metric_style: config.fetch(:metric_style, "wide").to_sym,
-                                      area_key: config[:area_key],
-                                      minimum_interval: config.fetch(:minimum_lsp_interval, 1))
     ISIS::P2pCircuit.new(transport: transport, scheduler: scheduler, log: log,
                          database: database, originator: originator,
                          hello_key: config[:hello_key], area_key: config[:area_key],
@@ -79,7 +79,7 @@ end
 stop = false
 %w[TERM INT].each { |sig| Signal.trap(sig) { stop = true } }
 
-originator&.start
+originator.start
 circuit.start
 next_state = clock.now
 until stop
@@ -94,6 +94,6 @@ until stop
   end
 end
 circuit.stop
-originator&.stop
+originator.stop
 write_state.call
 socket.close

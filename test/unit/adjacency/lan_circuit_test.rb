@@ -208,3 +208,306 @@ class TestLanCircuit < Minitest::Test
     assert(@circuits[:c].log.events.any? { |e| e.kind == :refused && e.data[:reason] == :authentication })
   end
 end
+
+# The update process on a LAN, RFC 1142 clause 7.3.15 for a broadcast
+# circuit, and the pseudonode LSP of clause 7.3.8. Each system has an
+# Originator, so the databases hold real LSPs: each system's own, and the
+# DIS's pseudonode.
+#
+# ISIS_LOG=info or ISIS_LOG=debug prints each test's log as it runs.
+class TestLanUpdate < Minitest::Test
+  IDS = TestLanCircuit::IDS
+  MACS = TestLanCircuit::MACS
+  THIRD = "0000.0000.00cc.00-00"
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @wire = ISIS::Link::SimulatedWire.new
+    @circuits = {}
+    @originators = {}
+    @sent = Hash.new { |h, k| h[k] = [] }
+    TestLogs.heading(name)
+  end
+
+  def node(who, metric_style: :wide, **opts)
+    sent = @sent[who]
+    log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock),
+                                 tracer: TestLogs.tracer(@clock, lambda { |dir, _c, pdu, _p|
+                                   sent << [@clock.now, pdu] if dir == :sent
+                                 }))
+    database = ISIS::Database.new(level: 1, clock: @clock)
+    @originators[who] = ISIS::Originator.new(system_id: IDS.fetch(who), database: database, scheduler: @scheduler,
+                                             log: log, metric_style: metric_style, minimum_interval: 1)
+    @circuits[who] = ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire),
+                                          scheduler: @scheduler, log: log, name: "#{who}-eth0",
+                                          system_id: IDS.fetch(who), snpa: MACS.fetch(who), database: database,
+                                          originator: @originators[who], **opts)
+  end
+
+  def start(*who)
+    who.each do |w|
+      @originators.fetch(w).start
+      @circuits.fetch(w).start
+    end
+  end
+
+  def run_for(seconds, step: 0.25)
+    (seconds / step).ceil.times do
+      @scheduler.advance(step)
+      @circuits.each_value(&:poll)
+    end
+  end
+
+  # What a database holds, as LSP ID => sequence, without placeholders.
+  def held(who)
+    @circuits.fetch(who).database.entries.reject(&:placeholder?).to_h { |e| [e.lsp_id_s, e.sequence] }
+  end
+
+  def sent(who, type)
+    @sent[who].select { |_, pdu| pdu.is_a?(type) }
+  end
+
+  def lsp(sequence: 5, id: THIRD)
+    ISIS::Pdu::Lsp.new(level: 1, lsp_id: id, lifetime: 1200, sequence: sequence,
+                       tlvs: [ISIS::Tlv::AreaAddresses.new("49.0001")])
+  end
+
+  # The IS reachability TLVs of the LSP +who+ holds under +lsp_id+, as
+  # stored, so what was generated and not what would be.
+  def stored_is_reachability(who, lsp_id)
+    lsp = @circuits.fetch(who).database[ISIS::Pdu.lsp_id_octets(lsp_id)].lsp
+    lsp.tlvs.select { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
+  end
+
+  def seed(who, lsp)
+    @circuits.fetch(who).database.entry(lsp.lsp_id).store(lsp)
+  end
+
+  def up(*who)
+    start(*who)
+    run_for(10)
+    assert @circuits[who.first].dis, "no DIS elected"
+  end
+
+  # Equal priorities, so b, the higher LAN address, is DIS. Both databases
+  # end up with the same three LSPs at the same sequences: a's, b's, and
+  # b's pseudonode, 0000.0000.000b.01-00.
+  def test_the_databases_agree
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    run_for(5)
+    assert @circuits[:b].dis?
+    expected = %w[0000.0000.000a.00-00 0000.0000.000b.00-00 0000.0000.000b.01-00]
+    assert_equal expected, held(:a).keys
+    assert_equal held(:a), held(:b)
+  end
+
+  # Clause 7.3.8: no Area Addresses, and the DIS's own ID and each Up
+  # neighbour's, each with a zero octet, at metric 0. TLV 22 with two 11
+  # octet entries: 16 16, then 00000000000b 00, metric 000000, sub-TLV
+  # length 00, and the same for a. Hex from the clause and RFC 5305 section
+  # 3, worked out here.
+  def test_the_pseudonode_lsp
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    pseudonode = @circuits[:b].pseudonode
+    assert pseudonode.active?
+    assert_equal "0000.0000.000b.01-00", pseudonode.lsp_id_s
+    assert_equal "1616" "00000000000b00" "000000" "00" "00000000000a00" "000000" "00", pseudonode.tlvs.map(&:to_shex).join
+    refute @circuits[:a].pseudonode.active?
+  end
+
+  # Narrow metrics: TLV 2, a virtual flag octet, then per entry the four
+  # metric octets, default 00 and the other three 80, S set for "not
+  # supported", and the ID with its zero octet. 02 11 00, then
+  # 00808080 00000000000b00 and 00808080 00000000000a00. Worked out from
+  # RFC 1142 9.8.
+  def test_the_pseudonode_lsp_narrow
+    node(:a, metric_style: :narrow)
+    node(:b, metric_style: :narrow)
+    up(:a, :b)
+    assert_equal "0217" "00" "00808080" "00000000000b00" "00808080" "00000000000a00",
+                 @circuits[:b].pseudonode.tlvs.map(&:to_shex).join
+  end
+
+  # Clause 7.3.7: a's LSP names the pseudonode, b's LAN ID 0000.0000.000b
+  # .01, at the circuit's metric 10: 16 0b 00000000000b01 00000a 00.
+  def test_each_lsp_names_the_pseudonode
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    run_for(2)
+    [:a, :b].each do |who|
+      tlv22 = stored_is_reachability(who, "#{IDS[who]}.00-00")
+      assert_equal "160b" "00000000000b01" "00000a" "00", tlv22.map(&:to_shex).join, who
+    end
+  end
+
+  # A DIS whose hellos carry a LAN ID with a zero circuit octet names no
+  # pseudonode, so a's LSP names none until the DIS reports a real one.
+  # Measured on FRR 8.4.4, whose first hellos carry a LAN ID of zeros.
+  def test_no_pseudonode_named_from_a_zero_lan_id
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    a = @circuits[:a]
+    a.dis.lan_id = ISIS::Pdu.dotted_octets("0000.0000.0000.00")
+    assert_nil a.is_neighbor
+    # The same DIS reporting another LAN ID changes a's LSP (7.3.7).
+    a.elect
+    @scheduler.advance(2) # without reading b's hellos
+    assert_empty stored_is_reachability(:a, "#{IDS[:a]}.00-00")
+    a.dis.lan_id = ISIS::Pdu.dotted_octets("#{IDS[:b]}.01")
+    id, metric = a.is_neighbor
+    assert_equal ["00000000000b01", 10], [id.unpack1("H*"), metric]
+    a.elect
+    @scheduler.advance(2) # without reading b's hellos
+    assert_equal "160b" "00000000000b01" "00000a" "00",
+                 stored_is_reachability(:a, "#{IDS[:a]}.00-00").map(&:to_shex).join
+  end
+
+  # Clause 7.3.15.1 e 1 iv and e 2 ii: on a broadcast circuit a new or an
+  # equal LSP sets no SSN, so it is not acknowledged by PSNP; the DIS's
+  # CSNPs do that.
+  def test_a_received_lsp_sets_no_ssn_on_a_lan
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    from_b = Datalink::MAC.new(MACS[:b])
+    assert_equal :new, @circuits[:a].receive_update(lsp, from_b)
+    assert_equal :equal, @circuits[:a].receive_update(lsp, from_b)
+    assert_empty @circuits[:a].database[ISIS::Pdu.lsp_id_octets(THIRD)].ssn
+  end
+
+  # Clause 7.3.15: "On broadcast circuits SRMflag is cleared as soon as the
+  # LSP has been transmitted", so each LSP goes out once and is not sent
+  # again unasked.
+  def test_srm_is_cleared_once_sent
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    run_for(5)
+    @circuits.each_value do |c|
+      c.database.entries.each { |e| assert_empty e.srm, "#{c.name} #{e.lsp_id_s}" }
+    end
+    before = sent(:a, ISIS::Pdu::Lsp).size
+    run_for(25)
+    assert_equal before, sent(:a, ISIS::Pdu::Lsp).size
+  end
+
+  # Clause 7.3.15.3 a: the DIS sends a CSNP every completeSNPInterval, and
+  # the other system sends none.
+  def test_the_dis_sends_csnps
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    start_at = @clock.now
+    run_for(30)
+    times = sent(:b, ISIS::Pdu::Csnp).map(&:first).select { |t| t > start_at }
+    assert_equal 3, times.size
+    times.each_cons(2) { |x, y| assert_in_delta 10, y - x, 0.3 }
+    assert_empty sent(:a, ISIS::Pdu::Csnp)
+  end
+
+  # An LSP only the DIS holds: its CSNP lists it, a asks for it in a PSNP
+  # (7.3.15.2 b 4, 7.3.15.4 a), and the DIS sends it (7.3.15.2 b 2).
+  def test_the_other_system_asks_the_dis_for_what_it_lacks
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    seed(:b, lsp)
+    run_for(15)
+    assert_equal 5, held(:a)[THIRD]
+    refute_empty sent(:a, ISIS::Pdu::Psnp)
+  end
+
+  # An LSP only the other system holds: the DIS's CSNP does not mention
+  # it, so that system sends it (7.3.15.2 c).
+  def test_the_dis_learns_what_its_csnp_omits
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    seed(:a, lsp)
+    run_for(15)
+    assert_equal 5, held(:b)[THIRD]
+  end
+
+  # Clause 7.3.17: only the DIS responds to a PSNP. a ignores one, even
+  # one reporting an LSP older than a's, which would otherwise set SRM.
+  def test_only_the_dis_responds_to_a_psnp
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    seed(:a, lsp)
+    psnp = ISIS::Pdu::Psnp.new(level: 1, source_id: "#{IDS[:b]}.00",
+                               tlvs: [ISIS::Tlv::LspEntries.new([lsp(sequence: 1).then do |l|
+                                 ISIS::Tlv::LspEntries::Entry.new(1200, l.lsp_id, 1, l.checksum)
+                               end])])
+    assert_equal :not_dis, @circuits[:a].receive_update(psnp, Datalink::MAC.new(MACS[:b]))
+    assert_empty @circuits[:a].database[ISIS::Pdu.lsp_id_octets(THIRD)].srm
+  end
+
+  # LSPs and SNPs from a system with no adjacency Up are ignored.
+  def test_nothing_is_taken_without_an_adjacency
+    node(:a)
+    assert_equal :no_adjacency, @circuits[:a].receive_update(lsp, Datalink::MAC.new(MACS[:b]))
+    assert_nil @circuits[:a].database[ISIS::Pdu.lsp_id_octets(THIRD)]
+  end
+
+  # Clause 7.3.15.6: one LSP per minimumBroadcastLSPTransmissionInterval,
+  # 33 ms, however many have SRM set.
+  def test_lsps_go_out_33_ms_apart
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    run_for(5)
+    ids = %w[0000.0000.00c1.00-00 0000.0000.00c2.00-00 0000.0000.00c3.00-00]
+    entries = ids.map { |id| seed(:b, lsp(id: id)) }
+    before = sent(:b, ISIS::Pdu::Lsp).size
+    entries.each { |e| @circuits[:b].flood(e) }
+    run_for(0.25, step: 0.001)
+    times = sent(:b, ISIS::Pdu::Lsp).drop(before).map(&:first)
+    assert_equal 3, times.size
+    times.each_cons(2) { |x, y| assert_in_delta 0.033, y - x, 0.002 }
+  end
+
+  # A priority change moves the DIS to a: b stops generating its
+  # pseudonode (7.3.15.1 c), a starts its own, and both LSPs name a's LAN
+  # ID. b's old pseudonode stays until it ages out: purges are not here.
+  def test_a_dis_change_moves_the_pseudonode
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    @circuits[:a].priority = 100
+    run_for(10)
+    assert @circuits[:a].dis?
+    assert @circuits[:a].pseudonode.active?
+    refute @circuits[:b].pseudonode.active?
+    refute @circuits[:b].pseudonode.generates?(ISIS::Pdu.lsp_id_octets("0000.0000.000b.01-00"))
+    [:a, :b].each do |who|
+      tlv22 = stored_is_reachability(who, "#{IDS[who]}.00-00")
+      assert_equal "160b" "00000000000a01" "00000a" "00", tlv22.map(&:to_shex).join, who
+    end
+    assert_includes held(:b).keys, "0000.0000.000a.01-00"
+    assert_equal held(:a), held(:b)
+  end
+
+  # A pseudonode LSP follows the adjacencies Up: c joining puts it in. c
+  # learns the rest from the DIS's next CSNP, at most completeSNPInterval
+  # on.
+  def test_the_pseudonode_follows_the_adjacencies
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    node(:c, priority: 10)
+    start(:c)
+    run_for(20)
+    ids = stored_is_reachability(:c, "#{IDS[:b]}.01-00").flat_map { |t| t.entries.map { |e| e.neighbor.unpack1("H*") } }
+    assert_equal %w[00000000000a00 00000000000b00 00000000000c00], ids.sort
+    assert_equal held(:a), held(:c)
+  end
+end
+
