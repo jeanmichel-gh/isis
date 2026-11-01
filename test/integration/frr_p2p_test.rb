@@ -56,7 +56,7 @@ class TestFrrP2p < Minitest::Test
     # Any arrival at Up counts. Down goes straight to Up when FRR's hello
     # already reports Initializing (RFC 5303 3.2), so it need not pass
     # through Initializing first.
-    ups = log.scan(/^\S+ info +\S+ adjacency with \S+ \w+ -> up$/).size
+    ups = log.scan(/^\S+ info +\S+ adjacency with \S+ \w+ -> up at Level 1$/).size
     assert_equal 1, ups, "isis4r came up #{ups} times, not once\n#{@lab.report}"
   end
 
@@ -199,4 +199,68 @@ class TestFrrP2p < Minitest::Test
     assert_nil @lab.frr_database["#{FrrLab::ISIS4R_ID}.00-00"], "FRR stored isis4r's LSP\n#{@lab.report}"
     assert_nil @lab.isis4r_database.dig("#{FrrLab::FRR_ID}.00-00", "checksum")&.nonzero?, @lab.report
   end
+
+  # -- Both levels: FRR level-1-2, isis4r's circuit at Level 1 and 2 --
+
+  # Each side's LSPs at +level+ as LSP ID => sequence.
+  def isis4r_lsps(level)
+    @lab.isis4r_database(level).reject { |_, e| e["sequence"].zero? }.transform_values { |e| e["sequence"] }
+  end
+
+  def frr_lsps(level)
+    @lab.frr_database(level).transform_values { |e| e["sequence"] }
+  end
+
+  # The levels FRR has an adjacency Up at on veth0, from `show isis
+  # neighbor`, whose third column is the level. Measured on FRR 8.4.4: a
+  # point to point adjacency at both levels is one line with level 3.
+  def frr_up_levels
+    lines = @lab.vtysh("show isis neighbor").lines.grep(/veth0/).select { |l| l.split[3] == "Up" }
+    lines.flat_map { |l| { "1" => [1], "2" => [2], "3" => [1, 2] }.fetch(l.split[2], []) }.sort
+  end
+
+  # One adjacency serving both levels (RFC 1142 9.7, circuit type 3).
+  # Each level's databases agree, and isis4r's LSPs carry IS type 3 at
+  # both (9.8).
+  def test_both_levels_on_one_adjacency
+    @lab.start(level: "1-2")
+    assert_eventually("FRR did not come up at both levels") { frr_up_levels == [1, 2] }
+    assert_eventually("isis4r's adjacency does not serve both levels") do
+      @lab.isis4r_state_doc.dig("neighbor", "usage") == [1, 2]
+    end
+    assert_includes @lab.vtysh("show isis neighbor detail"), "Circuit type: L1L2", @lab.report
+    [1, 2].each do |level|
+      assert_eventually("the Level #{level} databases do not agree", 40) do
+        mine = isis4r_lsps(level)
+        mine.keys.sort == ["#{FrrLab::FRR_ID}.00-00", "#{FrrLab::ISIS4R_ID}.00-00"].sort && mine == frr_lsps(level)
+      end
+      assert_equal 3, @lab.isis4r_database(level).dig("#{FrrLab::ISIS4R_ID}.00-00", "is_type"), @lab.report
+    end
+    assert_eventually("FRR did not install 192.0.2.1/32", 60) do
+      route = @lab.frr_route("192.0.2.1/32")
+      route && route["protocol"] == "isis" && route["installed"]
+    end
+  end
+
+  # No area in common, both at both levels: "the IS shall mark the
+  # adjacency as Level 2 Only" (8.2.4.2). The Level 2 databases agree, and
+  # the level boundary holds: neither side's Level 1 LSP reaches the other.
+  def test_no_area_in_common_is_level_2_only
+    @lab.start(level: "1-2", isis4r: { areas: ["49.0002"] })
+    # Measured on FRR 8.4.4: `show isis neighbor` still lists this
+    # adjacency at level 3, though FRR does not take isis4r's Level 1 LSP
+    # over it, so the level column is not read here.
+    assert_eventually("FRR did not come up") { @lab.frr_adjacency_state == "Up" }
+    assert_eventually("isis4r's adjacency is not Level 2 only") do
+      @lab.isis4r_state_doc.dig("neighbor", "usage") == [2]
+    end
+    assert_eventually("the Level 2 databases do not agree", 40) do
+      mine = isis4r_lsps(2)
+      mine.keys.sort == ["#{FrrLab::FRR_ID}.00-00", "#{FrrLab::ISIS4R_ID}.00-00"].sort && mine == frr_lsps(2)
+    end
+    sleep 5
+    assert_equal ["#{FrrLab::ISIS4R_ID}.00-00"], isis4r_lsps(1).keys, @lab.report
+    refute frr_lsps(1).key?("#{FrrLab::ISIS4R_ID}.00-00"), @lab.report
+  end
 end
+
