@@ -1726,7 +1726,9 @@ layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/cap
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
-transition and refusal with its reason. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
+transition and refusal with its reason. `exe/isis-p2p-sim` runs two of them on
+simulated time with `--log` and `--debug`, for watching the handshake and
+its logs by hand. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
 `docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
 1 is met**. The header fields were read in RFC 1142 clause 9 and agree
