@@ -1717,7 +1717,7 @@ registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129,
 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
-layout, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
+layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
 `lib/isis/adjacency/` with the adjacency and the circuit, both on the
 injected clock. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
@@ -2009,6 +2009,12 @@ republication, so each of these is confirmed for that text and not for the
   reserved value and "the entire PDU shall be ignored", 1 is Level 1 only,
   2 Level 2 only, 3 both. The same field in the point to point hello,
   clause 9.7. **Priority**: bits 1 to 7, bit 8 reserved.
+* **Point to point hello fixed header**, clause 9.7: Circuit Type, Source
+  ID, Holding Time, PDU Length, Local Circuit ID, in the order of the
+  clause's field descriptions. The figure in the supplied text was
+  flattened by extraction and cannot settle the order alone. FRR's
+  `struct isis_p2p_hello_hdr` and Wireshark's dissector use the same
+  order, so the three agree.
 * **LSP flags**, clause 9.8, quoted in the flags section above.
 * **LSP checksum**, clause 7.3.11: "computed over all fields in the LSP
   which appear after the Remaining Lifetime field", so Remaining Lifetime

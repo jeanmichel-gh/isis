@@ -47,6 +47,16 @@ module ISIS
       end
     end
 
+    # Dotted hex, "1921.6800.1001.00", to octets. Dots are separators only,
+    # so any grouping parses. The forms routers print are conventions with
+    # no clause behind them.
+    def self.dotted_octets(text)
+      hex = text.to_s.delete(".")
+      raise ArgumentError, "not dotted hex: #{text.inspect}" unless hex.match?(/\A(\h\h)*\z/)
+
+      [hex].pack("H*").b
+    end
+
     # The ID Length octet to write for a System ID of +width+ octets: the
     # default spelling for six, 255 for none.
     def self.id_length_for(width)

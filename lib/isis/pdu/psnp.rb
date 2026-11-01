@@ -65,7 +65,7 @@ module ISIS
       # System ID writes 0, the default.
       def from_fields(level:, source_id:, tlvs: [], max_area_addresses: 0)
         type = LEVEL_TYPES.fetch(level) { raise ArgumentError, "PSNP level is 1 or 2, not #{level.inspect}" }
-        @source_id = Psnp.dotted_octets(source_id)
+        @source_id = Pdu.dotted_octets(source_id)
         width = @source_id.bytesize - 1
         raise ArgumentError, "a Source ID needs a circuit octet" if width.negative?
 
@@ -79,16 +79,6 @@ module ISIS
                     tlvs: Tlv::List.new({ tlvs: hash.fetch(:tlvs, []), tail: hash.fetch(:tail, "") }),
                     max_area_addresses: hash.fetch(:max_area_addresses, 0))
         @header.apply_unusual(hash)
-      end
-
-      class << self
-        # "1921.6800.1001.00" to octets. Dots are separators only.
-        def dotted_octets(text)
-          hex = text.delete(".")
-          raise ArgumentError, "not dotted hex: #{text.inspect}" unless hex.match?(/\A(\h\h)+\z/)
-
-          [hex].pack("H*")
-        end
       end
     end
 
