@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
 module ISIS
-  # This system's Level 1 LSP: built from configuration and from the
-  # circuits' adjacencies, stored in the database, and flooded by setting
-  # SRM on every circuit with an adjacency up. RFC 1142 clauses 7.3.5 to
-  # 7.3.7 and 7.3.16.1 to 7.3.16.3.
+  # This system's LSP at its database's level: built from configuration and
+  # from the circuits' adjacencies, stored in the database, and flooded by
+  # setting SRM on every circuit with an adjacency up. RFC 1142 clauses
+  # 7.3.5 to 7.3.7, 7.3.9 at Level 2, and 7.3.16.1 to 7.3.16.3. At Level 2
+  # the content is the same list: clause 7.3.9's Partition Designated
+  # Level 2 IS option is not sent, since partition repair is not here.
   #
   # One LSP, LSP Number 0, non-pseudonode. What it carries, after clause
   # 7.3.7 and RFC 1195:
@@ -87,6 +89,13 @@ module ISIS
       Pdu.lsp_id_s(@lsp_id)
     end
 
+    # The level of the LSPs this generates: its database's. A Level 2 LSP
+    # carries IS type 3, "In a Level 2 Link State PDU, IS Type shall be 3"
+    # (RFC 1142 9.9), which Pdu::Lsp writes for it.
+    def level
+      @database.level
+    end
+
     # Generate the first LSP and start the refresh timer.
     def start
       generate("initialisation (RFC 1142 7.3.16.1)")
@@ -112,7 +121,7 @@ module ISIS
     def build(sequence: @sequence)
       list = tlvs
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
-      lsp = Pdu::Lsp.new(level: 1, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
+      lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
                          tlvs: list)
       lsp.key = @area_key
       lsp
@@ -182,7 +191,8 @@ module ISIS
       list = []
       if @metric_style != :wide
         # The Virtual Flag takes the first octet of each TLV 2's value, and
-        # a Level 1 system writes 0 (RFC 1142 9.8).
+        # this system writes 0 at either level, since it does not repair
+        # partitions (RFC 1142 9.8, 9.9).
         narrow = neighbors.map do |id, metric|
           metrics = Tlv::NarrowMetrics.build(metric: metric, ie_octets: Tlv::IsReachability::IE_OCTETS)
           Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)

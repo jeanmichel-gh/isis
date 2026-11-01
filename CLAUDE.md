@@ -1848,7 +1848,16 @@ purged, although RFC 1142 7.3.14 e asks for a purge. **Phase 2 gate 1 is
 met against FRR 8.4.4**, measured 2026-11-01:
 `test_databases_agree_through_a_dis_change_to_frr` and `..._to_isis4r`
 have the databases agree through a DIS change either way, the old DIS's
-pseudonode a purge on both sides. Not yet in the originator: a second LSP
+pseudonode a purge on both sides. **Phase 2 gate 2 has begun**: the
+originator and the pseudonode take their level from their database, so a
+`LanCircuit` at Level 2 with a Level 2 database runs the same update
+process with Level 2 LSPs, IS type 3 (RFC 1142 9.9), and Level 2 SNPs.
+Measured 2026-11-01 on FRR 8.4.4 with `is-type level-2-only`: the Level 2
+databases agree with isis4r as DIS and through a DIS change to FRR, and
+FRR installs isis4r's prefix at Level 2. Still owed by gate 2: a system
+at both levels, with an L1 and an L2 circuit on one interface or a point
+to point circuit at both, the attached bit, the level boundaries, and
+several LSP Numbers. The point to point circuit is Level 1 only. Not yet in the originator: a second LSP
 Number when one LSP is full, and jitter on the refresh timer (clause
 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause

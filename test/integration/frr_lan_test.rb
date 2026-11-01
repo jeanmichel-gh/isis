@@ -210,4 +210,40 @@ class TestFrrLan < Minitest::Test
     end
     assert_frr_holds_isis4r_naming(ISIS4R_LAN_ID)
   end
+
+  # -- Level 2: FRR "is-type level-2-only", isis4r's circuit at Level 2 --
+
+  # The same agreement at Level 2 with isis4r as DIS, isis4r's Level 2
+  # pseudonode included (7.3.10), and FRR routes to isis4r's prefix
+  # through it.
+  def test_level_2_databases_agree_with_isis4r_as_dis
+    @lab.start(network: :broadcast, level: 2, isis4r: { priority: 100 })
+    assert_eventually("isis4r did not become the Level 2 DIS") { both_up? && isis4r["dis"] == "self" }
+    expected = ["#{FrrLab::ISIS4R_ID}.00-00", "#{FrrLab::ISIS4R_ID}.01-00", "#{FrrLab::FRR_ID}.00-00"].sort
+    assert_eventually("the Level 2 databases do not agree", 30) do
+      isis4r_view.keys.sort == expected && isis4r_view == frr_view
+    end
+    assert_frr_holds_isis4r_naming(ISIS4R_LAN_ID)
+    assert_eventually("FRR did not route to 192.0.2.1/32 at Level 2", 60) { frr_routes_isis4rs_prefix? }
+    assert_includes @lab.vtysh("show isis database"), "Level-2", @lab.report
+  end
+
+  # And through a DIS change to FRR at Level 2, isis4r's old Level 2
+  # pseudonode a purge on both sides.
+  def test_level_2_databases_agree_through_a_dis_change_to_frr
+    @lab.start(network: :broadcast, level: 2, isis4r: { priority: 100 })
+    assert_eventually("isis4r did not become the Level 2 DIS") { both_up? && isis4r["dis"] == "self" }
+    old = "#{FrrLab::ISIS4R_ID}.01-00"
+    assert_eventually("the databases do not agree before the change", 30) do
+      isis4r_view.key?(old) && isis4r_view == frr_view
+    end
+    @lab.vtysh_config("interface veth0", "isis priority 127")
+    assert_eventually("the Level 2 DIS did not move to FRR") { isis4r["dis"] == FrrLab::FRR_ID }
+    assert_eventually("the databases do not agree after the change", 30) do
+      view = isis4r_view
+      view[old]&.last && view.keys.grep(/\A#{Regexp.escape(FrrLab::FRR_ID)}\.(?!00)\h\h-00\z/).size == 1 &&
+        view == frr_view
+    end
+  end
 end
+
