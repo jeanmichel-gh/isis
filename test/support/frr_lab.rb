@@ -191,9 +191,17 @@ class FrrLab
     File.write(zebra_conf, "hostname #{@name}\n")
     FileUtils.touch(File.join(@dir, "isisd.log"))
     sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
-    { "zebra" => zebra_conf, "isisd" => conf }.each do |d, file|
-      sh "ip netns exec #{@frr_ns} #{FRR}/#{d} -N #{@name} -d -f #{file} -i #{@run}/#{d}.pid > /dev/null 2>&1"
-    end
+    { "zebra" => zebra_conf, "isisd" => conf }.each { |d, file| start_daemon(d, file) }
+  end
+
+  # A daemon that will not start says why on its own output, before it
+  # forks, so keep that output and put it in the error.
+  def start_daemon(daemon, file)
+    out = File.join(@dir, "#{daemon}.start.log")
+    cmd = "ip netns exec #{@frr_ns} #{FRR}/#{daemon} -N #{@name} -d -f #{file} -i #{@run}/#{daemon}.pid"
+    return if system("#{cmd} > #{out} 2>&1")
+
+    raise "failed (#{$?.exitstatus}): #{cmd}\n#{File.read(out)}"
   end
 
   def start_isis4r(config)
