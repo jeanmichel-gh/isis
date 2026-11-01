@@ -270,6 +270,124 @@ class TestOriginatorLevel2 < Minitest::Test
   end
 end
 
+# Clause 7.2.11: a Level 2 LSP of a system at both levels lists the union
+# of the area addresses in the Level 1 LSPs with LSP Number 0. No
+# circuits: two databases and two originators on a manual clock, and other
+# systems' Level 1 LSPs stored straight into the Level 1 database. The
+# TLV 1 expectations are our own arithmetic: type 01, length, then each
+# area as a length octet and its octets.
+class TestOriginatorAreaAddresses < Minitest::Test
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    TestLogs.heading(name)
+    @log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock))
+    @l1 = ISIS::Database.new(level: 1, clock: @clock)
+    @l2 = ISIS::Database.new(level: 2, clock: @clock)
+    @orig1 = ISIS::Originator.new(system_id: "0000.0000.000a", database: @l1, scheduler: @scheduler, log: @log,
+                                  minimum_interval: 5, is_type: 3, level1_database: @l1)
+    @orig2 = ISIS::Originator.new(system_id: "0000.0000.000a", database: @l2, scheduler: @scheduler, log: @log,
+                                  minimum_interval: 5, is_type: 3, level1_database: @l1)
+  end
+
+  # Another system's Level 1 LSP with +areas+ in TLV 1, at LSP Number +number+.
+  def store_l1(system, areas, number: 0, sequence: 1)
+    id = ISIS::Pdu.dotted_octets(system) + [0, number].pack("CC")
+    lsp = ISIS::Pdu::Lsp.new(level: 1, lsp_id: ISIS::Octets.new(id), lifetime: 1200, sequence: sequence,
+                             tlvs: [ISIS::Tlv::AreaAddresses.new(areas), ISIS::Tlv::ProtocolsSupported.new([:ipv4])])
+    @l1.entry(id).store(lsp)
+  end
+
+  def area_tlv(orig)
+    orig.database[orig.lsp_id].lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::AreaAddresses) }.to_shex
+  end
+
+  def start
+    [@orig1, @orig2].each(&:start)
+  end
+
+  #   01 08  03 490001  03 490002
+  def test_the_level_2_lsp_lists_the_union
+    store_l1("0000.0000.000b", ["49.0002"])
+    start
+    assert_equal "01080349000103490002", area_tlv(@orig2)
+  end
+
+  # The Level 1 LSP keeps the manual areas, Level 1 database or not:
+  # 01 04 03 490001.
+  def test_the_level_1_lsp_lists_the_manual_areas
+    store_l1("0000.0000.000b", ["49.0002"])
+    start
+    assert_equal "010403490001", area_tlv(@orig1)
+  end
+
+  # "Level 1 LSPs with LSP number zero": an LSP Number 1 with TLV 1, which
+  # 7.3.4 forbids, does not count.
+  def test_only_lsp_number_zero_counts
+    store_l1("0000.0000.000b", ["49.0002"], number: 1)
+    start
+    assert_equal "010403490001", area_tlv(@orig2)
+  end
+
+  # Areas already listed are not listed twice: 01 08 03 490001 03 490002.
+  def test_an_area_is_listed_once
+    store_l1("0000.0000.000b", %w[49.0002 49.0001])
+    store_l1("0000.0000.000c", ["49.0002"])
+    start
+    assert_equal "01080349000103490002", area_tlv(@orig2)
+  end
+
+  # A Level 1 LSP stored after start changes the content, so a new Level 2
+  # LSP goes out, no sooner than the minimum interval (7.3.6).
+  def test_a_new_area_generates_the_level_2_lsp_again
+    start
+    assert_equal 1, @orig2.sequence
+    store_l1("0000.0000.000b", ["49.0002"])
+    @scheduler.advance(6)
+    assert_equal 2, @orig2.sequence
+    assert_equal "01080349000103490002", area_tlv(@orig2)
+  end
+
+  # A Level 1 LSP that brings no new area changes nothing.
+  def test_an_lsp_with_known_areas_generates_nothing
+    start
+    store_l1("0000.0000.000b", ["49.0001"])
+    @scheduler.advance(6)
+    assert_equal 1, @orig2.sequence
+  end
+
+  # A purge keeps the header alone, so its areas leave the union.
+  def test_a_purge_takes_its_areas_out
+    entry = store_l1("0000.0000.000b", ["49.0002"])
+    start
+    @l1.purge(entry, "test")
+    @scheduler.advance(6)
+    assert_equal 2, @orig2.sequence
+    assert_equal "010403490001", area_tlv(@orig2)
+  end
+
+  # Over maximumAreaAddresses, three, the lowest are kept (7.1.5), and a
+  # manual area dropped is reported. 49.0001 is the highest of the four
+  # here, so it goes: 01 0c 03 390001 03 390002 03 390003.
+  def test_only_the_three_lowest_are_kept
+    store_l1("0000.0000.000b", %w[39.0003 39.0001])
+    store_l1("0000.0000.000c", ["39.0002"])
+    start
+    assert_equal "010c033900010339000203390003", area_tlv(@orig2)
+    dropped = @log.events.select { |e| e.kind == :manual_address_dropped }
+    assert_equal 1, dropped.size
+    assert_match(/49\.0001/, dropped.first.message)
+  end
+
+  # Clause 7.1.5 pads the shorter with zeros: 49 sorts before 49.0001,
+  # which sorts before 4a, though 4a is shorter.
+  def test_comparison_pads_with_trailing_zeros
+    areas = %w[4a 49.0001 49].map { |a| ISIS::AreaAddress.new(a) }
+    sorted = areas.sort { |a, b| ISIS::Originator.compare_areas(a, b) }
+    assert_equal %w[49 49.0001 4a], sorted.map(&:to_s)
+  end
+end
+
 
 # Several LSP Numbers, RFC 1142 clause 7.3.4. No circuits: the database
 # and the originator alone, on a manual clock.

@@ -99,6 +99,7 @@ module ISIS
       @log = log
       @entries = {}
       @circuits = []
+      @listeners = []
     end
 
     # A circuit that floods from this database. It answers flood(entry),
@@ -106,6 +107,14 @@ module ISIS
     # sets SRM "for that LSP" on all circuits when it expires.
     def attach(circuit)
       @circuits << circuit unless @circuits.include?(circuit)
+      self
+    end
+
+    # Something told of every LSP stored here, purges included: it answers
+    # stored(entry). The Level 2 originator of a system at both levels
+    # listens to the Level 1 database for its area addresses (7.2.11).
+    def listen(listener)
+      @listeners << listener unless @listeners.include?(listener)
       self
     end
 
@@ -142,11 +151,12 @@ module ISIS
       entry
     end
 
-    # Called by an entry as it stores an LSP: set the timer for what comes
-    # next. An LSP with lifetime left expires when it runs out (7.3.16.3).
+    # Called by an entry as it stores an LSP: tell the listeners, and set
+    # the timer for what comes next. An LSP with lifetime left expires when it runs out (7.3.16.3).
     # A purge's header goes after ZeroAgeLifetime, or the retention purge
     # asked for (7.3.16.4 c).
     def stored(entry, retain = nil)
+      @listeners.each { |l| l.stored(entry) }
       return unless @scheduler
 
       entry.timer&.cancel

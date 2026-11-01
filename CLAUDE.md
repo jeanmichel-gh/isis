@@ -1882,8 +1882,16 @@ before flooding any, and purges an LSP Number no longer needed. Measured
 FRR holds all four of isis4r's LSPs at isis4r's sequences and installs
 the prefix only the last one carries. Measured on the way: filling in
 order moves entries to a higher LSP Number when TLV 22 grows, which the
-clause calls undesirable, and the test shows it. Still owed by gate 2: the
-area addresses of a Level 2 LSP from more than one area (7.2.11). The
+clause calls undesirable, and the test shows it. **Area addresses at Level 2** (RFC 1142 7.2.11): given the Level 1
+database, a system at both levels lists in its Level 2 LSP the union of the
+area addresses in the Level 1 LSPs with LSP Number 0, the lowest three if
+there are more (7.1.5), and generates it again when the union moves.
+Measured 2026-11-01 against FRR 8.4.4 with two nets, 49.0001 and 49.0002:
+FRR holds isis4r's Level 2 LSP with both and its Level 1 LSP with 49.0001
+alone. Measured on the way: FRR 8.4.4's own Level 2 LSP lists only its
+manual areas, so it does not do 7.2.11. That closes the items gate 2
+lists. Not shown: an L1 area and a backbone with more than one independent
+router, since the lab runs one FRR. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
 clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too

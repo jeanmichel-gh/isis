@@ -263,6 +263,25 @@ class TestFrrP2p < Minitest::Test
     refute frr_lsps(1).key?("#{FrrLab::ISIS4R_ID}.00-00"), @lab.report
   end
 
+  # Area addresses at Level 2 (RFC 1142 7.2.11): FRR's Level 1 LSP lists
+  # 49.0001 and 49.0002, its two nets, and isis4r's lists 49.0001. So
+  # isis4r's Level 2 LSP, as FRR holds it, lists the union, both, while
+  # its Level 1 LSP keeps the manual area alone (7.3.7). Measured on FRR
+  # 8.4.4 the other way round, isis4r at 49.0001 and 49.0002 and FRR at
+  # 49.0001: FRR's Level 2 LSP lists 49.0001 alone, its manual area, so
+  # FRR does not do this and the test reads isis4r's LSP only.
+  def test_the_level_2_lsp_lists_the_areas_of_the_level_1_area
+    @lab.start(level: "1-2", frr_router: ["net 49.0002.#{FrrLab::FRR_ID}.00"])
+    assert_eventually("FRR did not come up at both levels") { frr_up_levels == [1, 2] }
+    lsp = "#{FrrLab::ISIS4R_ID}.00-00"
+    areas = ->(level) { @lab.frr_database_detail(level)[lsp].to_s.scan(/Area Address: (\S+)/).flatten.sort }
+    assert_eventually("FRR does not hold isis4r's Level 2 LSP with both areas", 40) do
+      areas.call(2) == ["49.0001", "49.0002"]
+    end
+    assert_eventually("FRR does not hold isis4r's Level 1 LSP", 20) { !areas.call(1).empty? }
+    assert_equal ["49.0001"], areas.call(1), @lab.report
+  end
+
   # Several LSP Numbers (RFC 1142 7.3.4): 60 more /32s and a 300 octet
   # budget spread isis4r's advertisements over four LSPs once the
   # adjacency is in TLV 22. LSP 0 is the header and TLVs 1, 129, 132 and
