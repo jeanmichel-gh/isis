@@ -45,14 +45,20 @@ module ISIS
                 :buffer_size
     METRIC_STYLES = %i[wide narrow transition].freeze
 
-    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key
+    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
-                   buffer_size: LSP_BUFFER_SIZE)
+                   buffer_size: LSP_BUFFER_SIZE, is_type: nil)
       @system_id = Pdu.dotted_octets(system_id)
+      # The IS Type in the flags octet: what kind of system this is, not
+      # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
+      # system at both levels writes in its Level 1 LSP too (RFC 1142 9.8:
+      # "3 (i.e. bits 1 and 2 set) Level 2 Intermediate system"). Nil
+      # leaves it to the LSP's level: 1 at Level 1, 3 at Level 2.
+      @is_type = is_type
       @lsp_id = (@system_id + "\x00\x00".b).b
       @database = database
       @scheduler = scheduler
@@ -122,7 +128,7 @@ module ISIS
       list = tlvs
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
       lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
-                         tlvs: list)
+                         tlvs: list, is_type: @is_type)
       lsp.key = @area_key
       lsp
     end

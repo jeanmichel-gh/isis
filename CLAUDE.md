@@ -1854,10 +1854,17 @@ originator and the pseudonode take their level from their database, so a
 process with Level 2 LSPs, IS type 3 (RFC 1142 9.9), and Level 2 SNPs.
 Measured 2026-11-01 on FRR 8.4.4 with `is-type level-2-only`: the Level 2
 databases agree with isis4r as DIS and through a DIS change to FRR, and
-FRR installs isis4r's prefix at Level 2. Still owed by gate 2: a system
-at both levels, with an L1 and an L2 circuit on one interface or a point
-to point circuit at both, the attached bit, the level boundaries, and
-several LSP Numbers. The point to point circuit is Level 1 only. Not yet in the originator: a second LSP
+FRR installs isis4r's prefix at Level 2. **A system at both levels on a
+LAN** runs a `LanCircuit` per level on one interface, each with its own
+database and originator: the hellos carry circuit type 3 (`circuit_type:
+:l1l2`, RFC 1142 9.5 and 9.6) and the originators IS type 3 (`is_type: 3`,
+9.8). Measured 2026-11-01 against FRR 8.4.4 as `level-1-2`: an adjacency
+at each level, which FRR reports as circuit type L1L2, and each level's
+databases agree on their own. Measured on the way: FRR 8.4.4 forms both
+adjacencies even when the hellos say circuit type 1 and 2, so the test
+reads FRR's own report of the type. Still owed by gate 2: a point to point
+circuit at both levels, the attached bit, the area addresses of a Level 2
+LSP from more than one area (7.2.11), and several LSP Numbers. The point to point circuit is Level 1 only. Not yet in the originator: a second LSP
 Number when one LSP is full, and jitter on the refresh timer (clause
 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause

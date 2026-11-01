@@ -577,3 +577,92 @@ class TestLanUpdate < Minitest::Test
   end
 end
 
+
+# A system at both levels on one LAN: a Level 1 and a Level 2 circuit on
+# the same link and LAN address, each with its own database and
+# originator, as RFC 1142 clause 8.4.1 has it: "Separate adjacencies shall
+# be created by the receipt of Level 1 and Level 2 LAN IIH PDUs."
+class TestLanTwoLevels < Minitest::Test
+  IDS = TestLanCircuit::IDS
+  MACS = TestLanCircuit::MACS
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @wire = ISIS::Link::SimulatedWire.new
+    @circuits = {}
+    TestLogs.heading(name)
+  end
+
+  # +levels+ is [1], [2] or [1, 2]. A system at both levels writes IS
+  # type 3 at both, and its hellos carry circuit type 3.
+  def system(who, levels)
+    log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
+    both = levels.size == 2
+    levels.each do |level|
+      db = ISIS::Database.new(level: level, clock: @clock, scheduler: @scheduler, log: log)
+      orig = ISIS::Originator.new(system_id: IDS.fetch(who), database: db, scheduler: @scheduler, log: log,
+                                  minimum_interval: 1, is_type: both ? 3 : nil)
+      circuit = ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler,
+                                     log: log, name: "#{who}-eth0-l#{level}", system_id: IDS.fetch(who),
+                                     snpa: MACS.fetch(who), level: level, database: db, originator: orig,
+                                     circuit_type: both ? :l1l2 : nil)
+      @circuits[[who, level]] = circuit
+      orig.start
+      circuit.start
+    end
+  end
+
+  def run_for(seconds, step: 0.25)
+    (seconds / step).ceil.times do
+      @scheduler.advance(step)
+      @circuits.each_value(&:poll)
+    end
+  end
+
+  def held(who, level)
+    @circuits.fetch([who, level]).database.entries.reject(&:placeholder?).to_h { |e| [e.lsp_id_s, e.sequence] }
+  end
+
+  # Both levels agree separately, each database holds only its own
+  # level's LSPs, and every LSP from a system at both levels carries IS
+  # type 3, in the Level 1 database as well.
+  def test_two_systems_at_both_levels
+    system(:a, [1, 2])
+    system(:b, [1, 2])
+    run_for(25)
+    [1, 2].each do |level|
+      expected = %w[0000.0000.000a.00-00 0000.0000.000b.00-00 0000.0000.000b.01-00]
+      assert_equal expected, held(:a, level).keys, "Level #{level}"
+      assert_equal held(:a, level), held(:b, level), "Level #{level}"
+      @circuits[[:a, level]].database.entries.each do |e|
+        assert_equal [level, 3], [e.lsp.level, e.lsp.is_type], "#{e.lsp_id_s} at Level #{level}"
+      end
+    end
+    assert_equal :l1l2, @circuits[[:a, 1]].build_hello.circuit_type
+    assert_equal :l1l2, @circuits[[:a, 2]].build_hello.circuit_type
+  end
+
+  # A Level 1 only system beside them sees the Level 1 LSPs, IS type 3 from
+  # the system at both levels and 1 from itself, and nothing of Level 2.
+  def test_a_level_1_system_sees_level_1_only
+    system(:a, [1, 2])
+    system(:c, [1])
+    run_for(25)
+    l1 = @circuits[[:c, 1]].database
+    assert_equal 3, l1[ISIS::Pdu.lsp_id_octets("0000.0000.000a.00-00")].lsp.is_type
+    assert_equal 1, l1[ISIS::Pdu.lsp_id_octets("0000.0000.000c.00-00")].lsp.is_type
+    assert_equal held(:a, 1), held(:c, 1)
+    assert_equal %w[0000.0000.000a.00-00], held(:a, 2).keys
+    assert_empty @circuits[[:a, 2]].up_neighbors
+  end
+
+  # A circuit type that does not include the circuit's level is refused.
+  def test_a_circuit_type_without_the_level_is_refused
+    log = ISIS::Runtime::Log.new(clock: @clock)
+    assert_raises(ArgumentError) do
+      ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler, log: log,
+                           name: "x", system_id: IDS[:a], snpa: MACS[:a], level: 1, circuit_type: :l2)
+    end
+  end
+end
