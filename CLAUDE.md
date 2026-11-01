@@ -1739,7 +1739,7 @@ with Wireshark and FRR, except octets 7 and 8, where the editions differ
 (see the list at the end). The
 LAN Hello still has its proof of concept API and moves onto the contract
 in gate 2. **Gate 2 is met against FRR**, measured 2026-10-31 with FRR
-8.4.4's isisd: `test/integration/frr_p2p_test.rb` brings the point to point
+8.4.4's isisd, and again on 10.5.1: `test/integration/frr_p2p_test.rb` brings the point to point
 adjacency up on both sides, holds it for over three holding times without
 a flap, expires it on each side when the other goes silent, and forms
 none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
@@ -1848,13 +1848,56 @@ they are made.
    FRR, and `test/support/isis_runner.rb` runs isis4r inside its
    namespace on the real clock, writing its state as JSON and its log at
    debug with a PDU trace. A failing test prints both sides' logs.
-   `sudo -E env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them.
+   `sudo env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them. Newer sudo
+   ignores `-E` with a warning, and `env` passes what the tests need.
+
 2. **routescope, for labs a person watches and drives.** routescope does
    not build labs. It is a web console over labs that docker compose or
    containerlab bring up, reached by `docker exec`, with one driver per
    node kind, scenarios with `expect:` conditions, capture, and link
    down, up, delay and loss on containerlab links. A lab is a folder with
    `lab.yml` or `NAME.clab.yml` and one config per node.
+
+**Four harness facts about isisd**, measured 2026-10-31. The first three
+on FRR 8.4.4 and 10.5.1, the fourth on an Ubuntu VM with FRR 10.5.1:
+
+* **isisd drops to `frr:frr` before it writes its pid file**, so it
+  cannot write into a run directory the harness made as root. It exits
+  with `Can't create pid lock file ... (Permission denied)`. Running under
+  sudo does not help, because the daemon drops privileges itself. The
+  harness creates the directory because it writes the configs beside it,
+  so it chowns the run, config and log directories to `frr`. Left
+  uncreated, isisd would make the directory itself, owned by `frr`.
+* **isisd has no `-S`.** bgp4r's harness keeps `bgpd` as root with
+  `-S, --skip_runas`. isisd rejects it: `invalid option -- 'S'`. So that
+  trick does not transfer.
+* **`-u root -g root` fails too**, with `privs_init: user(root) is not
+  part of vty group specified(frrvty)`. The chown is the way.
+* **AppArmor confines isisd on newer Ubuntu**, and gives the same pid file
+  error with the chown in place, plus `failed to mkdir
+  "/var/lib/frr/<name>"`. Ubuntu's `apparmor` package ships
+  `/etc/apparmor.d/isisd` (26.04 does, 24.04 and the CI runners do not).
+  It allows only FRR's default paths, `/run/frr/isisd.pid`,
+  `/etc/frr/isisd.conf` and `/var/log/frr/`, and the lab uses
+  `/run/frr/<name>/`, `/etc/frr/<name>/` and a temporary directory. zebra
+  has no profile, so zebra starts and isisd does not. Check and fix:
+
+  ```sh
+  sudo grep isisd /sys/kernel/security/apparmor/profiles   # isisd (enforce)
+  sudo apparmor_parser -R /etc/apparmor.d/isisd            # unload until reboot
+  sudo apparmor_parser -r /etc/apparmor.d/isisd            # load it again
+  ```
+
+  Unloading lifts the confinement for isisd only, and only until the next
+  reboot or AppArmor reload. The harness does not do it for you, since a
+  test should not change a host's security settings. It detects the
+  profile instead: `FrrLab.available?` refuses with that command in the
+  message. With the profile unloaded, all five tests pass on 10.5.1.
+
+When a daemon will not start, the harness raises with the daemon's own
+output, which is where these messages appear. With `ISIS_FRR=1` set, a lab
+that cannot run fails the tests rather than skipping them, because a skip
+shows its reason only under `-v` and a CI job of skips is green.
 
 **What routescope needs before it can show an isis4r lab**, from its
 `docs/protocols.md` and code. Every one is an additive change in

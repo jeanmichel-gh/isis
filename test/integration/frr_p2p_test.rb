@@ -17,6 +17,9 @@ require_relative "../support/frr_lab"
 class TestFrrP2p < Minitest::Test
   def setup
     ok, why = FrrLab.available?
+    # Asked for with ISIS_FRR=1 and unable to run is a failure, not a skip:
+    # a skip prints its reason only under -v, and a CI job of skips is green.
+    flunk "FRR interop asked for and cannot run: #{why}" if !ok && ENV["ISIS_FRR"] == "1"
     skip why unless ok
     @lab = FrrLab.new("p2p#{Process.pid % 10_000}")
   end
@@ -50,7 +53,11 @@ class TestFrrP2p < Minitest::Test
     assert both_up?, "adjacency did not hold\n#{@lab.report}"
     log = @lab.isis4r_log
     refute_includes log, "-> down", "isis4r's adjacency went down while hellos kept arriving\n#{@lab.report}"
-    assert_equal 1, log.scan("initializing -> up").size, "isis4r came up more than once\n#{@lab.report}"
+    # Any arrival at Up counts. Down goes straight to Up when FRR's hello
+    # already reports Initializing (RFC 5303 3.2), so it need not pass
+    # through Initializing first.
+    ups = log.scan(/^\S+ info +\S+ adjacency with \S+ \w+ -> up$/).size
+    assert_equal 1, ups, "isis4r came up #{ups} times, not once\n#{@lab.report}"
   end
 
   def test_frr_expires_isis4r_when_it_goes_silent
