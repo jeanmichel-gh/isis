@@ -195,8 +195,8 @@ class TestTlvListParsePolicy < Minitest::Test
   end
 
   def test_to_s_lists_every_tlv_and_the_tail
-    assert_equal "TLV 8, 0 octets\nTLV 137, 1 octets, declared 255\n",
+    assert_equal "Padding, 0 octets\nTLV 137, 1 octets, declared 255\n",
                  list("0800 89ff 41").to_s + "\n"
-    assert_equal "TLV 8, 0 octets\ntail, 1 octets", list("0800 ff").to_s
+    assert_equal "Padding, 0 octets\ntail, 1 octets", list("0800 ff").to_s
   end
 end

@@ -62,3 +62,39 @@ class TestBuffer < Minitest::Test
     assert_equal "e9", buf.unpack1("H*")
   end
 end
+
+# The presentation form is a convention (see the class), so ntop and pton
+# are checked separately and then as a round trip.
+class TestAreaAddress < Minitest::Test
+  HEX = "490001"
+
+  def test_ntop
+    assert_equal "49.0001", ISIS::AreaAddress.new_ntop([HEX].pack("H*")).to_s
+  end
+
+  def test_pton
+    assert_equal HEX, ISIS::AreaAddress.new("49.0001").to_shex
+  end
+
+  def test_round_trip
+    assert_equal HEX, ISIS::AreaAddress.new(ISIS::AreaAddress.new_ntop([HEX].pack("H*")).to_s).to_shex
+  end
+
+  def test_groups_after_the_first_octet
+    assert_equal "39.0f01.0002.0000.0c00.1111", ISIS::AreaAddress.new("390f0100020000 0c001111".delete(" ")).to_s
+    assert_equal "49.0001.02", ISIS::AreaAddress.new("49000102").to_s
+    assert_equal "49", ISIS::AreaAddress.new("49").to_s
+  end
+
+  def test_dots_are_separators_only
+    assert_equal HEX, ISIS::AreaAddress.new("4900.01").to_shex
+  end
+
+  def test_odd_hex_is_refused
+    assert_raises(ArgumentError) { ISIS::AreaAddress.new("49.001") }
+  end
+
+  def test_more_than_255_octets_is_refused
+    assert_raises(ArgumentError) { ISIS::AreaAddress.new("00" * 256) }
+  end
+end
