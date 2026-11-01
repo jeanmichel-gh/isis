@@ -380,3 +380,112 @@ class TestP2pCircuit < Minitest::Test
   end
 
 end
+
+# RFC 5304 HMAC-MD5 on a point to point circuit: hello_key for hellos,
+# area_key for LSPs and SNPs. Two circuits, each with its own originator,
+# on a simulated wire.
+class TestP2pCircuitAuthentication < Minitest::Test
+  A_ID = "0000.0000.000a"
+  B_ID = "0000.0000.000b"
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @wire = ISIS::Link::SimulatedWire.new
+    TestLogs.heading(name)
+    @traces = []
+  end
+
+  def node(id, mac, name, hello_key: nil, area_key: nil)
+    log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock),
+                                 tracer: TestLogs.tracer(@clock, ->(*t) { @traces << [name, *t] }))
+    db = ISIS::Database.new(level: 1, clock: @clock)
+    orig = ISIS::Originator.new(system_id: id, database: db, scheduler: @scheduler, log: log, minimum_interval: 1,
+                                area_key: area_key)
+    circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler,
+                                   log: log, name: name, system_id: id, snpa: mac, database: db, originator: orig,
+                                   hello_key: hello_key, area_key: area_key)
+    [orig, circuit]
+  end
+
+  def pair(a: {}, b: {})
+    @orig_a, @a = node(A_ID, "00:00:00:00:00:0a", "a-eth1", **a)
+    @orig_b, @b = node(B_ID, "00:00:00:00:00:0b", "b-eth1", **b)
+    [@orig_a, @orig_b, @a, @b].each(&:start)
+    15.times do
+      @scheduler.advance(1)
+      [@a, @b].each(&:poll)
+    end
+  end
+
+  def refusals(circuit)
+    circuit.log.events.select { |e| e.kind == :refused && e.data[:reason] == :authentication }.map(&:message)
+  end
+
+  def received(name, type)
+    @traces.select { |n, dir, _, pdu, _| n == name && dir == :received && pdu.is_a?(type) }.map { |t| t[3] }
+  end
+
+  # Same keys both sides: up, each holds the other's LSP, and what b
+  # received from a checks out under the keys.
+  def test_matching_keys
+    keys = { hello_key: "hk", area_key: "ak" }
+    pair(a: keys, b: keys)
+    assert @a.up?
+    assert_equal @orig_a.sequence, @b.database[@orig_a.lsp_id].sequence
+    assert_equal @orig_b.sequence, @a.database[@orig_b.lsp_id].sequence
+    assert received("b-eth1", ISIS::Pdu::P2pHello).last.authentic?("hk")
+    assert received("b-eth1", ISIS::Pdu::Lsp).last.authentic?("ak")
+    assert received("b-eth1", ISIS::Pdu::Csnp).last.authentic?("ak")
+    assert_empty refusals(@a) + refusals(@b)
+  end
+
+  # TLV 10 goes first, where FRR 8.4.4 puts it: right after the 20 octets
+  # of headers (8 common, 12 point to point hello), 0a 11 36.
+  def test_the_authentication_tlv_is_first
+    _, c = node(A_ID, "00:00:00:00:00:0a", "a-eth1", hello_key: "hk")
+    hello = c.build_hello
+    assert_equal "0a1136", hello.to_shex[20 * 2, 6]
+    assert ISIS::Pdu.factory(ISIS::Octets.new(hello.encode)).authentic?("hk")
+  end
+
+  # Different hello keys: no adjacency, and each side says why.
+  def test_mismatched_hello_keys
+    pair(a: { hello_key: "one" }, b: { hello_key: "two" })
+    refute @a.up?
+    refute @b.up?
+    assert_match(/HMAC-MD5 digest is wrong/, refusals(@a).first)
+    assert_match(/RFC 5304/, refusals(@b).first)
+  end
+
+  # A key on one side only: the keyed side refuses unauthenticated hellos
+  # (8.2.4.1 c i), and the side with no key checks nothing.
+  def test_a_hello_key_on_one_side
+    pair(a: { hello_key: "hk" })
+    refute @a.up?
+    assert_match(/no Authentication Information.*8\.2\.4\.1 c i/, refusals(@a).first)
+    assert_empty refusals(@b)
+  end
+
+  # Same hello keys, different area keys: up, but neither stores the
+  # other's LSP, and the refusals name the LSP.
+  def test_mismatched_area_keys
+    pair(a: { hello_key: "hk", area_key: "one" }, b: { hello_key: "hk", area_key: "two" })
+    assert @a.up?
+    assert_nil @b.database[@orig_a.lsp_id]&.lsp
+    assert_nil @a.database[@orig_b.lsp_id]&.lsp
+    assert(refusals(@b).any? { |m| m.include?("LSP 0000.0000.000a.00-00") })
+    assert(refusals(@b).any? { |m| m.start_with?("refused: Csnp") })
+  end
+
+  # A cleartext password when HMAC-MD5 is configured is refused under 8.2.4.1 c ii.
+  def test_cleartext_is_refused_when_hmac_md5_is_configured
+    _, c = node(A_ID, "00:00:00:00:00:0a", "a-eth1", hello_key: "hk")
+    hello = ISIS::Pdu::P2pHello.new(circuit_type: :l1, source_id: B_ID, holding_time: 30, local_circuit_id: 1,
+                                    tlvs: [ISIS::Tlv::Authentication.new(password: "hk"),
+                                           ISIS::Tlv::AreaAddresses.new(["49.0001"])])
+    parsed = ISIS::Pdu.factory(ISIS::Octets.new(hello.encode))
+    assert_equal :authentication, c.receive_hello(parsed, Datalink::MAC.new("00:00:00:00:00:0b"))
+    assert_match(/not HMAC-MD5.*ii/, refusals(c).first)
+  end
+end

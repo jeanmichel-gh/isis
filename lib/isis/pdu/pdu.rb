@@ -332,6 +332,22 @@ module ISIS
         digest_input(lengths_encode, at) == @retained_digest_input
       end
 
+      # The receiver's check, RFC 5304 section 2: the digest this PDU
+      # arrived with is the HMAC-MD5, under +key+, of the octets as they
+      # arrived with the Authentication Value zeroed, and for an LSP the
+      # Checksum and Remaining Lifetime too. False when it arrived with no
+      # HMAC-MD5 value at all.
+      def authentic?(key)
+        return false if @declared_auth.nil?
+
+        ISIS.hmac_md5(key, @retained_digest_input) == @declared_auth
+      end
+
+      # True when this PDU carries an HMAC-MD5 Authentication TLV.
+      def hmac_md5?
+        !auth_value_offset.nil?
+      end
+
       # Encode with the digest this PDU arrived with even after what it
       # covers has moved: a PDU whose digest is wrong on purpose.
       def preserve_authentication!

@@ -357,6 +357,16 @@ class TestLsp < Minitest::Test
     assert lsp.checksum_ok?, "the checksum is still computed over the stale digest"
   end
 
+  # The receiver's check on FRR's own digest: the right key, a wrong key,
+  # and an LSP with no TLV 10.
+  def test_authentic
+    assert auth_lsp.authentic?(AUTH_KEY)
+    refute auth_lsp.authentic?("wrong")
+    refute ISIS::Pdu.factory(octets(REACH)).authentic?(AUTH_KEY)
+    assert auth_lsp.hmac_md5?
+    refute ISIS::Pdu.factory(octets(REACH)).hmac_md5?
+  end
+
   # A wrong key gives a digest the right key does not accept.
   def test_a_wrong_key_does_not_check_out
     lsp = auth_lsp(key: "not-the-key")

@@ -132,6 +132,19 @@ class TestOriginator < Minitest::Test
     assert_equal [1], generated(@log_a)
   end
 
+  # With a key the LSP carries TLV 10 first and its digest checks out, and
+  # an event that changes nothing still makes no new LSP.
+  def test_area_key
+    @orig_a.area_key = "ak"
+    @orig_a.start
+    lsp = ISIS::Pdu.factory(ISIS::Octets.new(own(@orig_a).encode))
+    assert_equal 10, lsp.tlvs.first.type
+    assert lsp.authentic?("ak")
+    @scheduler.run_until(@clock.now + 10)
+    @orig_a.changed("nothing moved")
+    assert_equal [1], generated(@log_a)
+  end
+
   # 7.3.5: regenerated every maximumLSPGenerationInterval, changed or not,
   # and an event between does not reset that timer (7.3.6).
   def test_refresh

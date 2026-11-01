@@ -1801,13 +1801,19 @@ FRR on `metric-style narrow` and isis4r sending TLVs 2 and 128, and fails
 when isis4r sends wide. TLVs 2 and 128 parse, replay and rebuild FRR's,
 from an LSP FRR 8.4.4 sent with `metric-style narrow`. Measured on the way: on a point to point circuit FRR
 8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
-in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
-gate 3: authentication on the circuits, keys for hellos and for LSPs and
-SNPs, and checking received digests, so authentication succeeds and fails
-as configured against FRR. The codec half is done: FRR 8.4.4's HMAC-MD5
+in a CSNP and sends it when a PSNP asks or a CSNP omits it. FRR 8.4.4's HMAC-MD5
 LSP, CSNP, PSNP and point to point hello replay, and with every computed
 field thrown away and the key given, isis4r writes each one again byte
-for byte. Not yet in the
+for byte. `P2pCircuit` takes a `hello_key` and an `area_key`, and the
+originator an `area_key`: what is sent carries TLV 10 first, and what
+arrives is refused, with the clause, unless its digest checks out (RFC
+1142 8.2.4.1 c, 7.3.15.1 a 3 and 7.3.15.2 a 3, and RFC 5304 section 2).
+**Gate 3 is met against FRR 8.4.4**, measured 2026-11-01: with matching
+keys FRR installs isis4r's prefix and isis4r stores FRR's LSP; a wrong
+hello key forms no adjacency on either side; a wrong area key leaves the
+adjacency up and each side without the other's LSP. Measured on the way:
+FRR 8.4.4's first LSP after start can go out with no TLV 10 although its
+area password is configured, and isis4r refuses that one. Not yet in the
 originator: a second LSP Number when one LSP is full, and jitter on the
 refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
 confusion over another system's LSP (7.3.16.2) and a stale LSP with this
