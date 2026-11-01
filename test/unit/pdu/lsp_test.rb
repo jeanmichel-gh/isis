@@ -238,6 +238,8 @@ class TestLsp < Minitest::Test
     assert_equal [3, 0xfa06], [lsp.sequence, lsp.checksum]
     reach = lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIpReachability) }
     assert_equal [{ prefix: "10.0.12.0/24", metric: 10 }], reach.to_hash
+    is = lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
+    assert_equal [{ neighbor: "0000.0000.0001.00", metric: 10 }], is.to_hash
     assert_equal REACH, lsp.to_shex
     assert lsp.checksum_ok?
   end

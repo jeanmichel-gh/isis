@@ -1728,7 +1728,7 @@ ISO 8473 checksum),
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 6, 8,
-9, 129, 132, 135 and 240, with `lib/isis/subtlv/subtlv.rb` holding the
+9, 22, 129, 132, 135 and 240, with `lib/isis/subtlv/subtlv.rb` holding the
 sub-TLV framing, the per parent registry, `SubTlv::Unknown` and the list
 a parent frames as its layout asks, and with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
@@ -1772,14 +1772,16 @@ parses, replays and rebuilds FRR's, from an LSP FRR 8.4.4 regenerated
 about 30 seconds after the adjacency came up with TLV 22 and TLV 135 in
 it. Its control octet's two flags are 0x80 and 0x40 by the order RFC 5305
 section 4 lists them in; FRR's LSP has both clear, so no capture has
-confirmed those two yet. **The
+confirmed those two yet. TLV 22 parses, replays and rebuilds FRR's
+from the same LSP; its neighbour ID is seven octets as RFC 5305 section 3
+gives it, so it does not take the ID Length. **The
 receiving half of the gate is shown against FRR 8.4.4**:
 `test_isis4r_learns_and_acknowledges_frrs_lsp` has isis4r store FRR's
 LSP at FRR's sequence and checksum and acknowledge it, after which FRR
 stops sending it. Measured on the way: on a point to point circuit FRR
 8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
 in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
-gate 3: isis4r's own LSP, so FRR learns its prefix; TLVs 2, 22 and 128;
+gate 3: isis4r's own LSP, so FRR learns its prefix; TLVs 2 and 128;
 TLV 10. Not yet in the update process: purges (7.3.16.4), LSP
 confusion (7.3.16.2), a received LSP with this system's ID (7.3.15.1 c
 and d), PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
