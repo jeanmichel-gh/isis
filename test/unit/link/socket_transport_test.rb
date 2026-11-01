@@ -32,4 +32,17 @@ class TestSocketTransport < Minitest::Test
   def test_receive_answers_nil_on_timeout
     assert_nil @b.receive(timeout: 0.01)
   end
+
+  # An interface that goes down: the system calls fail with ENETDOWN, and
+  # the transport answers as a silent link, counting what it absorbed.
+  def test_a_link_that_is_down_is_silent
+    down = Object.new
+    down.define_singleton_method(:recv_timeout=) { |_| nil }
+    down.define_singleton_method(:recv) { raise Errno::ENETDOWN }
+    down.define_singleton_method(:send) { |_| raise Errno::ENETDOWN }
+    t = ISIS::Link::SocketTransport.new(down)
+    assert_nil t.receive(timeout: 0.01)
+    assert_nil t.send("frame")
+    assert_equal({ "Errno::ENETDOWN" => 2 }, t.errors)
+  end
 end

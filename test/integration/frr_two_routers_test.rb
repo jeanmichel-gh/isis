@@ -104,4 +104,38 @@ class TestFrrTwoRouters < Minitest::Test
     # LSP, plus 10 and 10.
     assert_equal 30, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric"), @lab.report
   end
+
+  # Equal cost paths. isis4r also has a link straight to the second FRR,
+  # at 20 on both ends, so the second FRR's loopback is as far through the
+  # first FRR as across it: the first FRR's own metric to it plus 10, or
+  # its metric in the second FRR's LSP plus 20. isis4r takes both, the
+  # first FRR first, the lower neighbour ID (RFC 1142 7.2.7). The second FRR
+  # does the same toward isis4r's 192.0.2.1/32, which is what shows the
+  # paths are really equal. When isis4r's direct link goes, the route keeps
+  # only the first FRR.
+  def test_equal_cost_paths_against_frr
+    @lab.start(frr2: { is_type: "level-1", loopback: FRR2_LOOPBACK,
+                       isis4r_link: { frr_metric: 20, isis4r_metric: 20 } })
+    both = [{ "address" => "10.0.12.2", "circuit" => "veth0" }, { "address" => "10.0.13.3", "circuit" => "veth1" }]
+    assert_eventually("isis4r does not reach the far loopback over both paths", 60) do
+      @lab.isis4r_routes.dig(FRR2_LOOPBACK, "next_hops") == both
+    end
+    assert_eventually("the first FRR does not reach the far loopback", 30) do
+      @lab.frr_isis_routes.key?(FRR2_LOOPBACK)
+    end
+    through_first = @lab.frr_isis_routes.dig(FRR2_LOOPBACK, "metric") + 10
+    far_lsp = @lab.frr_database_detail(1)[own(FrrLab::FRR2_ID)].to_s
+    across = far_lsp[%r{IP Reachability: 198\.51\.100\.3/32 \(Metric: (\d+)\)}, 1].to_i + 20
+    assert_equal [through_first, through_first], [across, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric")],
+                 @lab.report
+    assert_eventually("the second FRR does not reach 192.0.2.1/32 over both paths", 30) do
+      @lab.frr_isis_next_hops(1, router: @lab.frr2_name)["192.0.2.1/32"].sort ==
+        [%w[veth0 10.0.23.2], %w[veth1 10.0.13.1]]
+    end
+    @lab.isis4r_frr2_link_down
+    assert_eventually("isis4r keeps the path whose link went down", 20) do
+      @lab.isis4r_routes.dig(FRR2_LOOPBACK, "next_hops") == [both.first]
+    end
+    assert_equal through_first, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric"), @lab.report
+  end
 end

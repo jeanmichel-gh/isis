@@ -70,8 +70,28 @@ unless lan
                              name: iface, system_id: config.fetch(:system_id), snpa: mac,
                              areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
                              hello_interval: config.fetch(:hello_interval),
-                             hello_multiplier: config.fetch(:hello_multiplier))
+                             hello_multiplier: config.fetch(:hello_multiplier), metric: config.fetch(:metric, 10))
   levels.each { |l| circuits[l] = p2p }
+end
+
+# More point to point circuits, each on its own interface, sharing the
+# databases and originators: { interface:, ip_addresses:, metric: }.
+extras = config.fetch(:extra_interfaces, []).each_with_index.map do |x, i|
+  name = x.fetch(:interface)
+  xsocket = Datalink::Socket.new(name, recv_timeout: 0.01).open
+  xtransport = ISIS::Link::SocketTransport.new(xsocket)
+  circuit = ISIS::P2pCircuit.new(transport: xtransport, scheduler: scheduler, log: log,
+                                 levels: levels.to_h { |l|
+                                   [l, { database: databases[l], originator: originators[l],
+                                         area_key: config[:area_key] }]
+                                 },
+                                 hello_key: config[:hello_key], name: name, system_id: config.fetch(:system_id),
+                                 snpa: File.read("/sys/class/net/#{name}/address").strip,
+                                 local_circuit_id: i + 2, extended_circuit_id: i + 2,
+                                 areas: config.fetch(:areas), ip_addresses: x.fetch(:ip_addresses, []),
+                                 hello_interval: config.fetch(:hello_interval),
+                                 hello_multiplier: config.fetch(:hello_multiplier), metric: x.fetch(:metric, 10))
+  [circuit, xtransport]
 end
 
 # A Decision Process per level, with the circuit, or the point to point
@@ -80,6 +100,7 @@ decisions = levels.to_h do |l|
   decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
                                      scheduler: scheduler, log: log)
   decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
+  extras.each { |c, _| decision.attach(c.levels.fetch(l)) }
   [l, decision]
 end
 
@@ -112,6 +133,10 @@ write_state = lambda do
   per_level = levels.to_h { |l| [l.to_s, circuit_state.call(circuits[l], databases[l], decisions[l])] }
   state = per_level[levels.first.to_s].dup
   state[:levels] = per_level if both
+  state[:extra] = extras.map do |c, _|
+    n = c.neighbor
+    { interface: c.name, state: c.three_way_state, neighbor: n && { system_id: n.system_id_s, state: n.state } }
+  end
   File.write("#{state_file}.tmp", JSON.generate(state))
   File.rename("#{state_file}.tmp", state_file)
 end
@@ -121,6 +146,7 @@ stop = false
 
 originators.each_value(&:start)
 circuits.values.uniq.each(&:start)
+extras.each { |c, _| c.start }
 decisions.each_value(&:start)
 next_state = clock.now
 until stop
@@ -132,12 +158,18 @@ until stop
   while (frame = transport.receive(timeout: wait))
     circuits.values.uniq.each { |c| c.receive_frame(frame) }
   end
+  extras.each do |c, t|
+    while (frame = t.receive(timeout: 0.005))
+      c.receive_frame(frame)
+    end
+  end
   if clock.now >= next_state
     write_state.call
     next_state = clock.now + 0.5
   end
 end
 circuits.values.uniq.each(&:stop)
+extras.each { |c, _| c.stop }
 originators.each_value(&:stop)
 write_state.call
 socket.close

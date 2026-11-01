@@ -83,8 +83,10 @@ class FrrLab
   # the lab's level.
   # +frr2+ adds a second FRR behind the first, on a point to point link:
   # { is_type: "level-2-only", area: "49.0002", loopback: "198.51.100.3/32",
-  # interface: [lines] }. The link runs the levels is_type names, on both
-  # its ends.
+  # interface: [lines], isis4r_link: { frr_metric:, isis4r_metric: } }. The
+  # link runs the levels is_type names, on both its ends. With isis4r_link,
+  # isis4r's veth1, 10.0.13.1, joins the second FRR's veth1, 10.0.13.3, as
+  # well, at those metrics.
   # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
   # 1 or 2, which FRR and isis4r's LAN circuit run alone, or "1-2", which
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
@@ -109,9 +111,15 @@ class FrrLab
     link_frr2 if frr2
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_frr2(hello_interval, hello_multiplier) if frr2
+    extra = if (link = frr2&.dig(:isis4r_link))
+              [{ interface: "veth1", ip_addresses: ["10.0.13.1"], metric: link.fetch(:isis4r_metric, 10) }]
+            else
+              []
+            end
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
                    prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level,
-                   hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
+                   hello_interval: hello_interval, hello_multiplier: hello_multiplier,
+                   extra_interfaces: extra }.merge(isis4r))
     self
   end
 
@@ -133,6 +141,11 @@ class FrrLab
     Process.kill("TERM", File.read(pid_file).to_i) if File.exist?(pid_file)
   rescue Errno::ESRCH
     nil
+  end
+
+  # Takes isis4r's link to the second FRR down, on isis4r's side.
+  def isis4r_frr2_link_down
+    sh "ip -n #{@isis_ns} link set veth1 down"
   end
 
   def stop
@@ -235,6 +248,28 @@ class FrrLab
       [prefix, { "metric" => metric.to_i, "interface" => iface == "-" ? nil : iface,
                  "next_hop" => next_hop == "-" ? nil : next_hop }]
     end.to_h
+  end
+
+  # Every next hop FRR's `show isis route` gives each prefix, as
+  # [interface, address] pairs in FRR's order. Measured on FRR 8.4.4: an
+  # equal cost route prints its further next hops on rows of their own,
+  # with the prefix and metric columns blank.
+  def frr_isis_next_hops(level = 1, router: @name)
+    section = nil
+    prefix = nil
+    hops = Hash.new { |h, k| h[k] = [] }
+    vtysh("show isis route", router: router).each_line do |line|
+      section = Regexp.last_match(1).to_i if line =~ /IS-IS L(\d) IPv4 routing table/
+      next unless section == level
+
+      if (m = line.match(%r{^\s*(\d+\.\d+\.\d+\.\d+/\d+)\s+\d+\s+(\S+)\s+(\S+)}))
+        prefix = m[1]
+        hops[prefix] << [m[2], m[3]] unless m[2] == "-"
+      elsif prefix && (m = line.match(/^\s{10,}(veth\S*|lo|eth\S*)\s+(\d+\.\d+\.\d+\.\d+)/))
+        hops[prefix] << [m[1], m[2]]
+      end
+    end
+    hops
   end
 
   # FRR's route to +prefix+ from `show ip route PREFIX json`: the first
@@ -391,6 +426,13 @@ class FrrLab
     sh "ip -n #{@frr_ns} link set veth1 up"
     %w[lo veth0].each { |l| sh "ip -n #{@frr2_ns} link set #{l} up" }
     sh "ip -n #{@frr2_ns} addr add #{@frr2[:loopback]} dev lo" if @frr2[:loopback]
+    return unless @frr2[:isis4r_link]
+
+    sh "ip link add veth1 netns #{@isis_ns} type veth peer name veth1 netns #{@frr2_ns}"
+    sh "ip -n #{@isis_ns} addr add 10.0.13.1/24 dev veth1"
+    sh "ip -n #{@frr2_ns} addr add 10.0.13.3/24 dev veth1"
+    sh "ip -n #{@isis_ns} link set veth1 up"
+    sh "ip -n #{@frr2_ns} link set veth1 up"
   end
 
   # One end of the link between the two FRRs, point to point, at the
@@ -409,6 +451,9 @@ class FrrLab
       log file #{File.join(@dir, 'isisd2.log')} debugging
       #{frr2_link_stanza('veth0', hello_interval, hello_multiplier, @frr2.fetch(:interface, []))}
       #{@frr2[:loopback] ? "interface lo\n ip router isis LAB\n isis passive" : ''}
+      #{if (link = @frr2[:isis4r_link])
+          frr2_link_stanza('veth1', hello_interval, hello_multiplier, ["isis metric #{link.fetch(:frr_metric, 10)}"])
+        end}
       router isis LAB
        net #{@frr2.fetch(:area, '49.0001')}.#{FRR2_ID}.00
        is-type #{@frr2.fetch(:is_type)}
