@@ -8,7 +8,12 @@ module ISIS
     #
     # A clock answers #now: seconds as a Float, monotonic, with an origin
     # that means nothing. Only differences between two readings are
-    # meaningful. Wall clock time is for logs and never comes from here.
+    # meaningful.
+    #
+    # A clock also answers #wall, a Time for log lines and nothing else.
+    # Wall time never decides anything in the protocol; it comes through
+    # the clock only so the source scan can keep protocol code off the
+    # system clock.
 
     # The real clock: the operating system's monotonic clock.
     #
@@ -19,17 +24,31 @@ module ISIS
       def now
         Process.clock_gettime(Process::CLOCK_MONOTONIC)
       end
+
+      # The system's wall clock, for log lines only.
+      def wall
+        Time.now
+      end
     end
 
     # A clock that moves only when told to. Tests and simulations use it,
     # usually through Scheduler#run_until, which advances it timer by timer.
     class ManualClock
-      def initialize(start = 0.0)
+      # Wall time is +wall_start+ plus the simulated seconds, so a simulated
+      # run logs the same times every time it runs.
+      WALL_START = Time.utc(2026, 1, 1)
+
+      def initialize(start = 0.0, wall_start: WALL_START)
         @now = Float(start)
+        @wall_start = wall_start
       end
 
       def now
         @now
+      end
+
+      def wall
+        @wall_start + @now
       end
 
       # Move forward by +seconds+. A monotonic clock cannot go back, so a
