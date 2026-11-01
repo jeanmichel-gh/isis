@@ -241,6 +241,56 @@ through unchanged. The two runs must produce:
 withdrawal or one extra flood ends in the same routes and is still a
 defect.
 
+### Logging and events
+
+**A person running a test by hand must be able to turn logging on, at
+info or debug, and find out from the log what happened and why.** That
+is a requirement on every mechanism, not a feature added at the end. A
+router that converges in a test but cannot say why it did not converge in
+the lab is half a tool. Nothing is built yet; this is the design, taken
+from ospfv2, which already works this way (surveyed at `0ec77c6`).
+
+How ospfv2 does it, and what isis4r copies:
+
+* **The logger is an injected callable**, `->(level, message)`, handed to
+  each mechanism like the clock. Not a global, not `$stderr`, not Ruby's
+  `Logger` reached for inside protocol code. The levels are `:debug`,
+  `:info`, `:warn` and `:error`. The executable decides where lines go and
+  in what format: ospfd writes `TIME LEVEL message`, to a file or to
+  stderr. With no logger, nothing is written and nothing breaks.
+* **Events are kept as well as logged.** In ospfv2 every non-debug line is
+  also recorded as an event, with time, level, interface, kind and data,
+  in a bounded list that `show ospf events` and the web view read, and is
+  published to listeners. Debug lines go to the logger only, so the list
+  holds what a person wants to scan and the log holds everything. isis4r
+  does the same, so a test can assert on events instead of parsing text,
+  and routescope can show them.
+* **Packets have their own tracer**, `->(direction, circuit, pdu, peer)`,
+  separate from the logger. `--debug` adds hex dumps. Here the dump is
+  `to_shex` and the decode is `to_s`, which is what makes a line out of a
+  live trace usable as a test fixture.
+* **Two switches on every executable**: `-l, --log FILE` with `-` for
+  standard output, and `-d, --debug`.
+
+What isis4r adds, because of its own rules:
+
+* **The time on a log line is wall time from the injected clock.** Wall
+  time is for logs only, as the time section says, and it comes through
+  the clock so the time guard holds. ospfv2's manual clock derives wall
+  time from simulated time, so a simulated run logs reproducible times.
+* **What to log is the reason, not the fact.** An adjacency going Down
+  logs which timer expired or which TLV 240 state arrived. A PDU the
+  receive policy refused logs the finding and the clause. A dropped PDU
+  with no reason in the log is the exact case this requirement exists for.
+  Rough levels: state changes and refusals at info, each PDU and each
+  decision at debug.
+* **Logging is observation, so it must not change behaviour.**
+  Pass-through equivalence runs with logging at debug and with it off,
+  and both must match. A log statement that calls a method with a side
+  effect is a defect.
+* **A test can install a logger and a tracer** to capture what a scenario
+  did, so a failing test can print the log of the run that failed.
+
 ### Control plane and forwarding
 
 The protocol core computes routes and hands **route operations** to a
@@ -1854,6 +1904,15 @@ later decision may change one.
   switch, correct originators, receive policy separate from validation, an
   injected clock and scheduler, pass-through equivalence, and a forwarding
   boundary. All under "Autonomous operation and testing controls".
+
+**2026-10-31. Logging is a requirement.**
+
+* Before: logging was not mentioned.
+* Now: every mechanism logs through an injected logger, and keeps events
+  a test can read. See "Logging and events".
+* Premise: a protocol test that fails on a real router is debugged from
+  its log. Without a reason in the log, the only way to find out is to
+  rerun it under a debugger, which is not possible against FRR on a VM.
 
 **2026-10-31. License: the same terms as bgp4r, for now.**
 
