@@ -21,8 +21,11 @@ module ISIS
   # partialSNPInterval carrying the entries with SSN set, a CSNP when the
   # adjacency comes up, and the LSPs with SRM set sent every
   # minimumLSPTransmissionInterval until the neighbour acknowledges them.
-  # Not here yet: purges (clause 7.3.16.4), LSP confusion (7.3.16.2) and
-  # this system's own LSPs (7.3.15.1 c and d).
+  # With an Originator, the circuit's adjacency goes into this system's
+  # LSP, an Up or Down asks it for a new one (clause 7.3.6), and a received
+  # copy of it is handled by clause 7.3.15.1 d. Not here yet: purges
+  # (clause 7.3.16.4), so LSP confusion (7.3.16.2) and a stale LSP of this
+  # system's (7.3.15.1 c) are refused.
   class P2pCircuit
     # AllISs. RFC 5309 section 4.1 recommends it for point to point hellos
     # on a LAN; second hand, from FRR's isis_pfpacket.c, which cites that
@@ -41,12 +44,12 @@ module ISIS
     PARTIAL_SNP_INTERVAL = 2
     MINIMUM_LSP_TRANSMISSION_INTERVAL = 5
 
-    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :database
-    attr_accessor :areas, :hello_interval, :hello_multiplier
+    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :database, :originator
+    attr_accessor :areas, :hello_interval, :hello_multiplier, :metric
 
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, areas: ["49.0001"],
                    extended_circuit_id: 1, local_circuit_id: 1, hello_interval: 3, hello_multiplier: 10,
-                   ip_addresses: [], protocols: [:ipv4], database: nil,
+                   ip_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL)
       @transport = transport
@@ -69,6 +72,9 @@ module ISIS
       @lsp_transmission_interval = lsp_transmission_interval
       @psnp_timer = nil
       @srm_timer = nil
+      @metric = metric
+      @originator = originator
+      @originator&.attach(self)
     end
 
     # Send a hello now and every hello_interval after.
@@ -94,6 +100,19 @@ module ISIS
 
     def up?
       three_way_state == :up
+    end
+
+    # What this circuit puts in its system's TLV 22: the neighbour's System
+    # ID with "an appended zero octet (indicating non-pseudonode)" and the
+    # circuit's metric, from an adjacency Up (RFC 1142 7.3.7). Nil without.
+    def is_neighbor
+      [(@neighbor.system_id + "\x00".b).b, @metric] if up?
+    end
+
+    # The originator generated +entry+: set SRM for it here, on a circuit
+    # with an adjacency up (RFC 1142 7.3.5, 7.3.6).
+    def flood(entry)
+      set_srm(entry) if up?
     end
 
     # The hello this circuit sends now. RFC 1142 clause 8.2.3 and RFC 5303
@@ -166,9 +185,7 @@ module ISIS
       # Clause 7.3.15.1 b sends a zero Remaining Lifetime to 7.3.16.4.
       return refuse_pdu(:purge, "LSP #{id}: a purge (lifetime 0); RFC 1142 7.3.16.4 is not implemented") if lsp.lifetime.zero?
       # Clause 7.3.15.1 c and d: an LSP with this system's ID.
-      if lsp.lsp_id.byteslice(0, @system_id.bytesize) == @system_id
-        return refuse_pdu(:own, "LSP #{id} carries this system's ID; RFC 1142 7.3.15.1 c and d are not implemented")
-      end
+      return receive_own_lsp(lsp) if lsp.lsp_id.byteslice(0, @system_id.bytesize) == @system_id
 
       entry = @database.entry(lsp.lsp_id)
       result = entry.placeholder? ? :new : Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime,
@@ -360,18 +377,53 @@ module ISIS
     # Clause 7.3.15.3 b: CSNPs "are only transmitted on point to point
     # circuits at initialisation", and the PSNP timer starts.
     def adjacency_up
+      @originator&.changed("adjacency with #{@neighbor.system_id_s} on #{@name} up (RFC 1142 7.3.6)")
       send_csnp
       start_psnp_timer unless @psnp_timer
     end
 
     # The neighbour is gone, so nothing is owed to it on this circuit.
     def adjacency_down
+      @originator&.changed("adjacency on #{@name} down (RFC 1142 7.3.6)")
       [@psnp_timer, @srm_timer].each { |t| t&.cancel }
       @psnp_timer = @srm_timer = nil
       @database.entries.each do |e|
         e.srm.delete(@name)
         e.ssn.delete(@name)
       end
+    end
+
+    # Clause 7.3.15.1 c: an LSP with this system's ID that it does not
+    # generate is purged network wide, which is not here yet. Clause d: one
+    # it does generate is compared with the held copy. Equal is acknowledged
+    # and older sends ours back, as for any LSP (7.3.15.1 e 2 and e 3).
+    # Newer, or the same sequence with another checksum, is the
+    # originator's: it generates past the received sequence (7.3.16.1,
+    # 7.3.16.2).
+    def receive_own_lsp(lsp)
+      id = lsp.lsp_id_s
+      unless @originator&.generates?(lsp.lsp_id)
+        return refuse_pdu(:own, "LSP #{id} carries this system's ID and is not one it generates; " \
+                                "RFC 1142 7.3.15.1 c purges it, and purging is not implemented")
+      end
+
+      entry = @database.entry(lsp.lsp_id)
+      result = Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime, checksum: lsp.checksum)
+      case result
+      when :equal
+        entry.srm.delete(@name)
+        set_ssn(entry)
+        @log.debug("own LSP #{id} sequence #{seq(lsp.sequence)} equals ours, acknowledged", circuit: @name)
+      when :older
+        entry.ssn.delete(@name)
+        set_srm(entry)
+        @log.debug("own LSP #{id} sequence #{seq(lsp.sequence)} is older than ours, sending ours", circuit: @name)
+      else
+        @log.info("own LSP #{id} received with sequence #{seq(lsp.sequence)}, ours is #{seq(entry.sequence)}: " \
+                  "#{result}", circuit: @name, kind: :database, lsp_id: id, result: result)
+        @originator.receive_own(result, lsp)
+      end
+      result
     end
 
     def receive_update(pdu)

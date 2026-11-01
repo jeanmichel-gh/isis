@@ -22,6 +22,9 @@ class FrrLab
   ROOT = File.expand_path("../..", __dir__)
   FRR_ID = "0000.0000.0002"
   ISIS4R_ID = "0000.0000.0001"
+  # What isis4r advertises in TLV 135: the link's subnet, and a prefix that
+  # exists nowhere but in its LSP, so FRR can only have it from IS-IS.
+  ISIS4R_PREFIXES = [{ prefix: "10.0.12.0/24", metric: 10 }, { prefix: "192.0.2.1/32", metric: 5 }].freeze
 
   def self.available?
     return [false, "set ISIS_FRR=1 to run the FRR interop tests"] unless ENV["ISIS_FRR"] == "1"
@@ -80,6 +83,7 @@ class FrrLab
     end
     start_frr(hello_interval, hello_multiplier, frr_interface)
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
+                   prefixes: ISIS4R_PREFIXES,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
     self
   end
@@ -141,6 +145,12 @@ class FrrLab
     end.to_h
   end
 
+  # FRR's route to +prefix+ from `show ip route PREFIX json`: the first
+  # entry, a Hash with "protocol", "installed" and "nexthops", or nil.
+  def frr_route(prefix)
+    frr_json("show ip route #{prefix}").fetch(prefix, []).first
+  end
+
   def isis4r_log
     File.read(File.join(@dir, "isis4r.log"))
   rescue Errno::ENOENT
@@ -181,6 +191,10 @@ class FrrLab
     <<~REPORT
       --- FRR: show isis neighbor
       #{vtysh('show isis neighbor')}
+      --- FRR: show isis database detail
+      #{vtysh('show isis database detail')}
+      --- FRR: show ip route
+      #{vtysh('show ip route')}
       --- FRR isisd log
       #{frr_log.lines.last(40).join}
       --- isis4r state

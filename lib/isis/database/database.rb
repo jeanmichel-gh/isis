@@ -13,8 +13,8 @@ module ISIS
   # holding time." So an entry keeps the lifetime it arrived with and when
   # it arrived, and answers the remaining lifetime from the clock.
   #
-  # Not here yet: LSP expiry and purging (clause 7.3.16.4), and this
-  # system's own LSPs.
+  # This system's own LSP is stored here by the Originator, like any other.
+  # Not here yet: LSP expiry and purging (clause 7.3.16.4).
   class Database
     # RFC 1142 clause 7.3.21: "MaxAge is an architectural constant equal to
     # 20 minutes."
