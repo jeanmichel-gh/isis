@@ -64,7 +64,11 @@ them and fails if one is missing.
 - `ISIS::Pdu::Psnp`
 - `ISIS::Pdu::Truncated`
 - `ISIS::Pdu::Unknown`
+- `ISIS::SubTlv`
+- `ISIS::SubTlv::List`
+- `ISIS::SubTlv::Unknown`
 - `ISIS::Tlv`
+- `ISIS::Tlv::ExtendedIpReachability`
 - `ISIS::Tlv::AreaAddresses`
 - `ISIS::Tlv::IpInterfaceAddresses`
 - `ISIS::Tlv::IsNeighbors`

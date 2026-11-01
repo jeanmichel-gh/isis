@@ -254,7 +254,7 @@ module ISIS
         remaining = boundary
         while remaining.positive?
           before = octets.bytesize
-          tlv = Tlv.factory(octets, boundary: remaining, id_width: id_width)
+          tlv = read_one(octets, remaining, id_width)
           consumed = before - octets.bytesize
           # Fewer than two octets left, or a factory that took nothing: what
           # is left inside the boundary is a tail, never a loop.
@@ -268,6 +268,17 @@ module ISIS
         end
       end
 
+      # One item off the front, within +remaining+. A list of sub-TLVs
+      # overrides this to read them under its parent's registry.
+      def read_one(octets, remaining, id_width)
+        Tlv.factory(octets, boundary: remaining, id_width: id_width)
+      end
+
+      # The class a hash key names.
+      def class_for_key(key)
+        key == :unknown ? Unknown : Tlv.by_key.fetch(key)
+      end
+
       def from_fields(*tlvs)
         tlvs = tlvs.first if tlvs.size == 1 && tlvs.first.is_a?(Array)
         @tlvs = tlvs.dup
@@ -277,8 +288,7 @@ module ISIS
       def from_hash(hash)
         @tlvs = hash.fetch(:tlvs, []).map do |entry|
           key, value = entry.first
-          klass = key == :unknown ? Unknown : Tlv.by_key.fetch(key)
-          klass.new(value)
+          class_for_key(key).new(value)
         end
         @tail = [hash.fetch(:tail, "")].pack("H*")
       end
