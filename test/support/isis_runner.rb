@@ -29,28 +29,49 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              tracer: ISIS::Runtime::Log.trace_writer($stdout, clock: clock, debug: true))
 socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
 database = ISIS::Database.new(level: 1, clock: clock)
-originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
-                                  log: log, areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
-                                  prefixes: config.fetch(:prefixes, []),
-                                  metric_style: config.fetch(:metric_style, "wide").to_sym,
-                                  area_key: config[:area_key],
-                                  minimum_interval: config.fetch(:minimum_lsp_interval, 1))
-circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SocketTransport.new(socket), scheduler: scheduler, log: log,
-                               database: database, originator: originator,
-                               hello_key: config[:hello_key], area_key: config[:area_key],
-                               name: iface, system_id: config.fetch(:system_id), snpa: mac,
-                               areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
-                               hello_interval: config.fetch(:hello_interval),
-                               hello_multiplier: config.fetch(:hello_multiplier))
+transport = ISIS::Link::SocketTransport.new(socket)
+lan = config[:network] == "broadcast"
+originator = nil
+circuit =
+  if lan
+    ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log, name: iface,
+                         system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
+                         ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
+                         hello_interval: config.fetch(:hello_interval),
+                         hello_multiplier: config.fetch(:hello_multiplier), hello_key: config[:hello_key])
+  else
+    originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
+                                      log: log, areas: config.fetch(:areas),
+                                      ip_addresses: config.fetch(:ip_addresses, []),
+                                      prefixes: config.fetch(:prefixes, []),
+                                      metric_style: config.fetch(:metric_style, "wide").to_sym,
+                                      area_key: config[:area_key],
+                                      minimum_interval: config.fetch(:minimum_lsp_interval, 1))
+    ISIS::P2pCircuit.new(transport: transport, scheduler: scheduler, log: log,
+                         database: database, originator: originator,
+                         hello_key: config[:hello_key], area_key: config[:area_key],
+                         name: iface, system_id: config.fetch(:system_id), snpa: mac,
+                         areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
+                         hello_interval: config.fetch(:hello_interval),
+                         hello_multiplier: config.fetch(:hello_multiplier))
+  end
 
 write_state = lambda do
-  n = circuit.neighbor
-  state = { state: circuit.three_way_state,
-            neighbor: n && { system_id: n.system_id_s, state: n.state, holding_time: n.holding_time },
-            database: circuit.database.entries.map do |e|
-              { lsp_id: e.lsp_id_s, sequence: e.sequence, checksum: e.checksum,
-                lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size }
-            end }
+  state =
+    if lan
+      dis = circuit.dis
+      { state: circuit.up_neighbors.empty? ? "down" : "up", lan_id: circuit.lan_id_s,
+        dis: dis == :self ? "self" : dis&.system_id_s,
+        neighbors: circuit.neighbors.values.map { |n| { system_id: n.system_id_s, state: n.state, priority: n.priority, lan_id: n.lan_id && n.lan_id_s } } }
+    else
+      n = circuit.neighbor
+      { state: circuit.three_way_state,
+        neighbor: n && { system_id: n.system_id_s, state: n.state, holding_time: n.holding_time } }
+    end
+  state[:database] = database.entries.map do |e|
+    { lsp_id: e.lsp_id_s, sequence: e.sequence, checksum: e.checksum,
+      lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size }
+  end
   File.write("#{state_file}.tmp", JSON.generate(state))
   File.rename("#{state_file}.tmp", state_file)
 end
@@ -58,7 +79,7 @@ end
 stop = false
 %w[TERM INT].each { |sig| Signal.trap(sig) { stop = true } }
 
-originator.start
+originator&.start
 circuit.start
 next_state = clock.now
 until stop
@@ -73,6 +94,6 @@ until stop
   end
 end
 circuit.stop
-originator.stop
+originator&.stop
 write_state.call
 socket.close

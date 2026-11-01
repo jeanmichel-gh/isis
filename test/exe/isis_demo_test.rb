@@ -5,7 +5,7 @@ require "open3"
 require "rbconfig"
 require "tmpdir"
 
-# exe/isis-demo, run as a person would run it: two LAN circuits on
+# exe/isis-demo, run as a person would run it: two LanCircuits on
 # datalink-socket's loopback wire, on the real clock.
 class TestIsisDemo < Minitest::Test
   EXE = File.expand_path("../../exe/isis-demo", __dir__)
@@ -19,14 +19,17 @@ class TestIsisDemo < Minitest::Test
   def test_converges_and_says_why
     out = demo
     assert_includes out, "adjacency up both ways: true"
-    assert_includes out, "info  a adjacency with 0000.0000.0002 init -> up: its TLV 6 lists our SNPA 00:00:00:00:00:01"
+    assert_includes out, "DIS: b, LAN ID 0000.0000.0002.01 on both sides: true"
+    assert_includes out, "info  a adjacency with 0000.0000.0002 at 00:00:00:00:00:02 initializing -> up: " \
+                         "it lists our LAN address 00:00:00:00:00:01 (RFC 1142 8.4.1.5)"
+    assert_includes out, "info  a Level 1 DIS none -> 0000.0000.0002 (priority 100, 00:00:00:00:00:02)"
     refute_includes out, "debug"
   end
 
   # --debug adds the PDU trace, each hello decoded and then its hex.
   def test_debug_traces_every_hello
     out = demo("--debug")
-    assert_match(/ a > L1 LAN hello l1 from 0000\.0000\.0001, holding 30/, out)
+    assert_match(/ a > L1 LAN hello l1 from 0000\.0000\.0001, holding 10/, out)
     assert_includes out, "  831b01000f01"
   end
 
@@ -35,7 +38,7 @@ class TestIsisDemo < Minitest::Test
       path = File.join(dir, "demo.log")
       out = demo("-l", path)
       refute_includes out, "info  a adjacency"
-      assert_includes File.read(path), "info  a adjacency with 0000.0000.0002 down -> init"
+      assert_includes File.read(path), "info  a adjacency with 0000.0000.0002 at 00:00:00:00:00:02 down -> initializing"
     end
   end
 end

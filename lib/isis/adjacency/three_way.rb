@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module ISIS
-  class Adjacency
+  module Adjacency
     # The RFC 5303 section 3.2 adjacency three-way state table, as data.
     # Rows are this system's current three-way state for the adjacency,
     # columns the Adjacency Three-Way State the neighbour sent in TLV 240:

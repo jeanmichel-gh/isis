@@ -70,7 +70,9 @@ class FrrLab
   # both, so the holding time is short and a lost neighbour shows quickly.
   # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
   # adds lines under FRR's interface and +frr_router+ under its router isis.
-  def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [])
+  # +network+ is :point_to_point or :broadcast, for both sides.
+  def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
+            network: :point_to_point)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -81,9 +83,10 @@ class FrrLab
       sh "ip -n #{ns} link set lo up"
       sh "ip -n #{ns} link set veth0 up"
     end
+    @network = network
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
-                   prefixes: ISIS4R_PREFIXES,
+                   prefixes: ISIS4R_PREFIXES, network: network.to_s,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
     self
   end
@@ -165,6 +168,13 @@ class FrrLab
     out
   end
 
+  # Configuration lines for FRR's running daemon, under "configure".
+  def vtysh_config(*lines)
+    args = ["vtysh", "-N", @name, "-c", "configure"] + lines.flat_map { |l| ["-c", l] }
+    out, = Open3.capture3(*args)
+    out
+  end
+
   def frr_json(cmd)
     JSON.parse(vtysh("#{cmd} json"))
   rescue JSON::ParserError
@@ -178,6 +188,22 @@ class FrrLab
   def frr_adjacency_state
     line = vtysh("show isis neighbor").lines.find { |l| l.include?("veth0") }
     line&.split&.at(3)
+  end
+
+  # On a broadcast circuit: true when FRR says it is the DIS on veth0,
+  # false when it says it is not, nil when it says neither. From the
+  # "LAN Priority: 64, is DIS" line of `show isis interface detail`.
+  def frr_is_dis?
+    line = vtysh("show isis interface detail").lines.find { |l| l.include?("LAN Priority") }
+    return nil unless line
+
+    !line.include?("is not DIS") && line.include?("is DIS")
+  end
+
+  # The LAN ID FRR reports for isis4r's adjacency, from the "LAN id:" field
+  # of `show isis neighbor detail`.
+  def frr_lan_id
+    vtysh("show isis neighbor detail")[/LAN id: (\S+)/, 1]
   end
 
   def frr_log
@@ -228,7 +254,7 @@ class FrrLab
       interface veth0
        ip router isis LAB
        isis circuit-type level-1
-       isis network point-to-point
+      #{@network == :broadcast ? '' : ' isis network point-to-point'}
        isis hello-interval #{hello_interval}
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
