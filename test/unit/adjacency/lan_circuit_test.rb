@@ -230,19 +230,19 @@ class TestLanUpdate < Minitest::Test
     TestLogs.heading(name)
   end
 
-  def node(who, metric_style: :wide, **opts)
+  def node(who, metric_style: :wide, level: 1, **opts)
     sent = @sent[who]
     log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock),
                                  tracer: TestLogs.tracer(@clock, lambda { |dir, _c, pdu, _p|
                                    sent << [@clock.now, pdu] if dir == :sent
                                  }))
-    database = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: log)
+    database = ISIS::Database.new(level: level, clock: @clock, scheduler: @scheduler, log: log)
     @originators[who] = ISIS::Originator.new(system_id: IDS.fetch(who), database: database, scheduler: @scheduler,
                                              log: log, metric_style: metric_style, minimum_interval: 1)
     @circuits[who] = ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire),
                                           scheduler: @scheduler, log: log, name: "#{who}-eth0",
                                           system_id: IDS.fetch(who), snpa: MACS.fetch(who), database: database,
-                                          originator: @originators[who], **opts)
+                                          originator: @originators[who], level: level, **opts)
   end
 
   def start(*who)
@@ -531,6 +531,49 @@ class TestLanUpdate < Minitest::Test
     ids = stored_is_reachability(:c, "#{IDS[:b]}.01-00").flat_map { |t| t.entries.map { |e| e.neighbor.unpack1("H*") } }
     assert_equal %w[00000000000a00 00000000000b00 00000000000c00], ids.sort
     assert_equal held(:a), held(:c)
+  end
+
+  # -- Level 2: the same LAN, the Level 2 clauses (7.3.9, 7.3.10) --
+
+  # Two Level 2 systems: the same three LSPs on both sides, every one a
+  # Level 2 LSP with IS type 3 ("In a Level 2 Link State PDU, IS Type
+  # shall be 3", RFC 1142 9.9), and every SNP sent a Level 2 one.
+  def test_level_2_databases_agree
+    node(:a, level: 2)
+    node(:b, level: 2)
+    up(:a, :b)
+    run_for(15)
+    expected = %w[0000.0000.000a.00-00 0000.0000.000b.00-00 0000.0000.000b.01-00]
+    assert_equal expected, held(:a).keys
+    assert_equal held(:a), held(:b)
+    @circuits[:a].database.entries.each do |e|
+      assert_equal [2, 3], [e.lsp.level, e.lsp.is_type], e.lsp_id_s
+    end
+    snps = @sent.values.flatten(1).map(&:last).select { |p| p.is_a?(ISIS::Pdu::Csnp) || p.is_a?(ISIS::Pdu::Psnp) }
+    refute_empty snps
+    assert(snps.all? { |p| p.level == 2 })
+  end
+
+  # A Level 1 LSP arriving on a Level 2 circuit changes nothing.
+  def test_a_level_1_lsp_on_a_level_2_circuit_is_ignored
+    node(:a, level: 2)
+    node(:b, level: 2)
+    up(:a, :b)
+    assert_equal :level, @circuits[:a].receive_update(lsp, Datalink::MAC.new(MACS[:b]))
+    assert_nil @circuits[:a].database[ISIS::Pdu.lsp_id_octets(THIRD)]
+  end
+
+  # The originator's database decides its level, and it has to be the
+  # circuit's.
+  def test_an_originator_of_another_level_is_refused
+    log = ISIS::Runtime::Log.new(clock: @clock)
+    database = ISIS::Database.new(level: 1, clock: @clock)
+    originator = ISIS::Originator.new(system_id: IDS[:a], database: database, scheduler: @scheduler, log: log)
+    error = assert_raises(ArgumentError) do
+      ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler, log: log,
+                           name: "a-eth0", system_id: IDS[:a], snpa: MACS[:a], level: 2, originator: originator)
+    end
+    assert_includes error.message, "Level 1"
   end
 end
 

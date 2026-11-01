@@ -250,3 +250,23 @@ class TestOriginator < Minitest::Test
     assert_equal [28, 1], reach.map { |t| t.entries.size }
   end
 end
+
+# The originator at Level 2, decided by its database.
+class TestOriginatorLevel2 < Minitest::Test
+  # With a Level 2 database the LSP is a Level 2 LSP: PDU type 20 in the
+  # fifth octet of the common header (RFC 1142 9.9) and IS type 3 in the
+  # flags octet, "In a Level 2 Link State PDU, IS Type shall be 3". The
+  # flags octet is the last of the 27 octet fixed header.
+  def test_a_level_2_database_makes_level_2_lsps
+    clock = ISIS::Runtime::ManualClock.new
+    scheduler = ISIS::Runtime::Scheduler.new(clock)
+    db = ISIS::Database.new(level: 2, clock: clock)
+    orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: db, scheduler: scheduler,
+                                log: ISIS::Runtime::Log.new(clock: clock))
+    assert_equal 2, orig.level
+    hex = orig.build(sequence: 1).to_shex
+    assert_equal "14", hex[8, 2]
+    assert_equal "03", hex[52, 2]
+  end
+end
+

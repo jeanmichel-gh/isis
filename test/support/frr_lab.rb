@@ -70,9 +70,10 @@ class FrrLab
   # both, so the holding time is short and a lost neighbour shows quickly.
   # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
   # adds lines under FRR's interface and +frr_router+ under its router isis.
-  # +network+ is :point_to_point or :broadcast, for both sides.
+  # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
+  # 1 or 2: FRR runs that level alone, and so does isis4r's LAN circuit.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
-            network: :point_to_point)
+            network: :point_to_point, level: 1)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -84,9 +85,10 @@ class FrrLab
       sh "ip -n #{ns} link set veth0 up"
     end
     @network = network
+    @level = level
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
-                   prefixes: ISIS4R_PREFIXES, network: network.to_s,
+                   prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
     self
   end
@@ -276,14 +278,14 @@ class FrrLab
       debug isis adj-packets
       interface veth0
        ip router isis LAB
-       isis circuit-type level-1
+       isis circuit-type #{@level == 2 ? 'level-2-only' : 'level-1'}
       #{@network == :broadcast ? '' : ' isis network point-to-point'}
        isis hello-interval #{hello_interval}
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
       router isis LAB
        net 49.0001.#{FRR_ID}.00
-       is-type level-1
+       is-type #{@level == 2 ? 'level-2-only' : 'level-1'}
       #{router_lines.map { |l| " #{l}" }.join("\n")}
     CONF
     # zebra gets a file of its own: given isisd's, it rejects every IS-IS line.

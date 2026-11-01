@@ -25,7 +25,8 @@ module ISIS
   # With an Originator, this circuit puts the pseudonode, the DIS's LAN ID,
   # in this system's LSP once there is a DIS (clause 7.3.7), and while this
   # system is DIS it generates the pseudonode LSP (clause 7.3.8), through a
-  # Pseudonode. Level 1 only with an originator, since the originator is.
+  # Pseudonode. At Level 2 the same holds with the Level 2 clauses, 7.3.9
+  # and 7.3.10, and the originator's database must be this level's.
   #
   # A DIS that resigns purges its pseudonode LSP, and one that takes over
   # purges its predecessor's (clause 7.2.3).
@@ -85,7 +86,9 @@ module ISIS
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL)
       raise ArgumentError, "a LAN circuit is Level 1 or Level 2, not #{level.inspect}" unless [1, 2].include?(level)
-      raise ArgumentError, "an originator is Level 1, and this circuit is Level #{level}" if originator && level != 1
+      if originator && originator.level != level
+        raise ArgumentError, "the originator's database is Level #{originator.level}, and this circuit is Level #{level}"
+      end
 
       @transport = transport
       @scheduler = scheduler

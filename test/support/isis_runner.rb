@@ -28,7 +28,8 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              logger: ISIS::Runtime::Log.writer($stdout, clock: clock, debug: true),
                              tracer: ISIS::Runtime::Log.trace_writer($stdout, clock: clock, debug: true))
 socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
-database = ISIS::Database.new(level: 1, clock: clock, scheduler: scheduler, log: log)
+level = config.fetch(:level, 1)
+database = ISIS::Database.new(level: level, clock: clock, scheduler: scheduler, log: log)
 transport = ISIS::Link::SocketTransport.new(socket)
 lan = config[:network] == "broadcast"
 originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
@@ -38,9 +39,10 @@ originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database:
                                   metric_style: config.fetch(:metric_style, "wide").to_sym,
                                   area_key: config[:area_key],
                                   minimum_interval: config.fetch(:minimum_lsp_interval, 1))
+abort "a point to point circuit here is Level 1 only" if !lan && level != 1
 circuit =
   if lan
-    ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log, name: iface,
+    ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log, name: iface, level: level,
                          database: database, originator: originator, area_key: config[:area_key],
                          system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
                          ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
