@@ -41,6 +41,13 @@ ISIS::Tlv::Unknown.new(199, "abc")                           # field values
 Every class that includes `ISIS::Node` is listed here. The suite discovers
 them and fails if one is missing.
 
+- `ISIS::Capture`
+- `ISIS::Pdu`
+- `ISIS::Pdu::Layout`
+- `ISIS::Pdu::Malformed`
+- `ISIS::Pdu::Psnp`
+- `ISIS::Pdu::Truncated`
+- `ISIS::Pdu::Unknown`
 - `ISIS::Tlv`
 - `ISIS::Tlv::Unknown`
 - `ISIS::Tlv::List`
