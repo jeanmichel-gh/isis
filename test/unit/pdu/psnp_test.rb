@@ -122,4 +122,21 @@ class TestPsnp < Minitest::Test
     assert_equal "270f", pdu.to_shex[16, 4]
     assert_equal "0013", built.to_shex[16, 4], "the class is unchanged"
   end
+
+  # FRR 8.4.4 with HMAC-MD5 (RFC 5304), key "isis4r-key": it replays, and with
+  # every computed field thrown away and the key given, isis4r writes
+  # FRR's octets again, digest included. A wrong key gives another digest.
+  HMAC_MD5 = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-psnp-hmac-md5.hex", __dir__)).strip
+
+  def test_frr_hmac_md5_psnp_replays_and_rebuilds
+    pdu = ISIS::Pdu.factory(ISIS::Octets.from_hex(HMAC_MD5))
+    assert_instance_of ISIS::Pdu::Psnp, pdu
+    assert_equal HMAC_MD5, pdu.to_shex
+    assert pdu.authentication_preserved?
+    pdu.key = "isis4r-key"
+    pdu.recompute!
+    assert_equal HMAC_MD5, pdu.to_shex
+    pdu.key = "wrong"
+    refute_equal HMAC_MD5, pdu.to_shex
+  end
 end

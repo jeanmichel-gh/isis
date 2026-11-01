@@ -176,4 +176,22 @@ class TestP2pHello < Minitest::Test
   def test_to_s
     assert_equal "P2P hello l1l2 from 1921.6800.1001, holding 30, circuit 1, 4 TLVs", built.to_s
   end
+
+  # FRR 8.4.4 with HMAC-MD5 (RFC 5304), key "isis4r-hello": it replays, and with
+  # every computed field thrown away and the key given, isis4r writes
+  # FRR's octets again, digest included. A wrong key gives another digest. FRR pads the hello to 1497
+  # octets, and the digest covers the padding (RFC 5304 section 2).
+  HMAC_MD5 = File.read(File.expand_path("../../fixtures/frr-8.4.4-p2p-hello-hmac-md5.hex", __dir__)).strip
+
+  def test_frr_hmac_md5_hello_replays_and_rebuilds
+    pdu = ISIS::Pdu.factory(ISIS::Octets.from_hex(HMAC_MD5))
+    assert_instance_of ISIS::Pdu::P2pHello, pdu
+    assert_equal HMAC_MD5, pdu.to_shex
+    assert pdu.authentication_preserved?
+    pdu.key = "isis4r-hello"
+    pdu.recompute!
+    assert_equal HMAC_MD5, pdu.to_shex
+    pdu.key = "wrong"
+    refute_equal HMAC_MD5, pdu.to_shex
+  end
 end

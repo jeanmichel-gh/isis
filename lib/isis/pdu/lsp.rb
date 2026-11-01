@@ -191,6 +191,14 @@ module ISIS
         out
       end
 
+      # RFC 5304 section 2: "the Checksum and Remaining Lifetime fields are
+      # set to zero (0) before authentication is computed".
+      def digest_normalize(input)
+        input[COMMON_HEADER + 2, 2] = "\x00\x00".b
+        input[checksum_at, 2] = "\x00\x00".b if input.bytesize >= checksum_at + 2
+        input
+      end
+
       def encode_fixed(pdu_length)
         [pdu_length, @lifetime].pack("nn") + @lsp_id + [@sequence].pack("N") + "\x00\x00".b + [@flags].pack("C")
       end
