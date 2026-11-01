@@ -227,4 +227,19 @@ class TestLsp < Minitest::Test
     assert_equal "L1 LSP 0000.0000.0002.00-00, sequence 0x00000002, lifetime 1184, checksum 0x6c27, " \
                  "IS type 1, 2 TLVs", frr.to_s
   end
+
+  # A later LSP from the same FRR, sequence 3, regenerated about 30 seconds
+  # after the adjacency came up, with TLV 22 to isis4r and TLV 135 for
+  # 10.0.12.0/24. It parses into the implemented classes and replays.
+  REACH = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-reachability.hex", __dir__)).strip
+
+  def test_frr_lsp_with_reachability_replays
+    lsp = ISIS::Pdu.factory(octets(REACH))
+    assert_equal [3, 0xfa06], [lsp.sequence, lsp.checksum]
+    reach = lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIpReachability) }
+    assert_equal [{ prefix: "10.0.12.0/24", metric: 10 }], reach.to_hash
+    assert_equal REACH, lsp.to_shex
+    assert lsp.checksum_ok?
+  end
+
 end
