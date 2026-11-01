@@ -11,13 +11,29 @@ module ISIS
   #
   # Everything that varies is injected, as for P2pCircuit: the transport,
   # the scheduler and its clock, and the log. Each step is a method a test
-  # can replace on one object: build_hello, transmit, receive_hello and
-  # elect.
+  # can replace on one object: build_hello, transmit, receive_hello, elect,
+  # receive_lsp and receive_snp.
   #
-  # Not here yet: the update process on a LAN (CSNPs from the DIS, PSNPs
-  # from the others), pseudonode LSPs, hello padding to maxsize (clause
-  # 8.4.1) and hello timer jitter (clause 10.1).
+  # The update process is UpdateProcess's, for a broadcast circuit (RFC
+  # 1142 clause 7.3.15): the DIS sends a CSNP every completeSNPInterval, and
+  # one when it becomes DIS; the others send a PSNP every
+  # partialSNPInterval with the entries SSN marks; LSPs with SRM set go out
+  # one every minimumBroadcastLSPTransmissionInterval, and SRM is cleared as
+  # each goes. LSPs and SNPs are taken only from a neighbour whose adjacency
+  # is Up.
+  #
+  # With an Originator, this circuit puts the pseudonode, the DIS's LAN ID,
+  # in this system's LSP once there is a DIS (clause 7.3.7), and while this
+  # system is DIS it generates the pseudonode LSP (clause 7.3.8), through a
+  # Pseudonode. Level 1 only with an originator, since the originator is.
+  #
+  # Not here yet: purges (clause 7.3.16.4), so the previous DIS's
+  # pseudonode LSP is left to age out; hello padding to maxsize (clause
+  # 8.4.1); and the jitter of clause 10.1 on the hello, PSNP and CSNP
+  # timers.
   class LanCircuit
+    include UpdateProcess
+
     # RFC 1142 annex defaults: "iSISHelloTimer-Default INTEGER ::= 3",
     # "dRISISHelloTimer-Default INTEGER ::= 1",
     # "l1IntermediateSystemPriority-Default INTEGER ::= 64", and clause
@@ -29,6 +45,13 @@ module ISIS
     # Clause 8.4.3: a hello goes out when its contents change, but only
     # "when at least 1 second has transpired since the last transmission".
     MINIMUM_HELLO_SPACING = 1
+    # RFC 1142 annex defaults: "completeSNPInterval-Default INTEGER ::= 10"
+    # and "partialSNPInterval-Default INTEGER ::= 2", in seconds, and
+    # "minimumBroadcastLSPTransmissionInterval-Default INTEGER ::=33", which
+    # its attribute defines "in milliseconds".
+    COMPLETE_SNP_INTERVAL = 10
+    PARTIAL_SNP_INTERVAL = 2
+    MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL = 0.033
 
     # A LAN ID as routers print it, "1921.6800.1001.01": the System ID in
     # groups of four hex digits, then the circuit octet. A convention.
@@ -48,14 +71,20 @@ module ISIS
       end
     end
 
-    attr_reader :name, :level, :system_id, :snpa, :neighbors, :log, :scheduler, :transport, :dis
-    attr_accessor :areas, :priority, :hello_interval, :dis_hello_interval, :hello_multiplier, :hello_key
+    attr_reader :name, :level, :system_id, :snpa, :neighbors, :log, :scheduler, :transport, :dis, :database,
+                :originator, :pseudonode
+    attr_accessor :areas, :priority, :hello_interval, :dis_hello_interval, :hello_multiplier, :hello_key, :metric,
+                  :area_key
 
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, level: 1, areas: ["49.0001"],
                    priority: PRIORITY, local_circuit_id: 1, hello_interval: HELLO_INTERVAL,
                    dis_hello_interval: DIS_HELLO_INTERVAL, hello_multiplier: HOLDING_MULTIPLIER,
-                   ip_addresses: [], protocols: [:ipv4], hello_key: nil)
+                   ip_addresses: [], protocols: [:ipv4], hello_key: nil, database: nil, originator: nil,
+                   metric: 10, area_key: nil, complete_snp_interval: COMPLETE_SNP_INTERVAL,
+                   partial_snp_interval: PARTIAL_SNP_INTERVAL,
+                   lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL)
       raise ArgumentError, "a LAN circuit is Level 1 or Level 2, not #{level.inspect}" unless [1, 2].include?(level)
+      raise ArgumentError, "an originator is Level 1, and this circuit is Level #{level}" if originator && level != 1
 
       @transport = transport
       @scheduler = scheduler
@@ -79,6 +108,23 @@ module ISIS
       @hello_timer = nil
       @pending_hello = nil
       @last_hello_at = nil
+      @database = database || Database.new(level: level, clock: scheduler.clock)
+      @metric = metric
+      @area_key = area_key
+      @complete_snp_interval = complete_snp_interval
+      @partial_snp_interval = partial_snp_interval
+      @lsp_transmission_interval = lsp_transmission_interval
+      @psnp_timer = @csnp_timer = @srm_timer = nil
+      @originator = originator
+      @pseudonode = nil
+      return unless originator
+
+      @pseudonode = Pseudonode.new(circuit: self, database: @database, scheduler: scheduler, log: log,
+                                   metric_style: originator.metric_style, area_key: originator.area_key,
+                                   refresh_interval: originator.refresh_interval,
+                                   minimum_interval: originator.minimum_interval,
+                                   buffer_size: originator.buffer_size)
+      originator.attach(self)
     end
 
     # Clause 8.4.4: "Commence sending IIH PDUs with the LAN ID field set to
@@ -92,14 +138,46 @@ module ISIS
         @log.debug("election starts, #{@hello_interval * 2} s after the circuit (RFC 1142 8.4.4 d)", circuit: @name)
         elect
       end
+      start_psnp_timer
+      start_csnp_timer
       self
     end
 
     def stop
-      [@hello_timer, @pending_hello, @election_timer].each { |t| t&.cancel }
+      [@hello_timer, @pending_hello, @election_timer, @psnp_timer, @csnp_timer, @srm_timer].each { |t| t&.cancel }
       @neighbors.each_value { |n| n.expiry&.cancel }
-      @hello_timer = @pending_hello = @election_timer = nil
+      @hello_timer = @pending_hello = @election_timer = @psnp_timer = @csnp_timer = @srm_timer = nil
+      @pseudonode&.stop
       self
+    end
+
+    # For UpdateProcess: a broadcast circuit.
+    def broadcast?
+      true
+    end
+
+    # The originators whose LSPs this circuit may receive copies of: this
+    # system's own and, while it is DIS, the pseudonode's.
+    def generators
+      [@originator, @pseudonode].compact
+    end
+
+    # What this circuit puts in its system's IS reachability: the
+    # pseudonode, the DIS's LAN ID, at the circuit's metric, once there is
+    # a DIS. Clause 7.3.7 names "the l1CircuitIDs" of broadcast circuits.
+    # Nil with no DIS, and nil while the DIS reports a LAN ID whose circuit
+    # octet is zero, which names no pseudonode: measured on FRR 8.4.4, whose
+    # first hellos carry a LAN ID of zeros until its own election.
+    def is_neighbor
+      return nil if @dis.nil? || lan_id.getbyte(-1).zero?
+
+      [lan_id, @metric]
+    end
+
+    # The originator generated +entry+: set SRM for it here, with an
+    # adjacency up (RFC 1142 7.3.5, 7.3.6).
+    def flood(entry)
+      set_srm(entry) unless up_neighbors.empty?
     end
 
     def dis?
@@ -109,11 +187,13 @@ module ISIS
     # The LAN ID this system reports: its own while it is the DIS or there
     # is none, the DIS's otherwise (clause 8.4.4).
     def lan_id
-      if @dis.is_a?(Neighbor)
-        @dis.lan_id
-      else
-        (@system_id + [@local_circuit_id].pack("C")).b
-      end
+      @dis.is_a?(Neighbor) ? @dis.lan_id : own_lan_id
+    end
+
+    # This system's ID and its Local Circuit ID: the LAN ID it reports while
+    # it is DIS, and so its pseudonode's ID.
+    def own_lan_id
+      (@system_id + [@local_circuit_id].pack("C")).b
     end
 
     def lan_id_s
@@ -177,11 +257,37 @@ module ISIS
       _llc, octets = Datalink::LLC.parse(sdu)
       pdu = Pdu.factory(Octets.new(octets))
       @log.trace(:received, @name, pdu, frame.src.to_s)
-      if pdu.is_a?(Pdu::LanHello)
-        receive_hello(pdu, frame.src)
-      else
-        @log.debug("#{pdu.class.name.split('::').last} ignored: no LAN update process yet", circuit: @name)
+      case pdu
+      when Pdu::LanHello then receive_hello(pdu, frame.src)
+      when Pdu::Lsp, Pdu::Csnp, Pdu::Psnp then receive_update(pdu, frame.src)
+      else @log.debug("#{pdu_name(pdu)} ignored on a LAN circuit", circuit: @name)
       end
+    end
+
+    # An LSP or SNP from +snpa+, handed to the update process when it may
+    # change anything. Returns what was done, or why not, as a Symbol.
+    def receive_update(pdu, snpa)
+      unless pdu.level == @level
+        @log.debug("Level #{pdu.level.inspect} #{pdu_name(pdu)} ignored on a Level #{@level} circuit", circuit: @name)
+        return :level
+      end
+      # No clause in 7.3.15 asks this; isis4r takes LSPs and SNPs only from
+      # a neighbour it has an adjacency Up with, as on a point to point
+      # circuit.
+      neighbor = @neighbors[snpa.to_s]
+      unless neighbor&.state == :up
+        @log.debug("#{pdu_name(pdu)} from #{snpa} ignored: no adjacency up with it", circuit: @name)
+        return :no_adjacency
+      end
+      # Clause 7.3.17: "only the Designated Intermediate System of the
+      # appropriate level shall respond to the PSNP."
+      if pdu.is_a?(Pdu::Psnp) && !dis?
+        @log.debug("PSNP from #{neighbor.system_id_s} ignored: only the DIS responds (RFC 1142 7.3.17)",
+                   circuit: @name)
+        return :not_dis
+      end
+
+      pdu.is_a?(Pdu::Lsp) ? receive_lsp(pdu) : receive_snp(pdu)
     end
 
     # What a received LAN hello changes. Returns what was done, or the
@@ -275,6 +381,7 @@ module ISIS
           @log.info("LAN ID #{LanCircuit.lan_id_text(@reported_lan_id)} -> #{lan_id_s}: " \
                     "the DIS now reports it (RFC 1142 8.4.4)", circuit: @name, kind: :dis, lan_id: lan_id_s)
           hello_contents_changed
+          @originator&.changed("LAN ID on #{@name} now #{lan_id_s} (RFC 1142 7.3.7)")
         end
       else
         change_dis(winner)
@@ -326,6 +433,42 @@ module ISIS
       else
         hello_contents_changed
       end
+      if winner == :self
+        @pseudonode&.start
+        # Not asked by clause 7.3.15.3, which sends one every
+        # completeSNPInterval: one at once, so the LAN need not wait for
+        # the first.
+        send_csnp
+      elsif before == :self
+        @pseudonode&.stop
+      end
+      @originator&.changed("Level #{@level} DIS on #{@name} now #{describe.call(winner)} (RFC 1142 7.3.7)")
+    end
+
+    # The PSNP timer, clause 7.3.15.4 a: every partialSNPInterval, from a
+    # system that is not DIS. The jitter clause 10.1 asks for is not
+    # applied.
+    def start_psnp_timer
+      @psnp_timer = @scheduler.after(@partial_snp_interval) do
+        send_psnp unless dis? || up_neighbors.empty?
+        start_psnp_timer
+      end
+    end
+
+    # The CSNP timer, clause 7.3.15.3 a: every completeSNPInterval, from the
+    # DIS. Without jitter.
+    def start_csnp_timer
+      @csnp_timer = @scheduler.after(@complete_snp_interval) do
+        send_csnp if dis?
+        start_csnp_timer
+      end
+    end
+
+    # The adjacencies Up changed: the pseudonode LSP lists them, and with
+    # none left nothing is owed on the circuit.
+    def up_changed(why)
+      @pseudonode.changed("#{why} (RFC 1142 7.3.8)") if dis? && @pseudonode
+      clear_update_state if up_neighbors.empty?
     end
 
     def transition(neighbor, to, why)
@@ -334,6 +477,7 @@ module ISIS
       @log.info("adjacency with #{neighbor.system_id_s} at #{neighbor.snpa} #{from} -> #{to}: #{why} " \
                 "(RFC 1142 8.4.1.5)", circuit: @name, kind: :adjacency, neighbor: neighbor.system_id_s,
                                       from: from, to: to)
+      up_changed("adjacency with #{neighbor.system_id_s} #{to}")
     end
 
     # The hello timer, clause 8.4.3 a. Jitter (clause 10.1) is not applied.
@@ -378,6 +522,7 @@ module ISIS
                   circuit: @name, kind: :adjacency, neighbor: neighbor.system_id_s, from: neighbor.state,
                   to: :down, reason: reason)
         hello_contents_changed
+        up_changed("adjacency with #{neighbor.system_id_s} down") if neighbor.state == :up
         elect
       else
         @log.info("hello refused: #{why}", circuit: @name, kind: :refused, reason: reason)

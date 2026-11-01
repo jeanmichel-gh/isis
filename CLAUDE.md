@@ -1823,8 +1823,19 @@ its LAN ID whichever side wins, follows a DIS change made by raising
 FRR's priority with no adjacency going down, and expires FRR when it goes
 silent, after which isis4r, alone, elects no DIS. Measured on the way:
 FRR's first LAN hellos carry a LAN ID of zeros until its own election.
-Still owed by gate 1: the update process on a LAN, CSNPs from the DIS and
-PSNPs from the others, and pseudonode LSPs, so the databases agree. Not yet in the
+The update process now lives in `lib/isis/database/update_process.rb`,
+shared by both circuits, with the broadcast variants of RFC 1142 clause
+7.3.15 where it says "non-broadcast". `LanCircuit` runs it: CSNPs from the
+DIS every completeSNPInterval, PSNPs from the others, LSPs one per
+minimumBroadcastLSPTransmissionInterval. With an originator, its LSP names
+the DIS's LAN ID (7.3.7), and while DIS it generates the pseudonode LSP
+through `lib/isis/database/pseudonode.rb` (7.3.8). Measured 2026-11-01 on
+FRR 8.4.4: with either side as DIS, both databases hold the same LSPs at
+the same sequences, the pseudonode included, and FRR installs isis4r's
+prefix. Measured on the way: FRR 8.4.4 installs that route even when
+isis4r's LSP names no pseudonode, so the test asserts the TLV 22 line FRR
+holds. **Still owed by gate 1**: agreement through a DIS change, which
+needs purges, since the old DIS's pseudonode LSP has to go. Not yet in the
 originator: a second LSP Number when one LSP is full, and jitter on the
 refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
 confusion over another system's LSP (7.3.16.2) and a stale LSP with this

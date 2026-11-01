@@ -16,8 +16,8 @@ module ISIS
   # defaults follow the clauses quoted beside them, and every refusal is
   # logged with its reason.
   #
-  # The update process here is RFC 1142 clause 7.3.15 for one non-broadcast
-  # circuit: the SRM and SSN flags on the database's entries, a PSNP every
+  # The update process is UpdateProcess's, RFC 1142 clause 7.3.15 for one
+  # non-broadcast circuit: the SRM and SSN flags on the database's entries, a PSNP every
   # partialSNPInterval carrying the entries with SSN set, a CSNP when the
   # adjacency comes up, and the LSPs with SRM set sent every
   # minimumLSPTransmissionInterval until the neighbour acknowledges them.
@@ -33,6 +33,8 @@ module ISIS
   # refused unless its digest checks out under that key. Without one,
   # nothing is added and nothing is checked.
   class P2pCircuit
+    include UpdateProcess
+
     # AllISs. RFC 5309 section 4.1 recommends it for point to point hellos
     # on a LAN; second hand, from FRR's isis_pfpacket.c, which cites that
     # section. RFC 5309 itself is not read here.
@@ -111,6 +113,20 @@ module ISIS
       three_way_state == :up
     end
 
+    # For UpdateProcess: a point to point circuit, at Level 1.
+    def broadcast?
+      false
+    end
+
+    def level
+      1
+    end
+
+    # The originators whose LSPs this circuit may receive copies of.
+    def generators
+      [@originator].compact
+    end
+
     # What this circuit puts in its system's TLV 22: the neighbour's System
     # ID with "an appended zero octet (indicating non-pseudonode)" and the
     # circuit's metric, from an adjacency Up (RFC 1142 7.3.7). Nil without.
@@ -178,135 +194,6 @@ module ISIS
       end
     end
 
-    # What a received LSP does, RFC 1142 clause 7.3.15.1. Returns what
-    # happened, or the reason it was refused, as a Symbol.
-    def receive_lsp(lsp)
-      id = lsp.lsp_id_s
-      # Clause 7.3.15.1 a 2: an ID Length that is not ours.
-      if lsp.lsp_id.bytesize != @system_id.bytesize + 2
-        return refuse_pdu(:id_length, "LSP #{id}: ID Length #{lsp.lsp_id.bytesize - 2} octets, ours is " \
-                                      "#{@system_id.bytesize} (RFC 1142 7.3.15.1 a 2)")
-      end
-      # Clause 7.3.14 e asks for a corrupted LSP to be treated as expired,
-      # which is a purge, and purging is not here yet.
-      unless lsp.checksum_ok?
-        return refuse_pdu(:checksum, "LSP #{id}: checksum #{format('0x%04x', lsp.checksum)} is wrong; " \
-                                     "RFC 1142 7.3.14 e treats it as expired, and purging is not implemented")
-      end
-      # Clause 7.3.15.1 a 3, and RFC 5304 section 2.
-      if (why = authentication_refusal(lsp, @area_key, "RFC 1142 7.3.15.1 a 3"))
-        return refuse_pdu(:authentication, "LSP #{id}: #{why}")
-      end
-      # Clause 7.3.15.1 b sends a zero Remaining Lifetime to 7.3.16.4.
-      return refuse_pdu(:purge, "LSP #{id}: a purge (lifetime 0); RFC 1142 7.3.16.4 is not implemented") if lsp.lifetime.zero?
-      # Clause 7.3.15.1 c and d: an LSP with this system's ID.
-      return receive_own_lsp(lsp) if lsp.lsp_id.byteslice(0, @system_id.bytesize) == @system_id
-
-      entry = @database.entry(lsp.lsp_id)
-      result = entry.placeholder? ? :new : Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime,
-                                                                   checksum: lsp.checksum)
-      case result
-      when :new, :newer
-        held = entry.sequence
-        entry.store(lsp)
-        # Clause 7.3.15.1 e 1: store, clear SRM for C, and on a
-        # non-broadcast circuit set SSN for C. There are no other circuits.
-        entry.srm.delete(@name)
-        set_ssn(entry)
-        @log.info("LSP #{id} sequence #{seq(lsp.sequence)} stored: " \
-                  "#{result == :new ? 'not held before' : "newer than #{seq(held)}"} (RFC 1142 7.3.15.1 e 1)",
-                  circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: result)
-      when :equal
-        # Clause 7.3.15.1 e 2: clear SRM, set SSN.
-        entry.srm.delete(@name)
-        set_ssn(entry)
-        @log.debug("LSP #{id} sequence #{seq(lsp.sequence)} equals the held one, acknowledged", circuit: @name)
-      when :older
-        # Clause 7.3.15.1 e 3: set SRM, clear SSN, so ours goes back.
-        entry.ssn.delete(@name)
-        set_srm(entry)
-        @log.info("LSP #{id} sequence #{seq(lsp.sequence)} is older than the held #{seq(entry.sequence)}, " \
-                  "sending ours (RFC 1142 7.3.15.1 e 3)", circuit: @name, kind: :database, lsp_id: id, result: result)
-      when :confused
-        return refuse_pdu(:confused, "LSP #{id}: same sequence #{seq(lsp.sequence)}, different checksum; " \
-                                     "RFC 1142 7.3.16.2 treats it as expired, and purging is not implemented")
-      end
-      result
-    end
-
-    # What a received CSNP or PSNP does, RFC 1142 clause 7.3.15.2.
-    def receive_snp(snp)
-      if snp.source_id.bytesize != @system_id.bytesize + 1
-        return refuse_pdu(:id_length, "#{pdu_name(snp)}: ID Length #{snp.source_id.bytesize - 1} octets, ours is " \
-                                      "#{@system_id.bytesize} (RFC 1142 7.3.15.2 a 2)")
-      end
-      # Clause 7.3.15.2 a 3, and RFC 5304 section 2.
-      if (why = authentication_refusal(snp, @area_key, "RFC 1142 7.3.15.2 a 3"))
-        return refuse_pdu(:authentication, "#{pdu_name(snp)}: #{why}")
-      end
-
-      mentioned = Set.new
-      snp_entries(snp).each do |reported|
-        mentioned << reported.lsp_id
-        snp_entry(reported)
-      end
-      # Clause 7.3.15.2 c: a CSNP sets SRM for what this system holds in its
-      # range and the neighbour did not mention.
-      if snp.is_a?(Pdu::Csnp)
-        @database.range(snp.start_lsp_id, snp.end_lsp_id).each do |entry|
-          next if mentioned.include?(entry.lsp_id) || entry.sequence.zero? || entry.remaining_lifetime.zero?
-
-          set_srm(entry)
-          @log.debug("#{entry.lsp_id_s} not in the neighbour's CSNP, sending it (RFC 1142 7.3.15.2 c)", circuit: @name)
-        end
-      end
-      :processed
-    end
-
-    # Send a PSNP with every entry whose SSN is set for this circuit, and
-    # clear them. RFC 1142 clause 7.3.15.4: "If there were no ... Link State
-    # PDUs with SSNflag set, do not transmit". Returns the PSNP, or nil.
-    def send_psnp
-      entries = @database.entries.select { |e| e.ssn.include?(@name) }
-      return nil if entries.empty?
-
-      psnp = Pdu::Psnp.new(level: 1, source_id: snp_source_id,
-                           tlvs: keyed(lsp_entry_tlvs(entries.map(&:snp_entry)), @area_key))
-      psnp.key = @area_key
-      entries.each { |e| e.ssn.delete(@name) }
-      @log.debug("PSNP with #{entries.size} entries: #{entries.map(&:lsp_id_s).join(', ')}", circuit: @name)
-      transmit(psnp)
-    end
-
-    # The CSNP clause 7.3.15.3 b sends on a point to point circuit "at
-    # initialisation": every LSP held, over the whole range. One PDU; more
-    # LSPs than fit in one is not handled yet.
-    def send_csnp
-      entries = @database.entries.reject { |e| e.sequence.zero? }.map(&:snp_entry)
-      csnp = Pdu::Csnp.new(level: 1, source_id: snp_source_id, tlvs: keyed(lsp_entry_tlvs(entries), @area_key))
-      csnp.key = @area_key
-      @log.debug("CSNP with #{entries.size} entries", circuit: @name)
-      transmit(csnp)
-    end
-
-    # Send every LSP whose SRM is set for this circuit. On a non-broadcast
-    # circuit SRM stays set until an LSP or SNP clears it (clause 7.3.15),
-    # so this runs again every minimumLSPTransmissionInterval while any is
-    # set. Before sending, the Remaining Lifetime is what is left, less one
-    # (clause 7.3.16.3: "decrement the Remaining Lifetime in the PDU being
-    # transmitted by at least 1").
-    def send_srm_lsps
-      @srm_timer = nil
-      entries = @database.entries.select { |e| e.srm.include?(@name) && !e.placeholder? }
-      entries.each do |entry|
-        lsp = Pdu::Lsp.new(entry.lsp)
-        lsp.lifetime = [entry.remaining_lifetime - 1, 0].max
-        transmit(lsp)
-      end
-      schedule_srm(@lsp_transmission_interval) unless entries.empty?
-      entries.size
-    end
-
     # What a received hello changes. Returns the action taken, or the
     # reason it was refused, as a Symbol.
     def receive_hello(hello, snpa)
@@ -353,14 +240,6 @@ module ISIS
     end
 
     private
-
-    def keyed(tlvs, key)
-      Receive::Authentication.keyed(tlvs, key)
-    end
-
-    def authentication_refusal(pdu, key, clause)
-      Receive::Authentication.refusal(pdu, key, clause)
-    end
 
     def holding_time
       [@hello_interval * @hello_multiplier, 0xffff].min
@@ -419,45 +298,9 @@ module ISIS
     # The neighbour is gone, so nothing is owed to it on this circuit.
     def adjacency_down
       @originator&.changed("adjacency on #{@name} down (RFC 1142 7.3.6)")
-      [@psnp_timer, @srm_timer].each { |t| t&.cancel }
-      @psnp_timer = @srm_timer = nil
-      @database.entries.each do |e|
-        e.srm.delete(@name)
-        e.ssn.delete(@name)
-      end
-    end
-
-    # Clause 7.3.15.1 c: an LSP with this system's ID that it does not
-    # generate is purged network wide, which is not here yet. Clause d: one
-    # it does generate is compared with the held copy. Equal is acknowledged
-    # and older sends ours back, as for any LSP (7.3.15.1 e 2 and e 3).
-    # Newer, or the same sequence with another checksum, is the
-    # originator's: it generates past the received sequence (7.3.16.1,
-    # 7.3.16.2).
-    def receive_own_lsp(lsp)
-      id = lsp.lsp_id_s
-      unless @originator&.generates?(lsp.lsp_id)
-        return refuse_pdu(:own, "LSP #{id} carries this system's ID and is not one it generates; " \
-                                "RFC 1142 7.3.15.1 c purges it, and purging is not implemented")
-      end
-
-      entry = @database.entry(lsp.lsp_id)
-      result = Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime, checksum: lsp.checksum)
-      case result
-      when :equal
-        entry.srm.delete(@name)
-        set_ssn(entry)
-        @log.debug("own LSP #{id} sequence #{seq(lsp.sequence)} equals ours, acknowledged", circuit: @name)
-      when :older
-        entry.ssn.delete(@name)
-        set_srm(entry)
-        @log.debug("own LSP #{id} sequence #{seq(lsp.sequence)} is older than ours, sending ours", circuit: @name)
-      else
-        @log.info("own LSP #{id} received with sequence #{seq(lsp.sequence)}, ours is #{seq(entry.sequence)}: " \
-                  "#{result}", circuit: @name, kind: :database, lsp_id: id, result: result)
-        @originator.receive_own(result, lsp)
-      end
-      result
+      @psnp_timer&.cancel
+      @psnp_timer = nil
+      clear_update_state
     end
 
     def receive_update(pdu)
@@ -469,69 +312,6 @@ module ISIS
       pdu.is_a?(Pdu::Lsp) ? receive_lsp(pdu) : receive_snp(pdu)
     end
 
-    def snp_entries(snp)
-      snp.tlvs.select { |t| t.is_a?(Tlv::LspEntries) }.flat_map(&:entries)
-    end
-
-    # One reported entry against the database, RFC 1142 clause 7.3.15.2 b.
-    def snp_entry(reported)
-      held = @database[reported.lsp_id]
-      if held.nil?
-        # b 4: nothing held, and the report is all non-zero: make a
-        # sequence 0 entry and ask for it.
-        return if [reported.lifetime, reported.checksum, reported.sequence].any?(&:zero?)
-
-        entry = @database.entry(reported.lsp_id)
-        set_ssn(entry)
-        @log.debug("#{entry.lsp_id_s} reported and not held, requesting it (RFC 1142 7.3.15.2 b 4)", circuit: @name)
-        return
-      end
-
-      case Database.compare(held, sequence: reported.sequence, lifetime: reported.lifetime, checksum: reported.checksum)
-      when :equal
-        # b 1: the neighbour has it, so it is acknowledged.
-        held.srm.delete(@name)
-      when :older
-        # b 2: the neighbour's is older, so send ours.
-        held.ssn.delete(@name)
-        set_srm(held)
-      when :newer
-        # b 3: the neighbour's is newer, so ask for it.
-        set_ssn(held)
-        held.srm.delete(@name)
-        @log.debug("#{held.lsp_id_s} reported newer (#{seq(reported.sequence)} against #{seq(held.sequence)}), " \
-                   "requesting it (RFC 1142 7.3.15.2 b 3)", circuit: @name)
-      when :confused
-        @log.info("#{held.lsp_id_s} reported with sequence #{seq(reported.sequence)} and a different checksum; " \
-                  "RFC 1142 7.3.16.2 is not implemented", circuit: @name, kind: :refused, reason: :confused)
-      end
-    end
-
-    def set_ssn(entry)
-      entry.ssn << @name
-    end
-
-    # RFC 1142 clause 7.3.15: "SRMflag shall never be set for an LSP with
-    # sequence number zero".
-    def set_srm(entry)
-      return if entry.sequence.zero?
-
-      entry.srm << @name
-      schedule_srm(0)
-    end
-
-    def schedule_srm(delay)
-      @srm_timer ||= @scheduler.after(delay) { send_srm_lsps }
-    end
-
-    # TLV 9s holding +entries+, as many to a TLV as fit in 255 octets.
-    def lsp_entry_tlvs(entries)
-      return [] if entries.empty?
-
-      per_tlv = 255 / (@system_id.bytesize + 10)
-      entries.each_slice(per_tlv).map { |slice| Tlv::LspEntries.new(slice) }
-    end
-
     # The PSNP timer, clause 7.3.15.4: every partialSNPInterval. The jitter
     # clause 10.1 asks for is not applied yet.
     def start_psnp_timer
@@ -539,26 +319,6 @@ module ISIS
         send_psnp
         start_psnp_timer
       end
-    end
-
-    # This system's ID with a zero circuit octet, as the Source ID of an SNP
-    # is written: "the system ID of Intermediate System (with zero Circuit
-    # ID)", RFC 1142 clause 9.10.
-    def snp_source_id
-      "#{@system_id.unpack1('H*').scan(/.{1,4}/).join('.')}.00"
-    end
-
-    def seq(n)
-      format("0x%08x", n)
-    end
-
-    def pdu_name(pdu)
-      pdu.class.name.split("::").last
-    end
-
-    def refuse_pdu(reason, why)
-      @log.info("refused: #{why}", circuit: @name, kind: :refused, reason: reason)
-      reason
     end
 
     # RFC 1142 clause 8.2.5: a neighbour not heard from within its holding

@@ -3,11 +3,12 @@
 require_relative "../test_helper"
 require_relative "../support/frr_lab"
 
-# Phase 2 gate 1, the adjacency half, against FRR's isisd on a broadcast
-# circuit: both sides come up, agree on the Level 1 DIS and its LAN ID,
-# and agree again when the DIS changes. RFC 1142 clauses 8.4.1 to 8.4.4.
-# The update process on a LAN, and so database agreement, is the next
-# step.
+# Phase 2 gate 1 against FRR's isisd on a broadcast circuit: both sides
+# come up, agree on the Level 1 DIS and its LAN ID, and agree again when
+# the DIS changes (RFC 1142 clauses 8.4.1 to 8.4.4); and with either side
+# as DIS the databases agree, the DIS's pseudonode LSP included, and FRR
+# routes to isis4r's prefix through the pseudonode (7.3.7, 7.3.8, 7.3.15).
+# Database agreement through a DIS change needs purges, which are next.
 #
 # Runs only as root with FRR installed and ISIS_FRR=1, like
 # frr_p2p_test.rb. LAN addresses are random per run, so each test sets the
@@ -91,5 +92,68 @@ class TestFrrLan < Minitest::Test
     assert_eventually("isis4r kept FRR after it went silent", 10) { isis4r["neighbors"].empty? }
     assert_nil isis4r["dis"]
     assert_equal ISIS4R_LAN_ID, isis4r["lan_id"]
+  end
+
+  # The LSPs each side holds, as LSP ID => sequence. isis4r's placeholders,
+  # sequence 0, are requests and not LSPs (7.3.15.2 b 4).
+  def isis4r_lsps
+    @lab.isis4r_database.reject { |_, e| e["sequence"].zero? }.transform_values { |e| e["sequence"] }
+  end
+
+  def frr_lsps
+    @lab.frr_database.transform_values { |e| e["sequence"] }
+  end
+
+  def frr_routes_isis4rs_prefix?
+    route = @lab.frr_route("192.0.2.1/32")
+    route && route["protocol"] == "isis" && route["installed"] &&
+      route["nexthops"].any? { |n| n["ip"] == "10.0.12.1" && n["interfaceName"] == "veth0" }
+  end
+
+  # FRR holds isis4r's LSP naming the pseudonode +lan_id+ at metric 10
+  # (7.3.7). Asserted on its own because the route does not show it:
+  # measured on FRR 8.4.4, FRR installs 192.0.2.1/32 even when isis4r's LSP
+  # names no pseudonode at all, so its SPF does not check the link from
+  # isis4r back to the pseudonode.
+  def assert_frr_holds_isis4r_naming(lan_id)
+    line = "Extended Reachability: #{lan_id} (Metric: 10)"
+    assert_eventually("FRR does not hold isis4r's LSP naming #{lan_id}") do
+      @lab.frr_database_detail["#{FrrLab::ISIS4R_ID}.00-00"]&.include?(line)
+    end
+  end
+
+  # isis4r as DIS: it sends the CSNPs and generates the pseudonode LSP,
+  # and both databases hold the same three LSPs at the same sequences.
+  # FRR's SPF reaches isis4r only through that pseudonode, so the route
+  # to 192.0.2.1/32, which only isis4r advertises, shows FRR used it.
+  def test_databases_agree_with_isis4r_as_dis
+    @lab.start(network: :broadcast, isis4r: { priority: 100 })
+    assert_eventually("isis4r did not become DIS") { both_up? && isis4r["dis"] == "self" }
+    expected = ["#{FrrLab::ISIS4R_ID}.00-00", "#{FrrLab::ISIS4R_ID}.01-00", "#{FrrLab::FRR_ID}.00-00"].sort
+    assert_eventually("the databases do not agree", 30) do
+      isis4r_lsps.keys.sort == expected && isis4r_lsps == frr_lsps
+    end
+    assert_frr_holds_isis4r_naming(ISIS4R_LAN_ID)
+    assert_eventually("FRR did not route to 192.0.2.1/32 through isis4r's pseudonode", 60) do
+      frr_routes_isis4rs_prefix?
+    end
+  end
+
+  # FRR as DIS: FRR's CSNPs and pseudonode LSP, and isis4r asks for what
+  # it lacks in PSNPs. The same agreement, with FRR's pseudonode in place
+  # of isis4r's, and isis4r's LSP naming it.
+  def test_databases_agree_with_frr_as_dis
+    @lab.start(network: :broadcast, isis4r: { priority: 10 })
+    assert_eventually("FRR did not become DIS") { both_up? && isis4r["dis"] == FrrLab::FRR_ID }
+    pattern = /\A#{Regexp.escape(FrrLab::FRR_ID)}\.(\h\h)-00\z/
+    assert_eventually("the databases do not agree", 30) do
+      lsps = isis4r_lsps
+      pseudonodes = lsps.keys.grep(pattern).reject { |id| id.end_with?(".00-00") }
+      lsps.size == 3 && pseudonodes.size == 1 && lsps.key?("#{FrrLab::ISIS4R_ID}.00-00") && lsps == frr_lsps
+    end
+    assert_frr_holds_isis4r_naming(isis4r["lan_id"])
+    assert_eventually("FRR did not route to 192.0.2.1/32 through its pseudonode", 60) do
+      frr_routes_isis4rs_prefix?
+    end
   end
 end
