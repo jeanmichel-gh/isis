@@ -103,7 +103,9 @@ lib/isis/codepoints.rb     the IANA numbers in one place: PDU types, TLV
                            registry's own names beside them
 lib/isis/pdu/              one file per PDU layout, which is five and not
                            nine, plus pdu.rb with the common header, the
-                           type registry and Pdu::Unknown
+                           type registry, Pdu::Unknown, Truncated and
+                           Malformed, and capture.rb with the capture that
+                           owns what follows a PDU
 lib/isis/tlv/              one file per TLV, plus tlv.rb with the framing,
                            the registry, Tlv::Unknown and the TLV list
 lib/isis/subtlv/           sub-TLVs, grouped by the TLV that carries them,
@@ -1642,17 +1644,18 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
 scheduler, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
-registry, `Tlv::Unknown` and the TLV list, `lib/isis/pdu/lan_hello.rb`, and
+registry, `Tlv::Unknown` and the TLV list, `lib/isis/pdu/pdu.rb` with the
+common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
+and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
+layout, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
 `lib/isis/adjacency/` with the adjacency and the circuit, both on the
 injected clock. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
-wire mark and the constructor dispatch, written up in
-`docs/building-objects.md`. Tests are under `test/unit/` and `test/docs/`,
-and the time guard passes. The LAN Hello still has its proof of concept
-API, but reads and writes its TLVs through the TLV list. Phase 1 gate 1 is
-met at the TLV level: framing, `Tlv::Unknown` and parse rules 1 to 4, with
-the TLV truncation tests. Still missing: `pdu.rb` with the common header
-class, the type registry and `Pdu::Unknown`, parse rules 5 to 7, and the
-capture object above a PDU. The gem has not been
+wire mark and the constructor dispatch. `docs/building-objects.md` and
+`docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
+1 is met**, with one reservation: the header fields are second hand, from
+Wireshark and FRR, not read in the standard (see the list at the end). The
+LAN Hello still has its proof of concept API and moves onto the contract
+in gate 2. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
 
@@ -1854,8 +1857,38 @@ written down as settled.
 Written from memory while planning, so each is a lead and not a fact. Check
 each against the document and replace this list with what you found.
 
+**Found second hand, 2026-10-31.** RFC 1142 section 9 could not be read
+from the sandbox: rfc-editor.org is blocked and every mirror the fetcher
+reached stops partway through section 7. So these were checked against two
+independent open source implementations instead, Wireshark
+(`epan/dissectors/packet-isis.c`, `packet-isis.h`, `packet-isis-hello.c`)
+and FRR (`isisd/isis_pdu.c`, `isis_pdu.h`). Two implementations agreeing is
+evidence, not the standard. Each stays on this list until somebody reads
+the clause.
+
+* ID Length: 0 means six octets and 255 means a null System ID, in
+  Wireshark; FRR accepts only 0 and 6. Used in `Pdu.id_width`.
+* PDU type numbers 15, 16, 17, 18, 20, 24, 25, 26 and 27, and the type as
+  the low five bits with the top three reserved: Wireshark and FRR agree.
+* Maximum Area Addresses of 0 means three: Wireshark's field description
+  only.
+* The Length Indicator is the fixed header length: Wireshark flags a value
+  "smaller than the fixed length header size". FRR's fixed header sizes are
+  8 for the common header, then 19 for a LAN hello, 12 for a point to
+  point hello, 19 for an LSP, 25 for a CSNP and 9 for a PSNP, all for a six
+  octet ID.
+* The hello Circuit Type is the low two bits with six reserved, and the LAN
+  hello Priority the low seven with one reserved: Wireshark's masks.
+* The LSP checksum span: the visible end of RFC 1142 clause 7.3.11 says
+  "All Checksum calculations on the LSP are performed treating the SOURCE ID
+  field as the first octet", which agrees with the span written above. Only
+  the end of the clause could be read, so the transit rule below is still
+  unread.
+
+Still from memory:
+
 * The ID Length encoding, including what zero means and which value means a
-  null System ID.
+  null System ID. Second hand above.
 * The exact span the LSP checksum covers, and that Remaining Lifetime is
   outside it.
 * The Length Indicator value for each PDU type, and that it is the fixed
