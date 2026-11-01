@@ -1742,7 +1742,12 @@ which run the two-way LAN handshake without DIS election and log each
 transition with its reason,
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
-transition and refusal with its reason. `exe/isis-p2p-sim` runs two of them on
+transition and refusal with its reason. `P2pCircuit` also runs RFC 1142
+clause 7.3.15's update process on `lib/isis/database/database.rb`, the
+Level 1 database with per circuit SRM and SSN flags: a CSNP when the
+adjacency comes up, PSNPs every partialSNPInterval for what SSN marks,
+LSPs with SRM set sent every minimumLSPTransmissionInterval until
+acknowledged, and the LSP and SNP receipt rules of 7.3.15.1 and 7.3.15.2. `exe/isis-p2p-sim` runs two of them on
 simulated time with `--log` and `--debug`, for watching the handshake and
 its logs by hand. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
@@ -1760,11 +1765,17 @@ it and logs through `Runtime::Log`, and `exe/isis-demo` runs two of them
 with `--log` and `--debug`. That closes gate 2's list. **Gate 3 has
 begun**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
 CSNP captured from FRR 8.4.4 byte for byte, the LSP's checksum included,
-and TLV 9 reads the CSNP's entries at the PDU's ID Length. One thing measured for the
-rest of the gate: on a point to point circuit FRR 8.4.4 does not flood its
-own LSP when the adjacency comes up. It lists it in a CSNP and sends it
-only when a PSNP asks, so isis4r has to answer CSNPs before FRR will tell
-it anything. Not yet done in the hellos: the padding RFC 1142 clause
+and TLV 9 reads the CSNP's entries at the PDU's ID Length. **The
+receiving half of the gate is shown against FRR 8.4.4**:
+`test_isis4r_learns_and_acknowledges_frrs_lsp` has isis4r store FRR's
+LSP at FRR's sequence and checksum and acknowledge it, after which FRR
+stops sending it. Measured on the way: on a point to point circuit FRR
+8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
+in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
+gate 3: isis4r's own LSP, so FRR learns its prefix; TLVs 2, 22, 128 and
+135; TLV 10. Not yet in the update process: purges (7.3.16.4), LSP
+confusion (7.3.16.2), a received LSP with this system's ID (7.3.15.1 c
+and d), PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.

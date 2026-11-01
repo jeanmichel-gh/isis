@@ -182,7 +182,9 @@ class TestP2pCircuit < Minitest::Test
     assert(@lines.any? { |l, m| l == :debug && m.include?("three-way up, received up: accept") })
     directions = @traces.map(&:first).uniq.sort
     assert_equal %i[received sent], directions
-    assert(@traces.all? { |_, circuit, pdu, _| circuit == "a-eth1" && pdu.is_a?(ISIS::Pdu::P2pHello) })
+    # Hellos, and the CSNP each side sends when the adjacency comes up.
+    assert(@traces.all? { |_, circuit, _, _| circuit == "a-eth1" })
+    assert_equal [ISIS::Pdu::Csnp, ISIS::Pdu::P2pHello], @traces.map { |t| t[2].class }.uniq.sort_by(&:name)
   end
 
   # Logging is observation. The same scenario with a debug logger and
@@ -192,6 +194,149 @@ class TestP2pCircuit < Minitest::Test
     with = scenario(logger: ->(*) {}, tracer: ->(*) {})
     without = scenario
     assert_equal without, with
+  end
+
+  # -- The update process, RFC 1142 clause 7.3.15, on the same wire. --
+  #
+  # Neither circuit originates an LSP yet, so a test seeds one side's
+  # database with an LSP from a third system, as if learned elsewhere.
+
+  THIRD = "0000.0000.00cc.00-00"
+
+  def lsp(sequence: 5, lifetime: 1200, id: THIRD)
+    ISIS::Pdu::Lsp.new(level: 1, lsp_id: id, lifetime: lifetime, sequence: sequence,
+                       tlvs: [ISIS::Tlv::AreaAddresses.new("49.0001")])
+  end
+
+  def seed(circuit, lsp)
+    circuit.database.entry(lsp.lsp_id).store(lsp)
+  end
+
+  def held(circuit, id = THIRD)
+    circuit.database[ISIS::Pdu.lsp_id_octets(id)]
+  end
+
+  def up_both
+    start_both
+    run_for(7)
+    assert(@a.up? && @b.up?)
+  end
+
+  def sent(type)
+    @traces.select { |dir, _, pdu, _| dir == :sent && pdu.is_a?(type) }.map { |t| t[2] }
+  end
+
+  # b's CSNP at adjacency up does not mention the LSP a holds, so a sets
+  # SRM and sends it (7.3.15.2 c). b stores it, sets SSN (7.3.15.1 e 1) and
+  # acknowledges it in a PSNP, which clears a's SRM (7.3.15.2 b 1).
+  def test_an_lsp_one_side_holds_reaches_the_other_and_is_acknowledged
+    seed(@a, lsp)
+    up_both
+    run_for(6)
+    entry = held(@b)
+    refute_nil entry
+    assert_equal [5, lsp.checksum], [entry.sequence, entry.checksum]
+    assert_empty held(@a).srm, "b's PSNP should have acknowledged it"
+    assert_empty entry.ssn, "b's PSNP should have gone out"
+    assert(@log_b.events.any? { |e| e.kind == :database && e.data[:lsp_id] == THIRD && e.data[:result] == :new })
+  end
+
+  # On a non-broadcast circuit SRM stays set until acknowledged, so with b's
+  # PSNPs lost a sends the LSP again every minimumLSPTransmissionInterval.
+  def test_an_unacknowledged_lsp_is_sent_again
+    seed(@a, lsp)
+    @b.define_singleton_method(:send_psnp) { nil }
+    up_both
+    first = sent(ISIS::Pdu::Lsp).size
+    run_for(11)
+    assert_operator sent(ISIS::Pdu::Lsp).size, :>=, first + 2
+    refute_empty held(@a).srm
+  end
+
+  # Each copy sent has had its Remaining Lifetime counted down, and one
+  # more taken off for the hop (7.3.16.3).
+  def test_the_lifetime_sent_is_counted_down
+    seed(@a, lsp(lifetime: 1200))
+    up_both
+    sent_lifetime = sent(ISIS::Pdu::Lsp).first.lifetime
+    assert_operator sent_lifetime, :<, 1200
+    assert_operator sent_lifetime, :>=, 1200 - 8
+  end
+
+  # b holds sequence 5, a holds 7. a's CSNP reports 7, newer, so b asks for
+  # it (7.3.15.2 b 3); b's reports 5, older, so a sends 7 (b 2).
+  def test_the_newer_copy_wins
+    seed(@a, lsp(sequence: 7))
+    seed(@b, lsp(sequence: 5))
+    up_both
+    run_for(6)
+    assert_equal 7, held(@b).sequence
+    assert_equal 7, held(@a).sequence
+  end
+
+  # An entry for an LSP b does not hold makes a sequence 0 placeholder, and
+  # b's PSNP asks for it with lifetime, sequence and checksum zero, which
+  # is the request FRR answers (7.3.15.2 b 4).
+  def test_an_unknown_lsp_is_requested_with_a_zero_entry
+    up_both
+    entry = ISIS::Tlv::LspEntries::Entry.new(1100, ISIS::Pdu.lsp_id_octets(THIRD), 9, 0x1234)
+    csnp = ISIS::Pdu::Csnp.new(level: 1, source_id: "0000.0000.000a.00", tlvs: [ISIS::Tlv::LspEntries.new(entry)])
+    @b.receive_snp(csnp)
+    assert held(@b).placeholder?
+    psnp = @b.send_psnp
+    # 0000 lifetime, 0000000000cc0000 the LSP ID, 00000000 sequence, 0000
+    # checksum.
+    assert_equal "0000" "0000000000cc0000" "00000000" "0000", psnp.tlvs.first.to_shex[4..]
+  end
+
+  # Clause 7.3.15.2 c directly: a CSNP that does not mention an LSP held in
+  # its range sets SRM for it.
+  def test_a_csnp_that_omits_an_lsp_sets_srm
+    seed(@a, lsp)
+    up_both
+    held(@a).srm.clear
+    @a.receive_snp(ISIS::Pdu::Csnp.new(level: 1, source_id: "0000.0000.000b.00"))
+    refute_empty held(@a).srm
+  end
+
+  def test_an_older_lsp_received_sends_ours_back
+    seed(@a, lsp(sequence: 7))
+    up_both
+    assert_equal :older, @a.receive_lsp(lsp(sequence: 3))
+    refute_empty held(@a).srm
+  end
+
+  def test_refusals_say_why
+    up_both
+    bad = ISIS::Pdu.factory(ISIS::Octets.new(lsp.encode.tap { |o| o[24, 2] = "\xde\xad".b }))
+    assert_equal :checksum, @a.receive_lsp(bad)
+    assert_equal :purge, @a.receive_lsp(lsp(lifetime: 0))
+    assert_equal :own, @a.receive_lsp(lsp(id: "0000.0000.000a.00-00"))
+    assert_equal :id_length, @a.receive_lsp(lsp(id: "0000.0000.0000.000a.00-00"))
+    reasons = @log_a.events.select { |e| e.kind == :refused }.map { |e| e.data[:reason] }
+    assert_equal %i[checksum purge own id_length], reasons.last(4)
+    assert_nil held(@a)
+  end
+
+  # Clause 7.3.15 applies to circuits "over which routeing messages are to
+  # be exchanged", so with no adjacency up an LSP changes nothing.
+  def test_nothing_is_stored_without_an_adjacency
+    frame = Datalink::Frame.ieee_802_3(dst: Datalink::MAC.new(ISIS::P2pCircuit::ALL_ISS), src: Datalink::MAC.new("00:00:00:00:00:0b"),
+                                       payload: ISIS::Link.llc.wrap(lsp.encode))
+    @a.receive_frame(frame)
+    assert_nil held(@a)
+  end
+
+  # Losing the neighbour clears what was owed to it.
+  def test_flags_clear_when_the_adjacency_goes
+    seed(@a, lsp)
+    @b.define_singleton_method(:send_psnp) { nil }
+    up_both
+    refute_empty held(@a).srm
+    @b.stop
+    run_for(40, circuits: [@a])
+    refute @a.up?
+    assert_empty held(@a).srm
   end
 
   private
@@ -233,4 +378,5 @@ class TestP2pCircuit < Minitest::Test
     ISIS::Pdu::P2pHello.new(circuit_type: circuit_type, source_id: source, holding_time: 30, local_circuit_id: 1,
                             tlvs: tlvs)
   end
+
 end

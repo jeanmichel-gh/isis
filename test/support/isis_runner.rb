@@ -7,7 +7,7 @@
 #   ruby test/support/isis_runner.rb CONFIG.json STATE.json
 #
 # CONFIG gives the interface and the circuit's settings. STATE is written
-# twice a second with the adjacency, for the test to read. The log goes to
+# twice a second with the adjacency and the database, for the test to read. The log goes to
 # standard output, at debug with a PDU trace, so a failing test can show
 # exactly what happened on the wire.
 $LOAD_PATH.unshift File.expand_path("../../lib", __dir__)
@@ -37,7 +37,11 @@ circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SocketTransport.new(socket
 write_state = lambda do
   n = circuit.neighbor
   state = { state: circuit.three_way_state,
-            neighbor: n && { system_id: n.system_id_s, state: n.state, holding_time: n.holding_time } }
+            neighbor: n && { system_id: n.system_id_s, state: n.state, holding_time: n.holding_time },
+            database: circuit.database.entries.map do |e|
+              { lsp_id: e.lsp_id_s, sequence: e.sequence, checksum: e.checksum,
+                lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size }
+            end }
   File.write("#{state_file}.tmp", JSON.generate(state))
   File.rename("#{state_file}.tmp", state_file)
 end
