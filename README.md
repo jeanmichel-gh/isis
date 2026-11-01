@@ -1,5 +1,7 @@
 # isis-poc
 
+[![CI](https://github.com/jeanmichel-gh/isis/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/jeanmichel-gh/isis/actions/workflows/ci.yml)
+
 A proof-of-concept IS-IS daemon built on
 [datalink-socket](../datalink-socket). It forms a LAN adjacency using
 IS-IS Hello (IIH) PDUs, carried over IEEE 802.3 with an LLC header and
