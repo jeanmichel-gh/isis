@@ -1749,7 +1749,13 @@ clause 7.3.15's update process on `lib/isis/database/database.rb`, the
 Level 1 database with per circuit SRM and SSN flags: a CSNP when the
 adjacency comes up, PSNPs every partialSNPInterval for what SSN marks,
 LSPs with SRM set sent every minimumLSPTransmissionInterval until
-acknowledged, and the LSP and SNP receipt rules of 7.3.15.1 and 7.3.15.2. `exe/isis-p2p-sim` runs two of them on
+acknowledged, and the LSP and SNP receipt rules of 7.3.15.1 and 7.3.15.2.
+`lib/isis/database/originator.rb` builds this system's Level 1 LSP from
+configuration and the circuits' adjacencies, with TLVs 1, 129, 132, 22
+and 135: generated at sequence 1 on start, again on an adjacency Up or
+Down no sooner than minimumLSPGenerationInterval, refreshed every
+maximumLSPGenerationInterval, and moved past a newer copy of itself, per
+RFC 1142 clauses 7.3.5, 7.3.6, 7.3.16.1 and 7.3.16.2. `exe/isis-p2p-sim` runs two of them on
 simulated time with `--log` and `--debug`, for watching the handshake and
 its logs by hand. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
@@ -1778,11 +1784,18 @@ gives it, so it does not take the ID Length. **The
 receiving half of the gate is shown against FRR 8.4.4**:
 `test_isis4r_learns_and_acknowledges_frrs_lsp` has isis4r store FRR's
 LSP at FRR's sequence and checksum and acknowledge it, after which FRR
-stops sending it. Measured on the way: on a point to point circuit FRR
+stops sending it. **So is the sending half**:
+`test_frr_learns_isis4rs_prefix` has FRR hold isis4r's LSP at isis4r's
+sequence and checksum and install 192.0.2.1/32 through isis4r, a prefix
+that exists only in isis4r's TLV 135. Measured on FRR 8.4.4: FRR holds
+isis4r's LSP within a second of the adjacency, but installs the route
+about 30 seconds later, when it regenerates its own LSP with isis4r in
+its TLV 22, since its SPF needs the link in both LSPs. Measured on the way: on a point to point circuit FRR
 8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
 in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
-gate 3: isis4r's own LSP, so FRR learns its prefix; TLVs 2 and 128;
-TLV 10. Not yet in the update process: purges (7.3.16.4), LSP
+gate 3: TLVs 2 and 128, so narrow metrics too; TLV 10. Not yet in the
+originator: a second LSP Number when one LSP is full, and jitter on the
+refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), LSP
 confusion (7.3.16.2), a received LSP with this system's ID (7.3.15.1 c
 and d), PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been

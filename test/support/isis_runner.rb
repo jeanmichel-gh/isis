@@ -28,7 +28,13 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              logger: ISIS::Runtime::Log.writer($stdout, clock: clock, debug: true),
                              tracer: ISIS::Runtime::Log.trace_writer($stdout, clock: clock, debug: true))
 socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
+database = ISIS::Database.new(level: 1, clock: clock)
+originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
+                                  log: log, areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
+                                  prefixes: config.fetch(:prefixes, []),
+                                  minimum_interval: config.fetch(:minimum_lsp_interval, 1))
 circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SocketTransport.new(socket), scheduler: scheduler, log: log,
+                               database: database, originator: originator,
                                name: iface, system_id: config.fetch(:system_id), snpa: mac,
                                areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
                                hello_interval: config.fetch(:hello_interval),
@@ -49,6 +55,7 @@ end
 stop = false
 %w[TERM INT].each { |sig| Signal.trap(sig) { stop = true } }
 
+originator.start
 circuit.start
 next_state = clock.now
 until stop
@@ -63,5 +70,6 @@ until stop
   end
 end
 circuit.stop
+originator.stop
 write_state.call
 socket.close

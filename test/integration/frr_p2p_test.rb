@@ -106,4 +106,29 @@ class TestFrrP2p < Minitest::Test
     assert_operator after - before, :<=, 1, "FRR kept sending its LSP\n#{@lab.report}"
   end
 
+  # Gate 3, the sending half: FRR learns isis4r's LSP at isis4r's sequence
+  # and checksum, runs SPF over it, and installs the prefix isis4r
+  # advertises, through isis4r. 192.0.2.1/32 exists only in isis4r's TLV
+  # 135, so FRR can have the route from nowhere else.
+  def test_frr_learns_isis4rs_prefix
+    @lab.start
+    assert_eventually("adjacency did not come up") { both_up? }
+    own = "#{FrrLab::ISIS4R_ID}.00-00"
+    assert_eventually("FRR does not hold isis4r's latest LSP", 30) do
+      held = @lab.isis4r_database[own]
+      frr = @lab.frr_database[own]
+      held && frr && held["sequence"] >= 2 && frr["sequence"] == held["sequence"] && frr["checksum"] == held["checksum"]
+    end
+    # Measured on FRR 8.4.4: the route comes about 30 s after the adjacency.
+    # FRR holds isis4r's LSP within a second, but its own LSP names isis4r
+    # in TLV 22 only when it regenerates it, about 30 s on, and its SPF
+    # needs the link in both LSPs.
+    assert_eventually("FRR did not install 192.0.2.1/32 from IS-IS", 60) do
+      route = @lab.frr_route("192.0.2.1/32")
+      route && route["protocol"] == "isis" && route["installed"] &&
+        route["nexthops"].any? { |n| n["ip"] == "10.0.12.1" && n["interfaceName"] == "veth0" }
+    end
+    assert_eventually("isis4r's LSP is still owed to FRR") { @lab.isis4r_database.dig(own, "srm")&.zero? }
+  end
+
 end
