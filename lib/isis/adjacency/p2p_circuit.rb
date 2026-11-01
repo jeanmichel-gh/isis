@@ -26,6 +26,12 @@ module ISIS
   # copy of it is handled by clause 7.3.15.1 d. Not here yet: purges
   # (clause 7.3.16.4), so LSP confusion (7.3.16.2) and a stale LSP of this
   # system's (7.3.15.1 c) are refused.
+  #
+  # Authentication, RFC 5304 HMAC-MD5: hello_key for the hellos, the link
+  # level password, and area_key for Level 1 LSPs and SNPs. With a key,
+  # what this circuit sends carries TLV 10 first, and what it receives is
+  # refused unless its digest checks out under that key. Without one,
+  # nothing is added and nothing is checked.
   class P2pCircuit
     # AllISs. RFC 5309 section 4.1 recommends it for point to point hellos
     # on a LAN; second hand, from FRR's isis_pfpacket.c, which cites that
@@ -45,11 +51,12 @@ module ISIS
     MINIMUM_LSP_TRANSMISSION_INTERVAL = 5
 
     attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :database, :originator
-    attr_accessor :areas, :hello_interval, :hello_multiplier, :metric
+    attr_accessor :areas, :hello_interval, :hello_multiplier, :metric, :hello_key, :area_key
 
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, areas: ["49.0001"],
                    extended_circuit_id: 1, local_circuit_id: 1, hello_interval: 3, hello_multiplier: 10,
                    ip_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
+                   hello_key: nil, area_key: nil,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL)
       @transport = transport
@@ -73,6 +80,8 @@ module ISIS
       @psnp_timer = nil
       @srm_timer = nil
       @metric = metric
+      @hello_key = hello_key
+      @area_key = area_key
       @originator = originator
       @originator&.attach(self)
     end
@@ -127,8 +136,10 @@ module ISIS
         three_way[:neighbor_extended_circuit_id] = @neighbor.extended_circuit_id
       end
       tlvs << Tlv::ThreeWayAdjacency.new(three_way_state, **three_way.compact)
-      Pdu::P2pHello.new(circuit_type: :l1, source_id: Octets.new(@system_id), holding_time: holding_time,
-                        local_circuit_id: @local_circuit_id, tlvs: tlvs)
+      hello = Pdu::P2pHello.new(circuit_type: :l1, source_id: Octets.new(@system_id), holding_time: holding_time,
+                                local_circuit_id: @local_circuit_id, tlvs: keyed(tlvs, @hello_key))
+      hello.key = @hello_key
+      hello
     end
 
     def send_hello
@@ -182,6 +193,10 @@ module ISIS
         return refuse_pdu(:checksum, "LSP #{id}: checksum #{format('0x%04x', lsp.checksum)} is wrong; " \
                                      "RFC 1142 7.3.14 e treats it as expired, and purging is not implemented")
       end
+      # Clause 7.3.15.1 a 3, and RFC 5304 section 2.
+      if (why = authentication_refusal(lsp, @area_key, "RFC 1142 7.3.15.1 a 3"))
+        return refuse_pdu(:authentication, "LSP #{id}: #{why}")
+      end
       # Clause 7.3.15.1 b sends a zero Remaining Lifetime to 7.3.16.4.
       return refuse_pdu(:purge, "LSP #{id}: a purge (lifetime 0); RFC 1142 7.3.16.4 is not implemented") if lsp.lifetime.zero?
       # Clause 7.3.15.1 c and d: an LSP with this system's ID.
@@ -225,6 +240,10 @@ module ISIS
         return refuse_pdu(:id_length, "#{pdu_name(snp)}: ID Length #{snp.source_id.bytesize - 1} octets, ours is " \
                                       "#{@system_id.bytesize} (RFC 1142 7.3.15.2 a 2)")
       end
+      # Clause 7.3.15.2 a 3, and RFC 5304 section 2.
+      if (why = authentication_refusal(snp, @area_key, "RFC 1142 7.3.15.2 a 3"))
+        return refuse_pdu(:authentication, "#{pdu_name(snp)}: #{why}")
+      end
 
       mentioned = Set.new
       snp_entries(snp).each do |reported|
@@ -251,7 +270,9 @@ module ISIS
       entries = @database.entries.select { |e| e.ssn.include?(@name) }
       return nil if entries.empty?
 
-      psnp = Pdu::Psnp.new(level: 1, source_id: snp_source_id, tlvs: lsp_entry_tlvs(entries.map(&:snp_entry)))
+      psnp = Pdu::Psnp.new(level: 1, source_id: snp_source_id,
+                           tlvs: keyed(lsp_entry_tlvs(entries.map(&:snp_entry)), @area_key))
+      psnp.key = @area_key
       entries.each { |e| e.ssn.delete(@name) }
       @log.debug("PSNP with #{entries.size} entries: #{entries.map(&:lsp_id_s).join(', ')}", circuit: @name)
       transmit(psnp)
@@ -262,7 +283,8 @@ module ISIS
     # LSPs than fit in one is not handled yet.
     def send_csnp
       entries = @database.entries.reject { |e| e.sequence.zero? }.map(&:snp_entry)
-      csnp = Pdu::Csnp.new(level: 1, source_id: snp_source_id, tlvs: lsp_entry_tlvs(entries))
+      csnp = Pdu::Csnp.new(level: 1, source_id: snp_source_id, tlvs: keyed(lsp_entry_tlvs(entries), @area_key))
+      csnp.key = @area_key
       @log.debug("CSNP with #{entries.size} entries", circuit: @name)
       transmit(csnp)
     end
@@ -296,6 +318,10 @@ module ISIS
       return refuse(:id_length, "ID Length #{hello.source_id.bytesize} octets, ours is #{@system_id.bytesize}") if hello.source_id.bytesize != @system_id.bytesize
       # Clause 9.7: circuit type 0 "the entire PDU shall be ignored".
       return refuse(:circuit_type, "circuit type 0 is reserved (RFC 1142 9.7)") if hello.circuit_type == 0
+      # Clause 8.2.4.1 c, and RFC 5304 section 2.
+      if (why = authentication_refusal(hello, @hello_key, "RFC 1142 8.2.4.1 c"))
+        return refuse(:authentication, why)
+      end
 
       three_way = hello.tlvs.find { |t| t.is_a?(Tlv::ThreeWayAdjacency) }
       reason = three_way && three_way_refusal(three_way)
@@ -327,6 +353,31 @@ module ISIS
     end
 
     private
+
+    # +tlvs+ with an HMAC-MD5 Authentication TLV in front when there is a
+    # key. First is where FRR 8.4.4 puts it; RFC 5304 does not say.
+    def keyed(tlvs, key)
+      key ? [Tlv::Authentication.new(:hmac_md5)] + tlvs : tlvs
+    end
+
+    # Why a received PDU fails authentication under +key+, or nil. With no
+    # key there is nothing to check. With one, clause +clause+: a PDU with
+    # no Authentication Information "shall be discarded" (i), and one of a
+    # type this system does not implement is "outside the scope" of the
+    # clause (ii), so isis4r, configured for HMAC-MD5, refuses it too. RFC
+    # 5304 section 2: a receiver "MUST discard the PDU if the
+    # Authentication Value is incorrect".
+    def authentication_refusal(pdu, key, clause)
+      return nil if key.nil?
+
+      unless pdu.tlvs.any? { |t| t.is_a?(Tlv::Authentication) }
+        return "no Authentication Information, and a key is configured (#{clause} i)"
+      end
+      return "authentication is not HMAC-MD5, and isis4r is configured for it (#{clause} ii)" unless pdu.hmac_md5?
+      return "the HMAC-MD5 digest is wrong for the configured key (RFC 5304 section 2)" unless pdu.authentic?(key)
+
+      nil
+    end
 
     def holding_time
       [@hello_interval * @hello_multiplier, 0xffff].min

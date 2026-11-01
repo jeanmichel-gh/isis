@@ -40,10 +40,10 @@ module ISIS
     attr_reader :system_id, :database, :sequence, :circuits, :lsp_id
     METRIC_STYLES = %i[wide narrow transition].freeze
 
-    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style
+    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
-                   ip_addresses: [], prefixes: [], metric_style: :wide,
+                   ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
                    buffer_size: LSP_BUFFER_SIZE)
@@ -59,6 +59,7 @@ module ISIS
       raise ArgumentError, "metric style is :wide, :narrow or :transition" unless METRIC_STYLES.include?(metric_style)
 
       @metric_style = metric_style
+      @area_key = area_key
       @refresh_interval = refresh_interval
       @minimum_interval = minimum_interval
       @buffer_size = buffer_size
@@ -103,9 +104,15 @@ module ISIS
 
     # The LSP this system would send now with +sequence+. Builds and does
     # nothing else.
+    # With area_key, TLV 10 goes first and the LSP carries an RFC 5304
+    # HMAC-MD5 digest.
     def build(sequence: @sequence)
-      Pdu::Lsp.new(level: 1, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
-                   tlvs: tlvs)
+      list = tlvs
+      list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
+      lsp = Pdu::Lsp.new(level: 1, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
+                         tlvs: list)
+      lsp.key = @area_key
+      lsp
     end
 
     # The TLVs, packed: entries into as many TLVs of one type as their
@@ -185,7 +192,7 @@ module ISIS
 
     def generate(reason, unless_unchanged: false)
       held = @database[@lsp_id]
-      if unless_unchanged && held&.lsp && held.lsp.tlvs.to_shex == Tlv::List.new(tlvs).to_shex
+      if unless_unchanged && held&.lsp && held.lsp.tlvs.to_shex == build.tlvs.to_shex
         @log.debug("#{lsp_id_s}: #{reason}; content unchanged, not generated (RFC 1142 7.3.6)")
         return nil
       end

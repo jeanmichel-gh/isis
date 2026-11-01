@@ -145,4 +145,58 @@ class TestFrrP2p < Minitest::Test
     end
   end
 
+
+  # Gate 3, authentication. FRR's "isis password md5" keys the hellos and
+  # "area-password md5 ... authenticate snp validate" keys and checks the
+  # Level 1 LSPs and SNPs, RFC 5304 HMAC-MD5 both.
+  HELLO_KEY = "isis4r-hello"
+  AREA_KEY = "isis4r-area"
+  FRR_KEYS = { frr_interface: ["isis password md5 #{HELLO_KEY}"],
+               frr_router: ["area-password md5 #{AREA_KEY} authenticate snp validate"] }.freeze
+
+  # Matching keys: up, FRR installs isis4r's prefix, which it can only
+  # do having accepted isis4r's authenticated LSP, and isis4r stores FRR's.
+  def test_authentication_succeeds_with_matching_keys
+    @lab.start(isis4r: { hello_key: HELLO_KEY, area_key: AREA_KEY }, **FRR_KEYS)
+    assert_eventually("adjacency did not come up with matching keys") { both_up? }
+    assert_eventually("FRR did not install 192.0.2.1/32 from isis4r's authenticated LSP", 60) do
+      route = @lab.frr_route("192.0.2.1/32")
+      route && route["protocol"] == "isis" && route["installed"]
+    end
+    frr_id = "#{FrrLab::FRR_ID}.00-00"
+    assert_eventually("isis4r did not store FRR's authenticated LSP") do
+      @lab.isis4r_database.dig(frr_id, "sequence") == @lab.frr_database.dig(frr_id, "sequence")
+    end
+    # Measured on FRR 8.4.4: its first LSP after start can go out with no
+    # TLV 10 although the area password is configured, and isis4r refuses
+    # that one under 7.3.15.1 a 3 i, rightly. With matching keys nothing
+    # may fail on its digest, and no hello may be refused.
+    log = @lab.isis4r_log
+    refute_includes log, "digest is wrong", @lab.report
+    refute_includes log, "hello refused", @lab.report
+  end
+
+  # A wrong hello key: no adjacency on either side, and isis4r says why.
+  def test_hello_authentication_fails_with_the_wrong_key
+    @lab.start(isis4r: { hello_key: "not-#{HELLO_KEY}", area_key: AREA_KEY }, **FRR_KEYS)
+    assert_eventually("isis4r did not refuse FRR's hello", 10) do
+      @lab.isis4r_log.include?("hello refused: the HMAC-MD5 digest is wrong")
+    end
+    sleep 4
+    refute_equal "up", @lab.isis4r_state, @lab.report
+    refute_equal "Up", @lab.frr_adjacency_state, @lab.report
+  end
+
+  # The right hello key and a wrong area key: up, but FRR never holds
+  # isis4r's LSP, and isis4r refuses FRR's LSP and SNPs, saying why.
+  def test_area_authentication_fails_with_the_wrong_key
+    @lab.start(isis4r: { hello_key: HELLO_KEY, area_key: "not-#{AREA_KEY}" }, **FRR_KEYS)
+    assert_eventually("adjacency did not come up with matching hello keys") { both_up? }
+    assert_eventually("isis4r did not refuse FRR's CSNP", 15) do
+      @lab.isis4r_log.include?("refused: Csnp: the HMAC-MD5 digest is wrong")
+    end
+    sleep 10
+    assert_nil @lab.frr_database["#{FrrLab::ISIS4R_ID}.00-00"], "FRR stored isis4r's LSP\n#{@lab.report}"
+    assert_nil @lab.isis4r_database.dig("#{FrrLab::FRR_ID}.00-00", "checksum")&.nonzero?, @lab.report
+  end
 end

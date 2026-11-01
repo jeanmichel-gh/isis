@@ -33,9 +33,11 @@ originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database:
                                   log: log, areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
                                   prefixes: config.fetch(:prefixes, []),
                                   metric_style: config.fetch(:metric_style, "wide").to_sym,
+                                  area_key: config[:area_key],
                                   minimum_interval: config.fetch(:minimum_lsp_interval, 1))
 circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SocketTransport.new(socket), scheduler: scheduler, log: log,
                                database: database, originator: originator,
+                               hello_key: config[:hello_key], area_key: config[:area_key],
                                name: iface, system_id: config.fetch(:system_id), snpa: mac,
                                areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
                                hello_interval: config.fetch(:hello_interval),
