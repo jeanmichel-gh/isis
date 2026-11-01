@@ -17,7 +17,7 @@ require "datalink/backends/loopback"
 # debug adds a trace of every PDU with its hex:
 #
 #   ISIS_LOG=debug ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/p2p_circuit_test.rb -v
-module TestLog
+module TestLogs
   LEVEL = ENV.fetch("ISIS_LOG", "").downcase
 
   module_function

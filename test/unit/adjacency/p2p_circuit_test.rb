@@ -17,10 +17,10 @@ class TestP2pCircuit < Minitest::Test
     @wire = ISIS::Link::SimulatedWire.new
     @lines = []
     @traces = []
-    TestLog.heading(name)
-    @log_a = ISIS::Runtime::Log.new(clock: @clock, logger: TestLog.logger(@clock, ->(l, m) { @lines << [l, m] }),
-                                    tracer: TestLog.tracer(@clock, ->(*t) { @traces << t }))
-    @log_b = ISIS::Runtime::Log.new(clock: @clock, logger: TestLog.logger(@clock), tracer: TestLog.tracer(@clock))
+    TestLogs.heading(name)
+    @log_a = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock, ->(l, m) { @lines << [l, m] }),
+                                    tracer: TestLogs.tracer(@clock, ->(*t) { @traces << t }))
+    @log_b = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
     @a = circuit(A_ID, "00:00:00:00:00:0a", @log_a, name: "a-eth1")
     @b = circuit(B_ID, "00:00:00:00:00:0b", @log_b, name: "b-eth1", extended_circuit_id: 7)
   end
