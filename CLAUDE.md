@@ -1723,15 +1723,20 @@ registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129,
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
 layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
-`lib/isis/adjacency/` with the adjacency and the circuit, both on the
-injected clock. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
+`lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
+the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
+circuit running the handshake on the injected scheduler and logging every
+transition and refusal with its reason. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
 `docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
 1 is met**. The header fields were read in RFC 1142 clause 9 and agree
 with Wireshark and FRR, except octets 7 and 8, where the editions differ
 (see the list at the end). The
 LAN Hello still has its proof of concept API and moves onto the contract
-in gate 2. The gem has not been
+in gate 2. **Gate 2 is met offline, not yet against FRR**: two `P2pCircuit`s
+reach Up on the simulated wire and expire on a lost neighbour; the FRR
+harness is next. Not yet done in the hello: the padding RFC 1142 clause
+8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
 
@@ -2035,6 +2040,16 @@ Addresses**, which is the later layout. The code follows the
 implementations, since that is what routers send, and zero is the default
 either way. Maximum Area Addresses, and zero meaning three, stay second
 hand from Wireshark until the 2002 edition is read.
+
+**Point to point IIH procedure, clauses 8.2.3 to 8.2.5**, read for
+`P2pCircuit`: the acceptance tests of 8.2.4.1 (ID Length), the area
+comparison of 8.2.4.2, which for a Level 1 system deletes the adjacency
+on no common area, and the holding timer of 8.2.5. **Table 4 itself, the
+Level 1 action table, did not survive the text extraction**, so refusing
+a Level 2 only neighbour follows FRR's `process_p2p_hello` and is second
+hand. The AllISs destination MAC for point to point hellos is FRR's too,
+from `isis_pfpacket.c`, which cites RFC 5309 section 4.1; RFC 5309 is not
+read here.
 
 **Also worth knowing for the receive policy.** RFC 1142 clause 7.3.14 says
 a control PDU larger than ReceiveLSPBufferSize "shall be treated as if it
