@@ -71,7 +71,9 @@ them and fails if one is missing.
 - `ISIS::Tlv::ExtendedIpReachability`
 - `ISIS::Tlv::ExtendedIsReachability`
 - `ISIS::Tlv::AreaAddresses`
+- `ISIS::Tlv::IpInternalReachability`
 - `ISIS::Tlv::IpInterfaceAddresses`
+- `ISIS::Tlv::IsReachability`
 - `ISIS::Tlv::IsNeighbors`
 - `ISIS::Tlv::List`
 - `ISIS::Tlv::LspEntries`

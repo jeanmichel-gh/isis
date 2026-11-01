@@ -233,6 +233,21 @@ class TestLsp < Minitest::Test
   # 10.0.12.0/24. It parses into the implemented classes and replays.
   REACH = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-reachability.hex", __dir__)).strip
 
+  # The same FRR with "metric-style narrow": TLV 2 to isis4r and TLV 128
+  # for 10.0.12.0/24, sequence 3, about 30 seconds after the adjacency.
+  NARROW = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-narrow.hex", __dir__)).strip
+
+  def test_frr_lsp_with_narrow_metrics_replays
+    lsp = ISIS::Pdu.factory(octets(NARROW))
+    assert_equal [3, 0x146d], [lsp.sequence, lsp.checksum]
+    is = lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::IsReachability) }
+    assert_equal [{ neighbor: "0000.0000.0001.00", metric: 10 }], is.to_hash
+    ip = lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::IpInternalReachability) }
+    assert_equal [{ prefix: "10.0.12.0/24", metric: 10 }], ip.to_hash
+    assert_equal NARROW, lsp.to_shex
+    assert lsp.checksum_ok?
+  end
+
   def test_frr_lsp_with_reachability_replays
     lsp = ISIS::Pdu.factory(octets(REACH))
     assert_equal [3, 0xfa06], [lsp.sequence, lsp.checksum]
