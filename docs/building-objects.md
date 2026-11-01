@@ -16,8 +16,20 @@ all of them. The shared code is `ISIS::Node` in `lib/isis/common.rb`.
 3. **A Hash**, as `to_hash` answered. The object rebuilds from it.
 4. **Anything else** is field values, positional or keyword.
 
-The first three apply only when `new` gets exactly one argument and no
-keywords. Everything else is field values.
+The first three apply only when `new` gets exactly one argument. Wire
+octets may also come with keywords, and those are **parse-time inputs**:
+facts the octets do not carry themselves. Today there is one, `id_width`,
+the System ID width the PDU's ID Length gave, and only a class that needs
+it accepts it. The other two take no keywords. Everything else is field
+values.
+
+```ruby
+ISIS::Tlv::ThreeWayAdjacency.new(octets, id_width: 8)  # parses, 8 octet IDs
+```
+
+A copy made from another instance reads that instance's encoding back
+with the inputs it was read with, so a copy of a TLV parsed with eight
+octet IDs still reads eight.
 
 ## Why wire octets are marked
 
@@ -54,4 +66,5 @@ them and fails if one is missing.
 - `ISIS::Tlv::List`
 - `ISIS::Tlv::Padding`
 - `ISIS::Tlv::ProtocolsSupported`
+- `ISIS::Tlv::ThreeWayAdjacency`
 - `ISIS::Tlv::Unknown`

@@ -13,6 +13,11 @@ module ISIS
 
     MAX_VALUE = 255
     HEADER = 2
+    # The parse-time inputs a class needs. Most need none; the factory hands
+    # a class only the ones it names here.
+    PARSE_INPUTS = [].freeze
+    # A System ID is six octets unless the PDU's ID Length said otherwise.
+    DEFAULT_ID_WIDTH = 6
 
     # type number => class, and hash key => class, for the factory and for
     # TlvList#from_hash. Unregistered types become Tlv::Unknown.
@@ -46,7 +51,10 @@ module ISIS
       #
       # A declared length that runs past the boundary is clamped to it and
       # never followed. The TLV keeps the declared length and replays it.
-      def factory(octets, boundary: octets.bytesize)
+      #
+      # +id_width+ is the System ID width from the PDU's ID Length. It
+      # reaches only a class that lists it in PARSE_INPUTS.
+      def factory(octets, boundary: octets.bytesize, id_width: DEFAULT_ID_WIDTH)
         boundary = [boundary, octets.bytesize].min
         return nil if boundary < HEADER
 
@@ -54,7 +62,8 @@ module ISIS
         take = [declared, boundary - HEADER].min
         raw = Octets.new(octets.byteslice(0, HEADER + take))
         octets.replace(octets.byteslice(HEADER + take..) || "")
-        class_for(octets_type(raw)).new(raw)
+        klass = class_for(octets_type(raw))
+        klass.new(raw, **{ id_width: id_width }.slice(*klass::PARSE_INPUTS))
       end
 
       private
@@ -189,9 +198,10 @@ module ISIS
 
       # Read TLVs from the front of +octets+ until +boundary+ octets have
       # been consumed (default: all of them). Consumes exactly that much.
-      def self.parse(octets, boundary: octets.bytesize)
+      # +id_width+ is passed to every TLV that needs it.
+      def self.parse(octets, boundary: octets.bytesize, id_width: DEFAULT_ID_WIDTH)
         list = allocate
-        list.send(:parse_bounded, octets, [boundary, octets.bytesize].min)
+        list.send(:parse_bounded, octets, [boundary, octets.bytesize].min, id_width)
         list
       end
 
@@ -229,17 +239,22 @@ module ISIS
 
       private
 
-      def parse(octets)
-        parse_bounded(octets, octets.bytesize)
+      def parse(octets, id_width: DEFAULT_ID_WIDTH)
+        parse_bounded(octets, octets.bytesize, id_width)
       end
 
-      def parse_bounded(octets, boundary)
+      def parse_inputs
+        { id_width: @id_width || DEFAULT_ID_WIDTH }
+      end
+
+      def parse_bounded(octets, boundary, id_width)
+        @id_width = id_width
         @tlvs = []
         @tail = "".b
         remaining = boundary
         while remaining.positive?
           before = octets.bytesize
-          tlv = Tlv.factory(octets, boundary: remaining)
+          tlv = Tlv.factory(octets, boundary: remaining, id_width: id_width)
           consumed = before - octets.bytesize
           # Fewer than two octets left, or a factory that took nothing: what
           # is left inside the boundary is a tail, never a loop.

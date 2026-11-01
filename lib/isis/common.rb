@@ -48,12 +48,19 @@ module ISIS
   #   from_fields(...)    fill self from field values
   #   encode              its complete octets
   module Node
+    # Wire octets may come with keywords. Those are parse-time inputs, facts
+    # the octets do not carry themselves, and today there is one: id_width,
+    # the System ID width the PDU's ID Length gave. A class that does not
+    # need an input does not accept it.
     def initialize(*args, **fields)
-      if fields.empty? && args.size == 1
+      if args.size == 1
         arg = args.first
-        return parse(arg) if arg.is_a?(Octets)
-        return parse(Octets.new(arg.encode)) if arg.instance_of?(self.class)
-        return from_hash(arg) if arg.is_a?(Hash)
+        return parse(arg, **fields) if arg.is_a?(Octets)
+
+        if fields.empty?
+          return parse(Octets.new(arg.encode), **arg.send(:parse_inputs)) if arg.instance_of?(self.class)
+          return from_hash(arg) if arg.is_a?(Hash)
+        end
       end
       from_fields(*args, **fields)
     end
@@ -61,6 +68,14 @@ module ISIS
     # The canonical form of a node: its encoding as a hex string.
     def to_shex
       encode.unpack1("H*")
+    end
+
+    private
+
+    # The parse-time inputs a copy of this node needs to read its own
+    # encoding back. None, unless a class says otherwise.
+    def parse_inputs
+      {}
     end
   end
 
