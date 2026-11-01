@@ -13,12 +13,19 @@ require "datalink/backends/loopback"
 # Logs for a person watching tests run. A test hands its Runtime::Log a
 # logger and a tracer from here; with ISIS_LOG unset they only feed the
 # test's own sink, so the test can assert on what was logged. With
-# ISIS_LOG=info or ISIS_LOG=debug they also print to standard error, and
-# debug adds a trace of every PDU with its hex:
+# ISIS_LOG=info (or 1) or ISIS_LOG=debug (or 2) they also print to standard
+# error, and debug adds a trace of every PDU with its hex:
 #
 #   ISIS_LOG=debug ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/p2p_circuit_test.rb -v
 module TestLogs
-  LEVEL = ENV.fetch("ISIS_LOG", "").downcase
+  # ISIS_LOG=info, 1, true or yes prints info; ISIS_LOG=debug or 2 adds
+  # debug lines and the PDU trace. Anything else set is reported, so a
+  # value that does nothing does not look like logging that is broken.
+  VALUES = { "info" => "info", "1" => "info", "true" => "info", "yes" => "info",
+             "debug" => "debug", "2" => "debug" }.freeze
+  RAW = ENV.fetch("ISIS_LOG", "").strip.downcase
+  LEVEL = VALUES.fetch(RAW, "")
+  warn "ISIS_LOG=#{RAW} is not one of #{VALUES.keys.join(', ')}; no test logs will print" if !RAW.empty? && LEVEL.empty?
 
   module_function
 

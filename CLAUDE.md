@@ -295,8 +295,8 @@ What isis4r adds, because of its own rules:
   effect is a defect.
 * **A test can install a logger and a tracer** to capture what a scenario
   did, so a failing test can print the log of the run that failed. `TestLogs` in `test/test_helper.rb` gives a test both, feeding the
-  test's own sink, and with `ISIS_LOG=info` or `ISIS_LOG=debug` printing
-  them as well. `ruby --debug` is the interpreter's own debug mode and
+  test's own sink, and with `ISIS_LOG=info` (or 1) or `ISIS_LOG=debug` (or 2) printing
+  them as well, and an unknown value warns. `ruby --debug` is the interpreter's own debug mode and
   shows none of this.
 
 ### Control plane and forwarding
