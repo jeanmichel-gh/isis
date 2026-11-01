@@ -1738,9 +1738,12 @@ wire mark and the constructor dispatch. `docs/building-objects.md` and
 with Wireshark and FRR, except octets 7 and 8, where the editions differ
 (see the list at the end). The
 LAN Hello still has its proof of concept API and moves onto the contract
-in gate 2. **Gate 2 is met offline, not yet against FRR**: two `P2pCircuit`s
-reach Up on the simulated wire and expire on a lost neighbour; the FRR
-harness is next. Not yet done in the hello: the padding RFC 1142 clause
+in gate 2. **Gate 2 is met against FRR**, measured 2026-10-31 with FRR
+8.4.4's isisd: `test/integration/frr_p2p_test.rb` brings the point to point
+adjacency up on both sides, holds it for over three holding times without
+a flap, expires it on each side when the other goes silent, and forms
+none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
+check waits for. Still owed by gate 2: the LAN hello onto the contract. Not yet done in the hello: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
@@ -1826,9 +1829,10 @@ compatibility statement, not a promise to implement every extension.
 ## Labs and interop
 
 The gates above need an independent router. The plan is to follow what the
-sibling projects already do, and not to invent a third way. **Nothing here
-is built yet.** Surveyed 2026-10-31 at ospfv2 `0ec77c6` and routescope
-`265156a`. Record decisions here as they are made.
+sibling projects already do, and not to invent a third way. Surveyed
+2026-10-31 at ospfv2 `0ec77c6` and routescope `265156a`. **The namespace
+harness is built; routescope support is not.** Record decisions here as
+they are made.
 
 **Two tiers, and they do different jobs.**
 
@@ -1840,7 +1844,11 @@ is built yet.** Surveyed 2026-10-31 at ospfv2 `0ec77c6` and routescope
    job in ospfv2's `ci.yml`). isis4r copies the pattern with `isisd` in
    place of `ospfd`, gated by `ISIS_FRR=1`, under `test/integration/`. So a
    gate is shown in CI against FRR, and the same test runs on a Linux VM
-   by hand.
+   by hand. **Built**: `test/support/frr_lab.rb` sets up the namespaces and
+   FRR, and `test/support/isis_runner.rb` runs isis4r inside its
+   namespace on the real clock, writing its state as JSON and its log at
+   debug with a PDU trace. A failing test prints both sides' logs.
+   `sudo -E env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them.
 2. **routescope, for labs a person watches and drives.** routescope does
    not build labs. It is a web console over labs that docker compose or
    containerlab bring up, reached by `docker exec`, with one driver per
@@ -1864,8 +1872,8 @@ routescope, which its own rules require (`ospfv2/docs/console-plan.md`):
 
 **IS-IS is not IP, and the labs have to allow for it.** It runs directly
 over the link layer with LLC framing. A veth pair or a containerlab link
-carries raw Ethernet, so the transport works there (inferred, not yet
-run). The real transport opens a raw socket through datalink-socket, so
+carries raw Ethernet, so the transport works there (measured: the
+harness runs over one). The real transport opens a raw socket through datalink-socket, so
 an isis4r node needs root or `CAP_NET_RAW` in its namespace or container.
 Anything in a lab that assumes an IP address on the link for the protocol
 to work is OSPF's assumption, not ours.

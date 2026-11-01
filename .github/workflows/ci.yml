@@ -52,16 +52,48 @@ jobs:
           gem build isis4r.gemspec 2>&1 | tee build.log
           ! grep -i "warning" build.log
 
+  # Phase gates against an independent router: FRR's isisd in one network
+  # namespace and isis4r in another, joined by a veth pair. Needs root,
+  # which the runner gives through sudo. test/support/frr_lab.rb has the
+  # harness, after ospfv2's interop-frr job.
+  interop-frr:
+    name: interop (FRR)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: isis
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jeanmichel-gh/datalink-socket
+          path: datalink-socket
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: isis
+          bundler-cache: true
+      - name: Install FRR and iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq frr iproute2
+      - name: FRR version
+        run: /usr/lib/frr/isisd --version | head -1
+      - name: Interop tests against FRR
+        working-directory: isis
+        run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
+
   # The one check to require before merging. It passes only if every
-  # matrix job passed, so adding or removing a Ruby version never means
+  # matrix job and the FRR interop job passed, so adding or removing a Ruby version never means
   # editing the branch rules. A skipped job counts as a failure here.
   ci:
     name: ci
     if: always()
-    needs: [test]
+    needs: [test, interop-frr]
     runs-on: ubuntu-latest
     steps:
       - name: All test jobs passed
         run: |
           echo "test: ${{ needs.test.result }}"
+          echo "interop-frr: ${{ needs.interop-frr.result }}"
           test "${{ needs.test.result }}" = "success"
+          test "${{ needs.interop-frr.result }}" = "success"
