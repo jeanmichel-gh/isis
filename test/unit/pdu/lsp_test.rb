@@ -233,6 +233,146 @@ class TestLsp < Minitest::Test
   # 10.0.12.0/24. It parses into the implemented classes and replays.
   REACH = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-reachability.hex", __dir__)).strip
 
+  # FRR 8.4.4 with "area-password md5 isis4r-key": TLV 10 first, then the
+  # LSP of the reachability fixture. RFC 5304 gives no test vectors, so
+  # FRR's digest is the independent value.
+  AUTH = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-hmac-md5.hex", __dir__)).strip
+  AUTH_KEY = "isis4r-key"
+  # Where FRR's digest sits: 27 octets of headers, then 0a 11 36.
+  DIGEST_AT = 27 + 3
+
+  def auth_lsp(key: nil)
+    lsp = ISIS::Pdu.factory(octets(AUTH))
+    lsp.key = key
+    lsp
+  end
+
+  def digest(octets_or_hex)
+    hex = octets_or_hex.is_a?(String) && octets_or_hex.match?(/\A\h+\z/) ? octets_or_hex : octets_or_hex.unpack1("H*")
+    hex[DIGEST_AT * 2, 32]
+  end
+
+  # The receiver's check, by hand: zero the digest, the Remaining Lifetime
+  # and the Checksum, and compute again (RFC 5304 section 2).
+  def digest_checks_out?(hex, key)
+    o = [hex].pack("H*")
+    got = o.byteslice(DIGEST_AT, 16)
+    o[DIGEST_AT, 16] = "\x00".b * 16
+    o[10, 2] = "\x00\x00".b
+    o[24, 2] = "\x00\x00".b
+    ISIS.hmac_md5(key, o) == got
+  end
+
+  def test_frr_authenticated_lsp_replays
+    lsp = auth_lsp
+    assert_equal AUTH, lsp.to_shex
+    assert lsp.authentication_preserved?
+    assert lsp.checksum_ok?
+  end
+
+  # With every computed field thrown away and the key given, isis4r writes
+  # FRR's octets: the digest over the zeroed fields, then the checksum over
+  # the digest. That is the order, shown against an independent router.
+  def test_rebuilt_with_the_key_is_frrs
+    lsp = auth_lsp(key: AUTH_KEY)
+    lsp.recompute!
+    refute lsp.authentication_preserved?
+    assert_equal AUTH, lsp.to_shex
+  end
+
+  # The hash carries no digest, so it rebuilds FRR's LSP only with the key.
+  def test_hash_rebuilds_with_the_key
+    h = auth_lsp.to_hash
+    assert_raises(ISIS::Error) { ISIS::Pdu::Lsp.new(h).encode }
+    lsp = ISIS::Pdu::Lsp.new(h)
+    lsp.key = AUTH_KEY
+    assert_equal AUTH, lsp.to_shex
+  end
+
+  # CLAUDE.md test 1: a same-size edit several levels down, a TLV 135
+  # metric, recomputes the digest and then the checksum.
+  def test_an_edit_inside_a_tlv_recomputes_both
+    lsp = auth_lsp(key: AUTH_KEY)
+    lsp.tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIpReachability) }.entries.first.metric = 11
+    hex = lsp.to_shex
+    refute_equal digest(AUTH), digest(hex)
+    assert digest_checks_out?(hex, AUTH_KEY)
+    refute_equal AUTH[24 * 2, 4], hex[24 * 2, 4], "the checksum moved"
+    assert lsp.checksum_ok?
+  end
+
+  # CLAUDE.md test 2: a same-size common header edit on an unauthenticated
+  # LSP leaves the checksum, which starts at the LSP ID.
+  def test_a_header_edit_leaves_an_unauthenticated_checksum
+    lsp = ISIS::Pdu.factory(octets(REACH))
+    lsp.header.max_area_addresses = 3
+    assert lsp.checksum_preserved?
+    assert_equal REACH[24 * 2, 4], lsp.to_shex[24 * 2, 4]
+  end
+
+  # CLAUDE.md test 3: the same edit on an authenticated LSP reaches the
+  # checksum through the digest.
+  def test_a_header_edit_reaches_an_authenticated_checksum
+    lsp = auth_lsp(key: AUTH_KEY)
+    lsp.header.max_area_addresses = 3
+    hex = lsp.to_shex
+    refute_equal digest(AUTH), digest(hex)
+    assert digest_checks_out?(hex, AUTH_KEY)
+    refute lsp.checksum_preserved?
+    assert lsp.checksum_ok?
+  end
+
+  # CLAUDE.md test 4: a Remaining Lifetime edit recomputes neither, so an
+  # authenticated LSP ages with no key at all.
+  def test_a_lifetime_edit_recomputes_neither
+    [auth_lsp, ISIS::Pdu.factory(octets(REACH))].each do |lsp|
+      before = lsp.to_shex
+      lsp.lifetime -= 100
+      after = lsp.to_shex
+      assert_equal before.sub(/\A(.{20}).{4}/, '\1'), after.sub(/\A(.{20}).{4}/, '\1')
+      assert lsp.checksum_preserved?
+    end
+  end
+
+  # CLAUDE.md test 5: two encodes in a row give the same octets, so the
+  # digest and the checksum do not trigger each other.
+  def test_two_encodes_agree
+    lsp = auth_lsp(key: AUTH_KEY)
+    lsp.sequence += 1
+    assert_equal lsp.to_shex, lsp.to_shex
+  end
+
+  # An edited authenticated LSP with no key cannot have a digest, so
+  # encode raises; replay still sends the original, and
+  # preserve_authentication! sends the stale digest on purpose.
+  def test_an_edit_without_a_key
+    lsp = auth_lsp
+    lsp.sequence += 1
+    assert_raises(ISIS::Error) { lsp.encode }
+    assert_equal AUTH, lsp.replay.unpack1("H*")
+    lsp.preserve_authentication!
+    hex = lsp.to_shex
+    assert_equal digest(AUTH), digest(hex)
+    refute digest_checks_out?(hex, AUTH_KEY)
+    assert lsp.checksum_ok?, "the checksum is still computed over the stale digest"
+  end
+
+  # A wrong key gives a digest the right key does not accept.
+  def test_a_wrong_key_does_not_check_out
+    lsp = auth_lsp(key: "not-the-key")
+    lsp.recompute!
+    refute digest_checks_out?(lsp.to_shex, AUTH_KEY)
+  end
+
+  def test_built_from_fields_with_a_key
+    lsp = ISIS::Pdu::Lsp.new(level: 1, lsp_id: "0000.0000.0001.00-00", lifetime: 1200, sequence: 1,
+                             tlvs: [ISIS::Tlv::Authentication.new(:hmac_md5), ISIS::Tlv::AreaAddresses.new(["49.0001"])])
+    assert_raises(ISIS::Error) { lsp.encode }
+    lsp.key = "k"
+    assert digest_checks_out?(lsp.to_shex, "k")
+    assert lsp.checksum_ok?
+  end
+
   # The same FRR with "metric-style narrow": TLV 2 to isis4r and TLV 128
   # for 10.0.12.0/24, sequence 3, about 30 seconds after the adjacency.
   NARROW = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-narrow.hex", __dir__)).strip

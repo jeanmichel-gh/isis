@@ -1728,7 +1728,7 @@ ISO 8473 checksum),
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 2, 6, 8,
-9, 22, 128, 129, 132, 135 and 240, with `lib/isis/tlv/narrow_metrics.rb`
+9, 10, 22, 128, 129, 132, 135 and 240, with `lib/isis/tlv/narrow_metrics.rb`
 for the four original metric octets TLVs 2 and 128 share and lay out
 differently, with `lib/isis/subtlv/subtlv.rb` holding the
 sub-TLV framing, the per parent registry, `SubTlv::Unknown` and the list
@@ -1737,7 +1737,10 @@ common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
 layout, `lib/isis/pdu/lsp.rb`, the LSP for both levels with its checksum
 replayed on parse and recomputed when the span moves, and the flags octet
-asserted mask by mask against RFC 1142, `lib/isis/pdu/csnp.rb`, the CSNP
+asserted mask by mask against RFC 1142, and RFC 5304's HMAC-MD5 digest in
+`Pdu::Layout` for every layout, computed before an LSP's checksum,
+replayed on parse, and refused without a key once what it covers moves,
+with `replay` and `preserve_authentication!` as the two ways round that, `lib/isis/pdu/csnp.rb`, the CSNP
 for both levels, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
 for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
 the hellos share, and
@@ -1799,7 +1802,12 @@ when isis4r sends wide. TLVs 2 and 128 parse, replay and rebuild FRR's,
 from an LSP FRR 8.4.4 sent with `metric-style narrow`. Measured on the way: on a point to point circuit FRR
 8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
 in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
-gate 3: TLV 10. Not yet in the
+gate 3: authentication on the circuits, keys for hellos and for LSPs and
+SNPs, and checking received digests, so authentication succeeds and fails
+as configured against FRR. The codec half is done: FRR 8.4.4's HMAC-MD5
+LSP, CSNP, PSNP and point to point hello replay, and with every computed
+field thrown away and the key given, isis4r writes each one again byte
+for byte. Not yet in the
 originator: a second LSP Number when one LSP is full, and jitter on the
 refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
 confusion over another system's LSP (7.3.16.2) and a stale LSP with this
@@ -2184,7 +2192,6 @@ Still unread:
 * **Maximum Area Addresses**, and whether zero means three.
 * Which TLVs are legal in which PDU, which is validation's business and not
   the encoder's.
-* The order of the checksum and authentication fixups.
 * **RFC 5310 sections 3.3 and 3.4**, for how generic cryptographic
   authentication prepares the Authentication Value, which is cited in the
   authentication section and has not been read here. The design only needs
@@ -2250,6 +2257,15 @@ confidently said:
   only" and "up to a maximum of 63 IP addresses". Read through the
   datatracker copy, since rfc-editor.org is blocked. Quoted in the
   classes.
+* **The order of the digest and the checksum**, measured 2026-11-01:
+  with every computed field thrown away and the key given, isis4r writes
+  FRR 8.4.4's HMAC-MD5 LSP byte for byte by computing the digest with the
+  Checksum and Remaining Lifetime zeroed and then the checksum over the
+  digest. That is the derivation in the authentication section, now
+  agreeing with an independent router. Still a measurement, not a clause.
+* **RFC 5304** has no test vectors, so the digests in
+  `test/fixtures/frr-8.4.4-*-hmac-md5.hex` are the independent values,
+  and `ISIS.hmac_md5` is checked against RFC 2202's HMAC-MD5 test cases.
 * **RFC 5304** on the Authentication TLV, quoted in the authentication
   section: TLV 10, first value octet is the authentication type, remainder
   is the Authentication Value, type 54 and length 17 for HMAC-MD5, and

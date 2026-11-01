@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+
 module ISIS
   class Error < StandardError; end
   class ParseError < Error; end
@@ -71,6 +73,20 @@ module ISIS
       c1 = (c1 + c0) % 255
     end
     c0.zero? && c1.zero?
+  end
+
+  # HMAC-MD5 of +text+ under +key+, RFC 2104 section 2: H(K XOR opad,
+  # H(K XOR ipad, text)), with a 64 octet block, ipad 0x36 and opad 0x5c
+  # repeated, and a key longer than the block hashed first. RFC 5304 names
+  # it for IS-IS. Checked against RFC 2202's HMAC-MD5 test cases, and
+  # against digests FRR computed.
+  def self.hmac_md5(key, text)
+    key = key.b
+    key = Digest::MD5.digest(key) if key.bytesize > 64
+    key = key.ljust(64, "\x00".b)
+    inner = key.bytes.map { |b| b ^ 0x36 }.pack("C*")
+    outer = key.bytes.map { |b| b ^ 0x5c }.pack("C*")
+    Digest::MD5.digest(outer + Digest::MD5.digest(inner + text.b))
   end
 
   # The constructor contract shared by every node of a PDU tree. See

@@ -127,4 +127,18 @@ class TestFletcher < Minitest::Test
     assert_equal "ff80", ISIS.fletcher(["017e0000"].pack("H*"), 2).unpack1("H*")
     assert ISIS.fletcher_ok?(["017eff80"].pack("H*"))
   end
+
+  # RFC 2202 section 2, HMAC-MD5 test cases 1, 2, 3, 6 and 7, the
+  # document's own values. 6 and 7 have an 80 octet key, longer than the
+  # 64 octet block, so they cover the hashing of the key first.
+  def test_hmac_md5_rfc_2202
+    long = "Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"
+    [[["0b" * 16].pack("H*"), "Hi There", "9294727a3638bb1c13f48ef8158bfc9d"],
+     ["Jefe", "what do ya want for nothing?", "750c783e6ab0b503eaa86e310a5db738"],
+     [["aa" * 16].pack("H*"), ["dd" * 50].pack("H*"), "56be34521d144c88dbb8c733f0e8b3f6"],
+     [["aa" * 80].pack("H*"), "Test Using Larger Than Block-Size Key - Hash Key First", "6b1ab7fe4bd7bf8f0b62e6ce61b9d0cd"],
+     [["aa" * 80].pack("H*"), long, "6f630fad67cda0ee1fb1f562db3aa53e"]].each_with_index do |(key, data, digest), i|
+      assert_equal digest, ISIS.hmac_md5(key, data).unpack1("H*"), "RFC 2202 HMAC-MD5 case #{[1, 2, 3, 6, 7][i]}"
+    end
+  end
 end

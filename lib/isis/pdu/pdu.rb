@@ -271,8 +271,23 @@ module ISIS
     # by the subclass, and a TLV body. Lengths are computed fields:
     # computed when built from values, and replayed when parsed, until an
     # edit changes the octets they describe.
+    #
+    # Authentication. When the TLVs hold an HMAC-MD5 Authentication TLV
+    # (RFC 5304), encode fills its Authentication Value after the lengths
+    # are written, and an LSP computes its checksum after that, over the
+    # finished digest: CLAUDE.md, "One retained input per calculation". The
+    # digest covers the whole PDU with the Authentication Value zeroed, and
+    # an LSP also zeroes its Checksum and Remaining Lifetime (RFC 5304
+    # section 2). Like the lengths, a parsed digest is replayed while
+    # nothing it covers has moved. Once something has, a new one needs the
+    # key; with none, encode raises, unless preserve_authentication! asks
+    # for the retained digest on purpose. replay returns the octets as they
+    # arrived, with no encode at all.
     class Layout < Pdu
       attr_reader :header, :tlvs
+      # The authentication key, for the HMAC-MD5 digest. Never on the wire
+      # and never in the hash.
+      attr_accessor :key
 
       class << self
         # Octets of this layout's fixed header after the common header, for
@@ -299,12 +314,29 @@ module ISIS
       # since, the lengths it arrived with are written back, right or
       # wrong. Otherwise they are computed from the octets that exist.
       def encode
-        body = @tlvs.encode
-        if preserved?
-          assemble(@declared_li, @declared_pdu_length, body)
-        else
-          assemble(fixed_length, fixed_length + body.bytesize, body)
-        end
+        authenticate(lengths_encode)
+      end
+
+      # The octets this PDU was parsed from, exactly, or nil if it was
+      # built. No encode step, so nothing to recompute and nothing to raise.
+      def replay
+        @replay
+      end
+
+      # True when this PDU was parsed with an HMAC-MD5 digest and encode
+      # will replay it, because nothing the digest covers has moved.
+      def authentication_preserved?
+        at = auth_value_offset
+        return false if at.nil? || @declared_auth.nil?
+
+        digest_input(lengths_encode, at) == @retained_digest_input
+      end
+
+      # Encode with the digest this PDU arrived with even after what it
+      # covers has moved: a PDU whose digest is wrong on purpose.
+      def preserve_authentication!
+        @preserve_authentication = true
+        self
       end
 
       # True when this PDU was parsed and encode will replay the lengths it
@@ -321,6 +353,9 @@ module ISIS
         @declared_li = nil
         @declared_pdu_length = nil
         @retained = nil
+        @declared_auth = nil
+        @retained_digest_input = nil
+        @preserve_authentication = false
         self
       end
 
@@ -333,8 +368,67 @@ module ISIS
       # The octets with both computed lengths zeroed. Compared against the
       # same view taken at parse time, it tells whether anything moved,
       # with no help from any child.
+      # The Authentication Value needs no zeroing here: encode writes the
+      # digest into the octets and never into the TLV, so this view of it
+      # does not move when a digest is computed.
       def normalized
         assemble(0, 0, @tlvs.encode)
+      end
+
+      def lengths_encode
+        body = @tlvs.encode
+        if preserved?
+          assemble(@declared_li, @declared_pdu_length, body)
+        else
+          assemble(fixed_length, fixed_length + body.bytesize, body)
+        end
+      end
+
+      def zero_digest
+        ("\x00" * Tlv::Authentication::HMAC_MD5_LENGTH).b
+      end
+
+      # Where the first HMAC-MD5 Authentication Value sits in the encoded
+      # PDU, or nil if there is none: past the fixed header and every TLV
+      # before it, each measured by encoding it, then past that TLV's type,
+      # length and authentication type octets.
+      def auth_value_offset
+        offset = fixed_length
+        @tlvs.each do |t|
+          return offset + 3 if t.is_a?(Tlv::Authentication) && t.hmac_md5?
+
+          offset += t.encode.bytesize
+        end
+        nil
+      end
+
+      # What the digest is computed over: the PDU with the Authentication
+      # Value zeroed, and whatever else the layout zeroes.
+      def digest_input(octets, at)
+        input = octets.b
+        input[at, 16] = zero_digest
+        digest_normalize(input)
+      end
+
+      # RFC 5304 section 2 zeroes nothing else in a hello or an SNP.
+      def digest_normalize(input)
+        input
+      end
+
+      def authenticate(octets)
+        at = auth_value_offset
+        return octets if at.nil? || octets.bytesize < at + 16
+
+        input = digest_input(octets, at)
+        octets[at, 16] =
+          if @declared_auth && input == @retained_digest_input then @declared_auth
+          elsif @key then ISIS.hmac_md5(@key, input)
+          elsif @declared_auth && @preserve_authentication then @declared_auth
+          else
+            raise Error, "the HMAC-MD5 Authentication Value covers octets that #{@declared_auth ? 'changed' : 'were built'}; " \
+                         "a key is needed to compute it (or preserve_authentication! to keep a stale one)"
+          end
+        octets
       end
 
       def assemble(length_indicator, pdu_length, body)
@@ -360,8 +454,18 @@ module ISIS
         parse_fixed(octets.byteslice(COMMON_HEADER, header_end - COMMON_HEADER))
         @tlvs = Tlv::List.new(Octets.new(octets.byteslice(header_end, extent - header_end)),
                               id_width: @header.id_width)
+        @replay = Octets.new(octets.byteslice(0, extent))
         octets.replace(octets.byteslice(extent..) || "")
         @retained = normalized
+        retain_digest
+      end
+
+      def retain_digest
+        at = auth_value_offset
+        return unless at && @replay.bytesize >= at + 16
+
+        @declared_auth = @replay.byteslice(at, 16).b
+        @retained_digest_input = digest_input(@replay, at)
       end
     end
   end
