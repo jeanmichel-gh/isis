@@ -55,9 +55,14 @@ class TestBuildingObjectsDoc < Minitest::Test
     DOC.scan(/^- `(ISIS::[\w:]+)`$/).flatten.sort
   end
 
+  # Module#include? is bound directly because every class in the process is
+  # asked, and some redefine include? as a class method: RubyGems' Molinillo
+  # Log does, and calling its version raises.
+  INCLUDE = Module.instance_method(:include?)
+
   def node_classes
     ObjectSpace.each_object(Class)
-               .select { |c| c.include?(ISIS::Node) && c.name&.start_with?("ISIS::") }
+               .select { |c| INCLUDE.bind_call(c, ISIS::Node) && c.name&.start_with?("ISIS::") }
                .map(&:name).sort
   end
 
