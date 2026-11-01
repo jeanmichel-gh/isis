@@ -128,6 +128,16 @@ class TestTlvExtendedIpReachability < Minitest::Test
     assert_equal hex, tlv({ prefix: "10.0.12.0/24", metric: 10 }, { prefix: "10.0.1.1/32", metric: 20 }).to_shex
   end
 
+  # One octet in the sub-TLV area cannot be a sub-TLV, so the list keeps it
+  # as a tail, and the hash carries it. 0a is 4 + 1 + 3 + 1 + 1.
+  def test_sub_tlv_tail_survives_the_hash
+    hex = "870a" "0000000a" "58" "0a000c" "01" "ee"
+    t = ISIS::Tlv.factory(octets(hex))
+    assert_equal "ee", t.entries.first.subtlvs.tail.unpack1("H*")
+    assert_equal [{ prefix: "10.0.12.0/24", metric: 10, subtlvs: [], subtlv_tail: "ee" }], t.to_hash
+    assert_equal hex, ISIS::Tlv::ExtendedIpReachability.new(t.to_hash).to_shex
+  end
+
   def test_hash_rebuilds
     t = tlv({ prefix: "10.0.12.0/24", metric: 10, up_down: true },
             { prefix: "10.0.1.1/32", metric: 20, subtlvs: [{ unknown: { type: 1, value: "0000002a" } }] })
