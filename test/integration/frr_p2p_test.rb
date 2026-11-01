@@ -83,4 +83,27 @@ class TestFrrP2p < Minitest::Test
     refute_equal "up", @lab.isis4r_state, @lab.report
     refute_equal "Up", @lab.frr_adjacency_state, @lab.report
   end
+
+  # Gate 3, the receiving half: FRR lists its own LSP in a CSNP and sends
+  # it only when asked, so isis4r has to request it, store it and
+  # acknowledge it. Measured: FRR 8.4.4 does not flood its LSP on a point to
+  # point adjacency without that request.
+  def test_isis4r_learns_and_acknowledges_frrs_lsp
+    @lab.start
+    assert_eventually("adjacency did not come up") { both_up? }
+    frr_id = "#{FrrLab::FRR_ID}.00-00"
+    assert_eventually("isis4r did not learn FRR's LSP") do
+      held = @lab.isis4r_database[frr_id]
+      frr = @lab.frr_database[frr_id]
+      held && frr && held["sequence"] == frr["sequence"] && held["checksum"] == frr["checksum"]
+    end
+    assert_eventually("isis4r's acknowledgment did not go out") { @lab.isis4r_database.dig(frr_id, "ssn")&.zero? }
+    # Acknowledged, so FRR does not send it again: over the next ten
+    # seconds isis4r receives it at most once more, if FRR refreshed it.
+    before = @lab.isis4r_log.scan(/< L1 LSP #{Regexp.escape(frr_id)}/).size
+    sleep 10
+    after = @lab.isis4r_log.scan(/< L1 LSP #{Regexp.escape(frr_id)}/).size
+    assert_operator after - before, :<=, 1, "FRR kept sending its LSP\n#{@lab.report}"
+  end
+
 end

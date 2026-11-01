@@ -123,6 +123,24 @@ class FrrLab
     isis4r_state_doc["state"]
   end
 
+  # isis4r's Level 1 database, one hash per entry, keyed by LSP ID.
+  def isis4r_database
+    isis4r_state_doc.fetch("database", []).to_h { |e| [e["lsp_id"], e] }
+  end
+
+  # FRR's own LSPs as `show isis database` lists them: LSP ID, sequence,
+  # checksum. FRR prints its own LSPs under its hostname, so the hostname
+  # is written back as FRR's System ID.
+  def frr_database
+    vtysh("show isis database").lines.filter_map do |line|
+      next unless (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x(\h{8})\s+0x(\h{4})/))
+
+      host, pseudonode, number, sequence, checksum = m.captures
+      system = host == @name ? FRR_ID : host
+      ["#{system}.#{pseudonode}-#{number}", { "sequence" => sequence.hex, "checksum" => checksum.hex }]
+    end.to_h
+  end
+
   def isis4r_log
     File.read(File.join(@dir, "isis4r.log"))
   rescue Errno::ENOENT
