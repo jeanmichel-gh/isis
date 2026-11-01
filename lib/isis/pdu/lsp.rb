@@ -76,17 +76,13 @@ module ISIS
       end
 
       def lsp_id=(value)
-        @lsp_id = value.is_a?(Octets) ? value.b : Pdu.dotted_octets(value.to_s.tr("-", "."))
+        @lsp_id = value.is_a?(Octets) ? value.b : Pdu.lsp_id_octets(value)
       end
 
-      # The LSP ID as routers print it, "1921.6800.1001.00-00": the System
-      # ID in groups of four hex digits, the pseudonode octet after a dot
-      # and the LSP Number after a hyphen. A convention with no clause
-      # behind it. new accepts it back.
+      # The LSP ID as routers print it, "1921.6800.1001.00-00". See
+      # Pdu.lsp_id_s.
       def lsp_id_s
-        hex = @lsp_id.unpack1("H*")
-        system = hex[0...-4].scan(/.{1,4}/)
-        "#{(system + [hex[-4, 2]]).join('.')}-#{hex[-2, 2]}"
+        Pdu.lsp_id_s(@lsp_id)
       end
 
       def partition?
