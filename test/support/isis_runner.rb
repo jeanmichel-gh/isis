@@ -74,7 +74,16 @@ unless lan
   levels.each { |l| circuits[l] = p2p }
 end
 
-circuit_state = lambda do |circuit, database|
+# A Decision Process per level, with the circuit, or the point to point
+# circuit's level, as its first hops.
+decisions = levels.to_h do |l|
+  decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
+                                     scheduler: scheduler, log: log)
+  decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
+  [l, decision]
+end
+
+circuit_state = lambda do |circuit, database, decision|
   state =
     if lan
       dis = circuit.dis
@@ -90,13 +99,17 @@ circuit_state = lambda do |circuit, database|
     { lsp_id: e.lsp_id_s, sequence: e.sequence, checksum: e.checksum,
       lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size, is_type: e.lsp&.is_type }
   end
+  state[:routes] = decision.routes.values.map do |r|
+    { prefix: r.prefix, metric: r.metric,
+      next_hops: r.adjacencies.map { |a| { address: a.address, circuit: a.circuit } } }
+  end
   state
 end
 
 # The first level's circuit at the top, and with both levels each one
 # under "levels".
 write_state = lambda do
-  per_level = levels.to_h { |l| [l.to_s, circuit_state.call(circuits[l], databases[l])] }
+  per_level = levels.to_h { |l| [l.to_s, circuit_state.call(circuits[l], databases[l], decisions[l])] }
   state = per_level[levels.first.to_s].dup
   state[:levels] = per_level if both
   File.write("#{state_file}.tmp", JSON.generate(state))
@@ -108,6 +121,7 @@ stop = false
 
 originators.each_value(&:start)
 circuits.values.uniq.each(&:start)
+decisions.each_value(&:start)
 next_state = clock.now
 until stop
   scheduler.run_due

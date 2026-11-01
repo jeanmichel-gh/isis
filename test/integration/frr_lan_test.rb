@@ -170,6 +170,29 @@ class TestFrrLan < Minitest::Test
     end
   end
 
+  # Routes computed across the LAN. isis4r to the pseudonode is 10, the
+  # pseudonode to FRR 0 (RFC 1142 7.2.3), and FRR's loopback 10 in FRR's
+  # LSP: 20 through 10.0.12.2, the address FRR's hellos carry. Our
+  # arithmetic, the same whichever side is DIS.
+  def assert_isis4r_reaches_frrs_loopback(dis)
+    assert_eventually("the DIS is not #{dis}") { both_up? && isis4r["dis"] == dis }
+    assert_eventually("isis4r does not reach 198.51.100.2/32 at 20 with #{dis} as DIS", 60) do
+      @lab.isis4r_routes["198.51.100.2/32"] ==
+        { "prefix" => "198.51.100.2/32", "metric" => 20,
+          "next_hops" => [{ "address" => "10.0.12.2", "circuit" => "veth0" }] }
+    end
+  end
+
+  def test_routes_computed_with_isis4r_as_dis
+    @lab.start(network: :broadcast, frr_loopback: "198.51.100.2/32", isis4r: { priority: 100 })
+    assert_isis4r_reaches_frrs_loopback("self")
+  end
+
+  def test_routes_computed_with_frr_as_dis
+    @lab.start(network: :broadcast, frr_loopback: "198.51.100.2/32", isis4r: { priority: 10 })
+    assert_isis4r_reaches_frrs_loopback(FrrLab::FRR_ID)
+  end
+
   # isis4r is DIS, then FRR's priority goes past it: isis4r resigns and
   # purges its pseudonode (7.2.3), FRR generates its own, and both sides
   # hold the same LSPs, isis4r's old pseudonode as a purge on both.

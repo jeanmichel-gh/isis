@@ -70,11 +70,13 @@ class FrrLab
   # both, so the holding time is short and a lost neighbour shows quickly.
   # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
   # adds lines under FRR's interface and +frr_router+ under its router isis.
+  # +frr_loopback+, a prefix such as "198.51.100.2/32", goes on FRR's lo
+  # and into IS-IS as a passive circuit.
   # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
   # 1 or 2, which FRR and isis4r's LAN circuit run alone, or "1-2", which
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
-            network: :point_to_point, level: 1)
+            network: :point_to_point, level: 1, frr_loopback: nil)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -85,8 +87,10 @@ class FrrLab
       sh "ip -n #{ns} link set lo up"
       sh "ip -n #{ns} link set veth0 up"
     end
+    sh "ip -n #{@frr_ns} addr add #{frr_loopback} dev lo" if frr_loopback
     @network = network
     @level = level
+    @frr_loopback = frr_loopback
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
                    prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level,
@@ -146,6 +150,12 @@ class FrrLab
     isis4r_level_doc(level).fetch("database", []).to_h { |e| [e["lsp_id"], e] }
   end
 
+  # The routes isis4r's Decision Process computed, keyed by prefix: metric
+  # and next hops, each an address and a circuit.
+  def isis4r_routes(level = nil)
+    isis4r_level_doc(level).fetch("routes", []).to_h { |r| [r["prefix"], r] }
+  end
+
   # FRR's LSPs as `show isis database` lists them: LSP ID, sequence,
   # checksum, and whether it is a purge. FRR prints its own LSPs under its
   # hostname, so the hostname is written back as FRR's System ID. Measured
@@ -191,6 +201,23 @@ class FrrLab
       end
     end
     blocks
+  end
+
+  # FRR's IS-IS routes from `show isis route`, keyed by prefix: metric,
+  # interface and next hop, nil where FRR prints "-". Measured on FRR
+  # 8.4.4, which has no json form of this command: one table per level,
+  # headed "IS-IS L1 IPv4 routing table:", with rows of prefix, metric,
+  # interface, next hop and labels.
+  def frr_isis_routes(level = 1)
+    section = nil
+    vtysh("show isis route").lines.filter_map do |line|
+      section = Regexp.last_match(1).to_i if line =~ /IS-IS L(\d) IPv4 routing table/
+      next unless section == level && (m = line.match(%r{^\s*(\d+\.\d+\.\d+\.\d+/\d+)\s+(\d+)\s+(\S+)\s+(\S+)}))
+
+      prefix, metric, iface, next_hop = m.captures
+      [prefix, { "metric" => metric.to_i, "interface" => iface == "-" ? nil : iface,
+                 "next_hop" => next_hop == "-" ? nil : next_hop }]
+    end.to_h
   end
 
   # FRR's route to +prefix+ from `show ip route PREFIX json`: the first
@@ -309,6 +336,7 @@ class FrrLab
        isis hello-interval #{hello_interval}
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
+      #{@frr_loopback ? "interface lo\n ip router isis LAB\n isis passive" : ''}
       router isis LAB
        net 49.0001.#{FRR_ID}.00
        is-type #{frr_level}
