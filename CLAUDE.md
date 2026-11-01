@@ -581,20 +581,23 @@ That is the whole failure mode under discussion here, and the check is
 blind to it. So tiling tells you a table is coherent. Only the
 specification tells you which name goes with which mask.
 
-Provenance, since it is not first hand. The layout above is cited to RFC
-1142 section 9.8, which is the 1990 republication and so is historical
-confirmation rather than the current standard. It agrees with a November
-2003 report on the ethereal-dev list, subject "ISIS ATT bit definition is
-wrong", which argued Ethereal had the four in the reverse order. Two
-sources that agree, neither of them the 2002 edition. Read the edition.
+Provenance. RFC 1142 clause 9.8 was **read** on 2026-10-31 and gives the
+layout above, with bit 1 the least significant (clause 9.1): "P - Bit 8",
+"ATT - Bits 7-4", with "Bit 4 - the Default Metric", "Bit 5 - the Delay
+Metric", "Bit 6 - the Expense Metric", "Bit 7 - the Error Metric",
+"LSPDBOL Bit 3", and "IS Type Bits 1 and 2". That is first hand, but it is
+the 1990 republication, so it is historical confirmation rather than the
+current standard. It agrees with a November 2003 report on the
+ethereal-dev list, subject "ISIS ATT bit definition is wrong", which argued
+Ethereal had the four in the reverse order.
 
 **Keep the Ethereal story, and keep it in its place.** It is not evidence
-for the layout. Nothing in this section is: the two sources agree with each
-other, neither is the current standard, and the tiling checks are blind to
-exactly the error in question. **The layout above is unsettled until
-somebody reads ISO/IEC 10589:2002, and the table is a lead.** What the
-Ethereal story is evidence for is that the reversal is a failure mode
-careful people reach, which is the argument for writing the test at all.
+for the layout; RFC 1142 is, for 1990. The tiling checks are blind to
+exactly the error in question, so they add nothing to it. **The 2002
+edition is still unread**, so assert the masks as RFC 1142 gives them and
+cite RFC 1142 by name. What the Ethereal story is evidence for is that the
+reversal is a failure mode careful people reach, which is the argument for
+writing the test at all.
 
 **The test has to assert the mask.** Asserting `0x08` for the default bit
 catches a reversal at once, since a reversed encoder writes `0x40`. The
@@ -618,12 +621,18 @@ The extended metric is 24 bits in TLV 22 and 32 bits in TLV 135.
 
 **There are four original metric octets per entry, not one, and they do not
 share a layout.** Not one octet holding a value, an internal/external bit
-and an S bit. Four octets, two layouts:
+and an S bit. Four octets, two layouts. For TLV 2, read in RFC 1142 clause
+9.8:
 
-* The **default** metric octet carries the six bit value, an
-  internal/external bit, and a reserved high bit.
+* The **default** metric octet carries the six bit value, the I/E bit at
+  bit 7, and "Bit 8 of this field is reserved".
 * The **delay, expense and error** metric octets each carry the six bit
-  value, an **S** bit and a reserved bit.
+  value, the I/E bit at bit 7, and the **S** bit at bit 8: "If this IS
+  does not support this metric it shall set the bit S to 1".
+
+So in TLV 2 every one of the four has an I/E bit, and only the high bit
+differs. The IP reachability TLVs of RFC 1195 are not read here and may
+not match; that is the per TLV point below.
 
 And **S set means the metric is not supported**, which is the reverse of
 what the name suggests and is the single most likely thing to be
@@ -1319,12 +1328,13 @@ Cleartext authentication is a third case and shares none of this.
    authentication is computed." **The two are zeroed for different
    reasons.** Remaining Lifetime is decremented during normal flooding, so
    a digest covering it would fail at the next hop. The **checksum is not
-   modified in transit**: the historical specification says another system
-   must not alter it, and one that cannot keep it valid purges the LSP
-   instead. It is zeroed because the checksum covers the digest, so the
+   modified in transit**: RFC 1142 clause 7.3.11, read, says "The
+   checksum shall never be modified by any other system", and clause
+   7.3.14 has a receiver of an LSP with an incorrect checksum "overwrite
+   the Checksum and Remaining Lifetime with 0" and treat it as expired.
+   It is zeroed because the checksum covers the digest, so the
    digest must not cover the checksum, which is the circular dependency
-   the previous section is about. RFC 1142 section 7.3.11 is cited for the
-   transit rule and has not been read here.
+   the previous section is about.
 4. Compute the digest, write it into the Authentication Value, restore the
    real Remaining Lifetime.
 5. Compute the LSP checksum and write it in.
@@ -1652,8 +1662,9 @@ layout, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
 injected clock. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
 `docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
-1 is met**, with one reservation: the header fields are second hand, from
-Wireshark and FRR, not read in the standard (see the list at the end). The
+1 is met**. The header fields were read in RFC 1142 clause 9 and agree
+with Wireshark and FRR, except octets 7 and 8, where the editions differ
+(see the list at the end). The
 LAN Hello still has its proof of concept API and moves onto the contract
 in gate 2. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
@@ -1816,6 +1827,7 @@ twenty two of them inline buried the contract.
 | OR-ing masks to `0xff` proves no overlap | OR is idempotent; needs union **and** pairwise AND, and neither proves the mapping | LSP flags octet |
 | A test setting only the default ATT bit misses a reversal | It catches it; the **round trip** is what misses it | LSP flags octet |
 | The narrow metric is one octet with a value, an I/E bit and an S bit | Four octets in two layouts, and S set means **not** supported | Narrow and wide metrics |
+| In those four, delay, expense and error carry an S bit and a reserved bit | In TLV 2, RFC 1142 gives all four an I/E bit; only bit 8 differs, reserved in the default and S in the others | Narrow and wide metrics |
 | Invalidation follows size changes | It follows content changes at any depth; compare retained normalized bytes | How an edit invalidates |
 | One coverage span | Two, and they are **ordered**: digest, then checksum | One retained input per calculation |
 | A common header edit leaves the checksum | Only unauthenticated; otherwise it reaches the checksum through the digest | same |
@@ -1857,75 +1869,62 @@ written down as settled.
 Written from memory while planning, so each is a lead and not a fact. Check
 each against the document and replace this list with what you found.
 
-**Found second hand, 2026-10-31.** RFC 1142 section 9 could not be read
-from the sandbox: rfc-editor.org is blocked and every mirror the fetcher
-reached stops partway through section 7. So these were checked against two
-independent open source implementations instead, Wireshark
+**Read in RFC 1142, 2026-10-31.** The user supplied the text, so clause 9
+and clause 7.3 were read first hand, and checked against Wireshark
 (`epan/dissectors/packet-isis.c`, `packet-isis.h`, `packet-isis-hello.c`)
-and FRR (`isisd/isis_pdu.c`, `isis_pdu.h`). Two implementations agreeing is
-evidence, not the standard. Each stays on this list until somebody reads
-the clause.
+and FRR (`isisd/isis_pdu.c`, `isis_pdu.h`). RFC 1142 is the 1990
+republication, so each of these is confirmed for that text and not for the
+2002 edition:
 
-* ID Length: 0 means six octets and 255 means a null System ID, in
-  Wireshark; FRR accepts only 0 and 6. Used in `Pdu.id_width`.
-* PDU type numbers 15, 16, 17, 18, 20, 24, 25, 26 and 27, and the type as
-  the low five bits with the top three reserved: Wireshark and FRR agree.
-* Maximum Area Addresses of 0 means three: Wireshark's field description
-  only.
-* The Length Indicator is the fixed header length: Wireshark flags a value
-  "smaller than the fixed length header size". FRR's fixed header sizes are
-  8 for the common header, then 19 for a LAN hello, 12 for a point to
-  point hello, 19 for an LSP, 25 for a CSNP and 9 for a PSNP, all for a six
-  octet ID.
-* The hello Circuit Type is the low two bits with six reserved, and the LAN
-  hello Priority the low seven with one reserved: Wireshark's masks.
-* The LSP checksum span: the visible end of RFC 1142 clause 7.3.11 says
-  "All Checksum calculations on the LSP are performed treating the SOURCE ID
-  field as the first octet", which agrees with the span written above. Only
-  the end of the clause could be read, so the transit rule below is still
-  unread.
+* **ID Length**, clause 9.5: 1 to 8 is the length, 0 means six octets, 255
+  means a null ID, "All other values are illegal". Wireshark agrees; FRR
+  accepts only 0 and 6. Used in `Pdu.id_width`.
+* **PDU type** in bits 1 to 5, bits 6 to 8 reserved, and the numbers 15,
+  16, 17, 18, 20, 24, 25, 26 and 27, one per clause from 9.5 to 9.13.
+* **Length Indicator** is "Length of the fixed header in octets", in every
+  PDU clause. **PDU Length** is "Entire Length of this PDU, in octets,
+  including header". FRR's fixed header sizes, 8 plus 19, 12, 19, 25 and 9
+  for six octet IDs, match the clause figures.
+* **Circuit Type**, clause 9.5: low two bits, six reserved; 0 is a
+  reserved value and "the entire PDU shall be ignored", 1 is Level 1 only,
+  2 Level 2 only, 3 both. The same field in the point to point hello,
+  clause 9.7. **Priority**: bits 1 to 7, bit 8 reserved.
+* **LSP flags**, clause 9.8, quoted in the flags section above.
+* **LSP checksum**, clause 7.3.11: "computed over all fields in the LSP
+  which appear after the Remaining Lifetime field", so Remaining Lifetime
+  is outside it, and "shall never be modified by any other system".
+* **TLV 6 entries**, clause 9.5: "6 octet MAC Address", fixed, so ID
+  Length does not touch them.
+* **TLV 2 metric octets**, clause 9.8, quoted in the metrics section.
 
-Still from memory:
+**Where RFC 1142 and the implementations differ: octets 7 and 8.** RFC
+1142 calls them ECO and User ECO, "transmitted as zero, ignored on
+receipt". Wireshark and FRR read them as Reserved and **Maximum Area
+Addresses**, which is the later layout. The code follows the
+implementations, since that is what routers send, and zero is the default
+either way. Maximum Area Addresses, and zero meaning three, stay second
+hand from Wireshark until the 2002 edition is read.
 
-* The ID Length encoding, including what zero means and which value means a
-  null System ID. Second hand above.
-* The exact span the LSP checksum covers, and that Remaining Lifetime is
-  outside it.
-* The Length Indicator value for each PDU type, and that it is the fixed
-  header length rather than the PDU length.
-* The PDU type numbers for all nine PDUs, and which bits of that octet are
-  the type and which are reserved.
+**Also worth knowing for the receive policy.** RFC 1142 clause 7.3.14 says
+a control PDU larger than ReceiveLSPBufferSize "shall be treated as if it
+had an invalid checksum". RFC 3719 section 5 recommends against discarding
+it. The default policy follows RFC 3719, and should quote both.
+
+Still unread:
+
+* **Everything above in ISO/IEC 10589:2002.** RFC 1142 numbering is not
+  the 2002 numbering, so none of the clause numbers above converts.
+* **Maximum Area Addresses**, and whether zero means three.
 * Which TLVs are legal in which PDU, which is validation's business and not
   the encoder's.
 * The order of the checksum and authentication fixups.
-* Whether the Maximum Area Addresses field of zero means three.
-* **The LSP flags octet masks.** The highest priority line here. Two
-  sources agree on the layout in the flags section above and neither is the
-  2002 edition, and the tiling checks there are **blind to the one error in
-  question**, since a reversed mapping tiles perfectly. So nothing has
-  confirmed which name goes with which mask. Read the edition, then delete
-  this line.
 * **RFC 5310 sections 3.3 and 3.4**, for how generic cryptographic
   authentication prepares the Authentication Value, which is cited in the
   authentication section and has not been read here. The design only needs
   to know that the preparation is the algorithm's, which holds either way,
   but the second algorithm cannot be written without it.
-* **RFC 1142 section 7.3.11**, cited in the authentication section for the
-  rule that another system must not modify an LSP's checksum. Not read
-  here. The conclusion it supports does not depend on it, since the
-  circular dependency is reason enough to zero the field, but the transit
-  rule itself is worth confirming before anyone leans on it.
-* **The four original metric octets**: that the default one carries an
-  internal/external bit and a reserved bit, that the other three carry an S
-  bit and a reserved bit, and that **S set means not supported**. The
-  inversion is the part most likely to be implemented backwards, so verify
-  it before writing the predicate and name the method for what it answers.
-* **The Circuit Type field** in the three hello PDUs: its width, its
-  position, and the encoding of L1, L2 and both. The design above depends
-  on it carrying all three, so if it does not, the hello level handling
-  changes.
-* **Whether TLV 6's entries are fixed at six octets** or carry a length,
-  since the design above says ID Length does not touch them.
+* **RFC 1195 sections 5.3.4 and 5.3.5**, the metric octets in TLVs 128
+  and 130, which may not match TLV 2.
 * **The RFCs named in the phases.** RFC 8667, 9350, 9352 and 8706 are cited
   by title for scope, not read here. RFC 9885 was read in part, sections 4
   and 5 on what a Multi-Part TLV is and how it is received; the per TLV key
@@ -1938,7 +1937,7 @@ confidently said:
 
 * **TLV 22 and TLV 135 field widths and sub-TLV framing**, quoted verbatim
   from RFC 5305 sections 3 and 4 in the composition section above. First
-  hand, and the only first hand protocol reading in this file.
+  hand.
 * **RFC 5120 section 1.2** is "Definitions of Terms Used in This Document"
   and defines CSNP, DIS, IIH, LSP, PSNP and SPF. Read.
 * **RFC 9681** is IS-IS Fast Flooding. Section 5.2 gives the three classes

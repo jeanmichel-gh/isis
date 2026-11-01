@@ -5,12 +5,12 @@ module ISIS
     # The Partial Sequence Numbers PDU, one layout for both levels. The
     # level lives in the PDU type, 26 for Level 1 and 27 for Level 2.
     #
-    # Fixed header after the common header, second hand from FRR
-    # (isisd/isis_pdu.h: struct isis_partial_seqnum_hdr, ISIS_PSNP_HDRLEN 9)
-    # and Wireshark, not read in ISO 10589:
+    # Fixed header after the common header, RFC 1142 clause 9.12 (and 9.13
+    # for Level 2), agreeing with FRR (isisd/isis_pdu.h, ISIS_PSNP_HDRLEN 9):
     #
     #   PDU Length  2 octets, the length of the whole PDU
-    #   Source ID   ID Length + 1 octets: a System ID and a circuit octet
+    #   Source ID   ID Length + 1 octets: "the system ID of Intermediate
+    #               system (with zero Circuit ID)"
     #
     # Its TLVs are read as Tlv::Unknown until the TLV 9 class exists.
     class Psnp < Layout

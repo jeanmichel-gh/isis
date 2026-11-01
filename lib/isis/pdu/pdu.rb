@@ -6,23 +6,25 @@ module ISIS
   # type registry, the factory with its parse policy, and the PDUs that
   # are not a layout: Unknown, Truncated and Malformed.
   #
-  # Sources for the header fields. Not read in ISO/IEC 10589 or RFC 1142:
-  # every field below is second hand, from two independent open source
-  # implementations that agree, Wireshark (epan/dissectors/packet-isis.c
-  # and packet-isis.h) and FRR (isisd/isis_pdu.c and isis_pdu.h), read on
-  # 2026-10-31. Check each against the standard before relying on it.
+  # Sources for the header fields. Read in RFC 1142 clause 9 (the 1990
+  # republication, so historical confirmation and not ISO/IEC 10589:2002),
+  # and checked against two open source implementations, Wireshark
+  # (epan/dissectors/packet-isis.c, packet-isis.h) and FRR (isisd/isis_pdu.c,
+  # isis_pdu.h), on 2026-10-31. Where RFC 1142 and the implementations
+  # differ, the comment beside the field says so.
   class Pdu
     include Node
 
-    # Eight octets in every PDU. Wireshark and FRR (ISIS_FIXED_HDR_LEN).
+    # Eight octets in every PDU: RFC 1142 clauses 9.5 to 9.13 all begin
+    # with the same eight. Wireshark and FRR (ISIS_FIXED_HDR_LEN) agree.
     COMMON_HEADER = 8
     IRPD = 0x83
-    # The type is the low five bits of the PDU Type octet, and the top
-    # three are reserved. Wireshark: ISIS_TYPE_MASK, ISIS_TYPE_RESERVED_MASK.
+    # RFC 1142 clause 9.5: "PDU Type (bits 1 through 5) ... Note bits 6, 7
+    # and 8 are Reserved". Bit 1 is the least significant (clause 9.1).
     TYPE_MASK = 0x1f
     TYPE_RESERVED_MASK = 0xe0
 
-    # The nine PDU types. Wireshark packet-isis.h and FRR isis_pdu.h agree.
+    # The nine PDU types, one per clause in RFC 1142 9.5 to 9.13.
     TYPES = {
       15 => :l1_lan_hello, 16 => :l2_lan_hello, 17 => :p2p_hello,
       18 => :l1_lsp, 20 => :l2_lsp,
@@ -30,12 +32,13 @@ module ISIS
       26 => :l1_psnp, 27 => :l2_psnp
     }.freeze
 
-    # How many octets a System ID is, from the ID Length field. Zero means
-    # the default of six, 255 means a null System ID of no octets, and
-    # anything else is the length itself. Second hand: Wireshark,
-    # "zero means 6-octet ID field length" and "255 means null ID field".
-    # FRR accepts only 0 and 6. Neither enforces a range, and nor does
-    # this, since building never validates.
+    # How many octets a System ID is, from the ID Length field. RFC 1142
+    # clause 9.5: "An integer between 1 and 8, inclusive, indicating an ID
+    # field of the corresponding length", "The value zero, which indicates
+    # a 6 octet ID field length", "The value 255, which means a null ID
+    # field (i.e. zero length)", and "All other values are illegal". The
+    # illegal values are validation's business, so this reads them as a
+    # length, since building never validates. FRR accepts only 0 and 6.
     def self.id_width(id_length)
       case id_length
       when 0 then 6
@@ -108,6 +111,15 @@ module ISIS
 
     # The common header, as a value. The Length Indicator is not here: it
     # is a computed field and belongs to the PDU, which knows its layout.
+    # RFC 1142 clause 9.5: "Length of the fixed header in octets".
+    #
+    # Octets 7 and 8 are where the editions part. RFC 1142 calls them ECO
+    # and User ECO, both "transmitted as zero, ignored on receipt". Wireshark
+    # and FRR read them as Reserved and Maximum Area Addresses, which is the
+    # later edition's layout and what routers send. Both readings put zero
+    # there by default, and the octets are kept as they arrive either way.
+    # Maximum Area Addresses, and zero meaning three, are second hand from
+    # Wireshark until ISO/IEC 10589:2002 is read.
     class Header
       attr_accessor :version_ext, :id_length, :type_octet, :version, :reserved,
                     :max_area_addresses
