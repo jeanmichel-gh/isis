@@ -107,13 +107,14 @@ class TestFrrLan < Minitest::Test
 
   # Each side's LSPs as LSP ID => [sequence, purged], so a purge on one
   # side and a live LSP on the other do not count as agreeing.
-  def isis4r_view
-    @lab.isis4r_database.reject { |_, e| e["sequence"].zero? }
+  # +level+ picks one level when both run.
+  def isis4r_view(level = nil)
+    @lab.isis4r_database(level).reject { |_, e| e["sequence"].zero? }
         .transform_values { |e| [e["sequence"], e["lifetime"].zero?] }
   end
 
-  def frr_view
-    @lab.frr_database.transform_values { |e| [e["sequence"], e["purged"]] }
+  def frr_view(level = nil)
+    @lab.frr_database(level).transform_values { |e| [e["sequence"], e["purged"]] }
   end
 
   def frr_routes_isis4rs_prefix?
@@ -244,6 +245,38 @@ class TestFrrLan < Minitest::Test
       view[old]&.last && view.keys.grep(/\A#{Regexp.escape(FrrLab::FRR_ID)}\.(?!00)\h\h-00\z/).size == 1 &&
         view == frr_view
     end
+  end
+
+  # -- Both levels: FRR level-1-2, isis4r a circuit per level on veth0 --
+
+  # isis4r runs both levels on the one interface, hellos of circuit type 3
+  # at each (RFC 1142 9.5, 9.6), and is DIS at both. FRR forms an
+  # adjacency at each level, each level's databases agree on their own,
+  # isis4r's pseudonode included at each, and every LSP isis4r generates
+  # carries IS type 3, its Level 1 one too (9.8).
+  def test_both_levels_agree_on_one_interface
+    @lab.start(network: :broadcast, level: "1-2", isis4r: { priority: 100 })
+    assert_eventually("isis4r did not become DIS at both levels") do
+      [1, 2].all? { |l| @lab.isis4r_level_doc(l)["dis"] == "self" }
+    end
+    assert_eventually("FRR did not come up at both levels") do
+      lines = @lab.vtysh("show isis neighbor").lines.grep(/veth0/)
+      [1, 2].all? { |l| lines.any? { |x| x.split[2] == l.to_s && x.split[3] == "Up" } }
+    end
+    # FRR 8.4.4 forms both adjacencies whatever circuit type the hellos
+    # carry (measured), so the circuit type is asserted from what FRR
+    # reports: "Circuit type: L1L2" for each level's adjacency.
+    detail = @lab.vtysh("show isis neighbor detail")
+    assert_equal 2, detail.scan("Circuit type: L1L2").size, @lab.report
+    expected = ["#{FrrLab::ISIS4R_ID}.00-00", "#{FrrLab::ISIS4R_ID}.01-00", "#{FrrLab::FRR_ID}.00-00"].sort
+    [1, 2].each do |level|
+      assert_eventually("the Level #{level} databases do not agree", 30) do
+        isis4r_view(level).keys.sort == expected && isis4r_view(level) == frr_view(level)
+      end
+      own = @lab.isis4r_database(level).select { |id, _| id.start_with?(FrrLab::ISIS4R_ID) }
+      assert(own.values.all? { |e| e["is_type"] == 3 }, "Level #{level}: #{own}\n#{@lab.report}")
+    end
+    assert_eventually("FRR did not route to 192.0.2.1/32", 60) { frr_routes_isis4rs_prefix? }
   end
 end
 

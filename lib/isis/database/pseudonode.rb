@@ -29,10 +29,10 @@ module ISIS
 
     def initialize(circuit:, database:, scheduler:, log:, metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
-                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, buffer_size: LSP_BUFFER_SIZE)
+                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, buffer_size: LSP_BUFFER_SIZE, is_type: nil)
       super(system_id: circuit.system_id.unpack1("H*"), database: database, scheduler: scheduler, log: log, areas: [],
             protocols: [], metric_style: metric_style, area_key: area_key, refresh_interval: refresh_interval,
-            minimum_interval: minimum_interval, buffer_size: buffer_size)
+            minimum_interval: minimum_interval, buffer_size: buffer_size, is_type: is_type)
       @circuit = circuit
       @lsp_id = (circuit.own_lan_id + "\x00".b).b
       @active = false

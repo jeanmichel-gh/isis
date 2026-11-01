@@ -28,37 +28,48 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              logger: ISIS::Runtime::Log.writer($stdout, clock: clock, debug: true),
                              tracer: ISIS::Runtime::Log.trace_writer($stdout, clock: clock, debug: true))
 socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
-level = config.fetch(:level, 1)
-database = ISIS::Database.new(level: level, clock: clock, scheduler: scheduler, log: log)
+# :level is 1, 2 or "1-2", the last for a LAN at both levels: a circuit,
+# a database and an originator per level, all on the one interface.
+levels = config.fetch(:level, 1).to_s == "1-2" ? [1, 2] : [Integer(config.fetch(:level, 1))]
+both = levels.size == 2
 transport = ISIS::Link::SocketTransport.new(socket)
 lan = config[:network] == "broadcast"
-originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
-                                  log: log, areas: config.fetch(:areas),
-                                  ip_addresses: config.fetch(:ip_addresses, []),
-                                  prefixes: config.fetch(:prefixes, []),
-                                  metric_style: config.fetch(:metric_style, "wide").to_sym,
-                                  area_key: config[:area_key],
-                                  minimum_interval: config.fetch(:minimum_lsp_interval, 1))
-abort "a point to point circuit here is Level 1 only" if !lan && level != 1
-circuit =
-  if lan
-    ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log, name: iface, level: level,
-                         database: database, originator: originator, area_key: config[:area_key],
-                         system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
-                         ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
-                         hello_interval: config.fetch(:hello_interval),
-                         hello_multiplier: config.fetch(:hello_multiplier), hello_key: config[:hello_key])
-  else
-    ISIS::P2pCircuit.new(transport: transport, scheduler: scheduler, log: log,
-                         database: database, originator: originator,
-                         hello_key: config[:hello_key], area_key: config[:area_key],
-                         name: iface, system_id: config.fetch(:system_id), snpa: mac,
-                         areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
-                         hello_interval: config.fetch(:hello_interval),
-                         hello_multiplier: config.fetch(:hello_multiplier))
-  end
+abort "a point to point circuit here is Level 1 only" if !lan && levels != [1]
+databases = {}
+originators = {}
+circuits = {}
+levels.each do |level|
+  database = databases[level] = ISIS::Database.new(level: level, clock: clock, scheduler: scheduler, log: log)
+  originator = originators[level] =
+    ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
+                         log: log, areas: config.fetch(:areas),
+                         ip_addresses: config.fetch(:ip_addresses, []),
+                         prefixes: config.fetch(:prefixes, []),
+                         metric_style: config.fetch(:metric_style, "wide").to_sym,
+                         area_key: config[:area_key],
+                         minimum_interval: config.fetch(:minimum_lsp_interval, 1), is_type: both ? 3 : nil)
+  circuits[level] =
+    if lan
+      ISIS::LanCircuit.new(transport: transport, scheduler: scheduler, log: log,
+                           name: both ? "#{iface}-l#{level}" : iface, level: level,
+                           circuit_type: both ? :l1l2 : nil,
+                           database: database, originator: originator, area_key: config[:area_key],
+                           system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
+                           ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
+                           hello_interval: config.fetch(:hello_interval),
+                           hello_multiplier: config.fetch(:hello_multiplier), hello_key: config[:hello_key])
+    else
+      ISIS::P2pCircuit.new(transport: transport, scheduler: scheduler, log: log,
+                           database: database, originator: originator,
+                           hello_key: config[:hello_key], area_key: config[:area_key],
+                           name: iface, system_id: config.fetch(:system_id), snpa: mac,
+                           areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
+                           hello_interval: config.fetch(:hello_interval),
+                           hello_multiplier: config.fetch(:hello_multiplier))
+    end
+end
 
-write_state = lambda do
+circuit_state = lambda do |circuit, database|
   state =
     if lan
       dis = circuit.dis
@@ -72,8 +83,17 @@ write_state = lambda do
     end
   state[:database] = database.entries.map do |e|
     { lsp_id: e.lsp_id_s, sequence: e.sequence, checksum: e.checksum,
-      lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size }
+      lifetime: e.remaining_lifetime, srm: e.srm.size, ssn: e.ssn.size, is_type: e.lsp&.is_type }
   end
+  state
+end
+
+# The first level's circuit at the top, and with both levels each one
+# under "levels".
+write_state = lambda do
+  per_level = levels.to_h { |l| [l.to_s, circuit_state.call(circuits[l], databases[l])] }
+  state = per_level[levels.first.to_s].dup
+  state[:levels] = per_level if both
   File.write("#{state_file}.tmp", JSON.generate(state))
   File.rename("#{state_file}.tmp", state_file)
 end
@@ -81,21 +101,24 @@ end
 stop = false
 %w[TERM INT].each { |sig| Signal.trap(sig) { stop = true } }
 
-originator.start
-circuit.start
+originators.each_value(&:start)
+circuits.each_value(&:start)
 next_state = clock.now
 until stop
   scheduler.run_due
-  # Wait for a frame at most until the next timer is due.
+  # Wait for a frame at most until the next timer is due. Each frame read
+  # goes to every circuit on the interface; each takes its own level's.
   due = scheduler.next_due
   wait = due ? (due - clock.now).clamp(0.01, 0.1) : 0.1
-  circuit.poll(timeout: wait)
+  while (frame = transport.receive(timeout: wait))
+    circuits.each_value { |c| c.receive_frame(frame) }
+  end
   if clock.now >= next_state
     write_state.call
     next_state = clock.now + 0.5
   end
 end
-circuit.stop
-originator.stop
+circuits.each_value(&:stop)
+originators.each_value(&:stop)
 write_state.call
 socket.close

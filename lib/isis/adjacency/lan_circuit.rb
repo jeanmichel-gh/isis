@@ -4,8 +4,9 @@ module ISIS
   # A broadcast circuit at one level: LAN hellos, the adjacencies they make,
   # and the election of the LAN Designated Intermediate System. RFC 1142
   # clauses 8.4.1 to 8.4.4. A system that runs both levels on a LAN runs
-  # one of these per level, each with its own adjacencies, hello timer and
-  # election, which is how clause 8.4.1 describes them: "Separate
+  # one of these per level, each with its own adjacencies, hello timer,
+  # election and database, both with circuit_type :l1l2 so their hellos
+  # say so, which is how clause 8.4.1 describes them: "Separate
   # adjacencies shall be created by the receipt of Level 1 and Level 2 LAN
   # IIH PDUs."
   #
@@ -73,7 +74,7 @@ module ISIS
       end
     end
 
-    attr_reader :name, :level, :system_id, :snpa, :neighbors, :log, :scheduler, :transport, :dis, :database,
+    attr_reader :circuit_type, :name, :level, :system_id, :snpa, :neighbors, :log, :scheduler, :transport, :dis, :database,
                 :originator, :pseudonode
     attr_accessor :areas, :priority, :hello_interval, :dis_hello_interval, :hello_multiplier, :hello_key, :metric,
                   :area_key
@@ -84,8 +85,17 @@ module ISIS
                    ip_addresses: [], protocols: [:ipv4], hello_key: nil, database: nil, originator: nil,
                    metric: 10, area_key: nil, complete_snp_interval: COMPLETE_SNP_INTERVAL,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
-                   lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL)
+                   lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL, circuit_type: nil)
       raise ArgumentError, "a LAN circuit is Level 1 or Level 2, not #{level.inspect}" unless [1, 2].include?(level)
+      # The Circuit Type its hellos carry: :l1 or :l1l2 at Level 1, :l2 or
+      # :l1l2 at Level 2. :l1l2 says this system runs both levels on the
+      # link, with a circuit for each (RFC 1142 9.5 and 9.6: "3 both Level 1
+      # and Level 2 (sender is Level 2 Intermediate system, and will use this
+      # link both for Level 1 and Level 2 traffic)").
+      circuit_type ||= level == 2 ? :l2 : :l1
+      unless [level == 2 ? :l2 : :l1, :l1l2].include?(circuit_type)
+        raise ArgumentError, "a Level #{level} circuit's hellos are not circuit type #{circuit_type.inspect}"
+      end
       if originator && originator.level != level
         raise ArgumentError, "the originator's database is Level #{originator.level}, and this circuit is Level #{level}"
       end
@@ -95,6 +105,7 @@ module ISIS
       @log = log
       @name = name
       @level = level
+      @circuit_type = circuit_type
       @system_id = Pdu.dotted_octets(system_id)
       @snpa = snpa.is_a?(Datalink::MAC) ? snpa : Datalink::MAC.new(snpa)
       @areas = areas
@@ -128,7 +139,7 @@ module ISIS
                                    metric_style: originator.metric_style, area_key: originator.area_key,
                                    refresh_interval: originator.refresh_interval,
                                    minimum_interval: originator.minimum_interval,
-                                   buffer_size: originator.buffer_size)
+                                   buffer_size: originator.buffer_size, is_type: originator.is_type)
       originator.attach(self)
     end
 
@@ -226,7 +237,7 @@ module ISIS
       tlvs << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       listed = @neighbors.values.map(&:snpa)
       tlvs << Tlv::IsNeighbors.new(listed) unless listed.empty?
-      hello = Pdu::LanHello.new(level: @level, circuit_type: @level == 2 ? :l2 : :l1,
+      hello = Pdu::LanHello.new(level: @level, circuit_type: @circuit_type,
                                 source_id: Octets.new(@system_id), holding_time: holding_time,
                                 priority: @priority, lan_id: Octets.new(lan_id),
                                 tlvs: Receive::Authentication.keyed(tlvs, @hello_key))

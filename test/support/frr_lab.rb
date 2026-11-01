@@ -71,7 +71,8 @@ class FrrLab
   # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
   # adds lines under FRR's interface and +frr_router+ under its router isis.
   # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
-  # 1 or 2: FRR runs that level alone, and so does isis4r's LAN circuit.
+  # 1 or 2, which FRR and isis4r's LAN circuit run alone, or "1-2", which
+  # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1)
     cleanup
@@ -132,9 +133,17 @@ class FrrLab
     isis4r_state_doc["state"]
   end
 
-  # isis4r's Level 1 database, one hash per entry, keyed by LSP ID.
-  def isis4r_database
-    isis4r_state_doc.fetch("database", []).to_h { |e| [e["lsp_id"], e] }
+  # isis4r's state for +level+: with both levels running, the one under
+  # "levels"; otherwise the whole document.
+  def isis4r_level_doc(level = nil)
+    doc = isis4r_state_doc
+    level && doc["levels"] ? doc["levels"].fetch(level.to_s, {}) : doc
+  end
+
+  # isis4r's database, one hash per entry, keyed by LSP ID: the only
+  # level's, or +level+'s when it runs both.
+  def isis4r_database(level = nil)
+    isis4r_level_doc(level).fetch("database", []).to_h { |e| [e["lsp_id"], e] }
   end
 
   # FRR's LSPs as `show isis database` lists them: LSP ID, sequence,
@@ -142,8 +151,14 @@ class FrrLab
   # hostname, so the hostname is written back as FRR's System ID. Measured
   # on FRR 8.4.4: an LSP with zero Remaining Lifetime shows its holdtime in
   # parentheses, "(1192)", the time left before the header goes.
-  def frr_database
+  #
+  # With +level+, only that level's section, which FRR heads "IS-IS
+  # Level-1 link-state database:" or "Level-2".
+  def frr_database(level = nil)
+    section = nil
     vtysh("show isis database").lines.filter_map do |line|
+      section = Regexp.last_match(1).to_i if line =~ /Level-(\d) link-state database/
+      next if level && section != level
       next unless (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x(\h{8})\s+0x(\h{4})\s+(\(?)\d+/))
 
       host, pseudonode, number, sequence, checksum, paren = m.captures
@@ -157,11 +172,16 @@ class FrrLab
   # under its header joined, keyed by LSP ID as frr_database keys it. For
   # an IS reachability line, FRR 8.4.4 prints "Extended Reachability:
   # 0000.0000.0001.01 (Metric: 10)".
-  def frr_database_detail
+  # With +level+, only that level's section, as for frr_database.
+  def frr_database_detail(level = nil)
     blocks = {}
     current = nil
+    section = nil
     vtysh("show isis database detail").each_line do |line|
-      if (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x\h{8}/))
+      section = Regexp.last_match(1).to_i if line =~ /Level-(\d) link-state database/
+      if level && section != level
+        current = nil
+      elsif (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x\h{8}/))
         host, pseudonode, number = m.captures
         current = blocks["#{host == @name ? FRR_ID : host}.#{pseudonode}-#{number}"] = +""
       elsif current && line.start_with?("  ")
@@ -269,6 +289,12 @@ class FrrLab
 
   def state_file = File.join(@dir, "state.json")
 
+  # FRR's word for the level the lab runs: level-1, level-2-only or
+  # level-1-2.
+  def frr_level
+    { 1 => "level-1", 2 => "level-2-only", "1-2" => "level-1-2" }.fetch(@level)
+  end
+
   def start_frr(hello_interval, hello_multiplier, iface_lines, router_lines)
     FileUtils.mkdir_p([@run, @etc])
     conf = File.join(@etc, "frr.conf")
@@ -278,14 +304,14 @@ class FrrLab
       debug isis adj-packets
       interface veth0
        ip router isis LAB
-       isis circuit-type #{@level == 2 ? 'level-2-only' : 'level-1'}
+       isis circuit-type #{frr_level}
       #{@network == :broadcast ? '' : ' isis network point-to-point'}
        isis hello-interval #{hello_interval}
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
       router isis LAB
        net 49.0001.#{FRR_ID}.00
-       is-type #{@level == 2 ? 'level-2-only' : 'level-1'}
+       is-type #{frr_level}
       #{router_lines.map { |l| " #{l}" }.join("\n")}
     CONF
     # zebra gets a file of its own: given isisd's, it rejects every IS-IS line.
