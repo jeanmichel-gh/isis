@@ -8,22 +8,28 @@ module ISIS
   #   :init  we heard the neighbor, but it has not yet listed us in its
   #          IS Neighbors TLV, so it may not have heard us
   #   :up    the neighbor lists our SNPA, so the link is two-way
+  #
+  # Times come from the injected clock, never from the system's, so a test
+  # can expire an adjacency by advancing a ManualClock.
   class Adjacency
     attr_accessor :system_id, :snpa, :state, :holding_time, :last_seen
+    attr_reader :clock
 
-    def initialize(system_id:, snpa:, state:, holding_time:)
+    def initialize(system_id:, snpa:, state:, holding_time:, clock:)
       @system_id = system_id
       @snpa = snpa
       @state = state
       @holding_time = holding_time
+      @clock = clock
       touch
     end
 
     def touch
-      @last_seen = now
+      @last_seen = @clock.now
     end
 
-    def expired?(at = now)
+    # True once more than the holding time has passed since the last hello.
+    def expired?(at = @clock.now)
       at - @last_seen > @holding_time
     end
 
@@ -33,12 +39,6 @@ module ISIS
 
     def to_s
       "#{@system_id} #{@state} via #{@snpa}"
-    end
-
-    private
-
-    def now
-      Process.clock_gettime(Process::CLOCK_MONOTONIC)
     end
   end
 end

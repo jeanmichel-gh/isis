@@ -18,6 +18,8 @@ socket). Those are the pieces we will reassess.
   when the neighbor lists our SNPA in its IS Neighbors TLV.
 - Two instances converging over the datalink-socket loopback backend, with
   no privileges.
+- An injected clock and scheduler, and a simulated link, so tests run
+  protocol time without real waiting.
 
 ## Scope
 
@@ -46,8 +48,10 @@ ruby -Ilib -I../datalink-socket/lib -Itest test/unit/pdu/lan_hello_test.rb
 ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/circuit_test.rb
 ```
 
-`test/unit/adjacency/circuit_test.rb` brings two instances to a full adjacency over the
-loopback backend.
+`test/unit/adjacency/circuit_test.rb` brings two instances to a full
+adjacency over a simulated link, and expires it by advancing a manual clock.
+`test/unit/link/socket_transport_test.rb` covers the real transport over the
+datalink-socket loopback backend.
 
 ## Layout
 
@@ -60,7 +64,11 @@ lib/isis4r.rb                   # entry point, requires everything
 lib/isis/version.rb             # ISIS::VERSION
 lib/isis/common.rb              # errors, and the 6-byte IS-IS system ID
 lib/isis/codepoints.rb          # PDU types, TLV types, NLPIDs
+lib/isis/runtime/clock.rb       # monotonic clock, and a manual one for tests
+lib/isis/runtime/scheduler.rb   # timers as scheduled callbacks on a clock
 lib/isis/link/llc.rb            # IS-IS LLC header and AllL1ISs/AllL2ISs MACs
+lib/isis/link/socket_transport.rb    # real link over a Datalink::Socket
+lib/isis/link/simulated_transport.rb # in-memory link that never waits
 lib/isis/tlv/tlv.rb             # TLV encode/parse
 lib/isis/pdu/lan_hello.rb       # LAN Hello (IIH) encode/parse
 lib/isis/adjacency/adjacency.rb # one neighbor relationship and its state

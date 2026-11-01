@@ -213,13 +213,13 @@ waiting, which is what makes failure tests deterministic and fast.
 
 **Guard it with a test**: a source scan under `lib/isis/` that fails on
 direct calls to `Time.now`, `Process.clock_gettime` or `sleep`, with an
-explicit list of allowed files, which are the real transports and the
-logging. A new exception is a line in that list and is justified in the
-pull request that adds it.
-
-Today `Adjacency` reads `Process.clock_gettime` directly and `Circuit#poll`
-waits on real timeouts. Both move behind the clock and the transport in
-phase 1.
+explicit list of allowed files. A new exception is a line in that list and
+is justified in the pull request that adds it. The guard is
+`test/unit/runtime/time_guard_test.rb`. It reads Ruby tokens, so comments
+and strings do not trip it, and it fails on an allowed entry whose file no
+longer makes the call. Today the list holds one file,
+`lib/isis/runtime/clock.rb`, the real monotonic clock. The real transport
+needs no entry: it blocks inside datalink-socket, not by sleeping.
 
 ### Pass-through equivalence
 
@@ -1634,13 +1634,16 @@ is lost when the chat is.
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors and `SystemId`),
-`lib/isis/codepoints.rb`, `lib/isis/link/llc.rb`, `lib/isis/tlv/tlv.rb`,
-`lib/isis/pdu/lan_hello.rb`, and `lib/isis/adjacency/` with the adjacency
-and the circuit. Tests are under `test/unit/`. The code is still the proof
-of concept: a LAN Hello encode and parse and an L1 LAN adjacency over the
-datalink-socket loopback backend. Phase 1 gate 1 is not met: there is no
+`lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
+scheduler, `lib/isis/link/` with the LLC helpers and the socket and
+simulated transports, `lib/isis/tlv/tlv.rb`, `lib/isis/pdu/lan_hello.rb`,
+and `lib/isis/adjacency/` with the adjacency and the circuit, both on the
+injected clock. Tests are under `test/unit/`, and the time guard passes.
+The protocol code is still the proof of concept: a LAN Hello encode and
+parse and an L1 LAN adjacency. Phase 1 gate 1 is half met: the clock, the
+scheduler, the simulated transport and the guard exist, but there is no
 `pdu.rb` with a common header class, no `Unknown` at any level, no parse
-policy, no `to_shex`, and no injected clock. The gem has not been
+policy and no `to_shex`. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
 
