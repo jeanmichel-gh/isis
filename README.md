@@ -98,7 +98,8 @@ lib/isis/tlv/tlv.rb             # TLV framing, Tlv::Unknown, the TLV list
 lib/isis/pdu/pdu.rb             # common header, type registry, Unknown, Truncated, Malformed
 lib/isis/pdu/psnp.rb            # the PSNP layout, both levels
 lib/isis/pdu/capture.rb         # one PDU and whatever followed it
-lib/isis/pdu/lan_hello.rb       # LAN Hello (IIH) encode/parse
+lib/isis/pdu/lan_hello.rb       # the LAN hello layout, both levels
+lib/isis/pdu/p2p_hello.rb       # the point to point hello layout
 lib/isis/adjacency/adjacency.rb # one neighbor relationship and its state
 lib/isis/adjacency/circuit.rb   # one IS instance on one link
 test/unit/                      # mirrors lib/isis/, one test file per source file

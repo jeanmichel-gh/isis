@@ -124,6 +124,8 @@ lib/isis/forwarding/       forwarding adapters, one per platform, each
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/docs/                 the tests that hold each guide in docs/ to the code
+test/fixtures/             PDUs captured from real routers, as hex, named
+                           for the router and version that sent them
 test/functional/           tests that put PDUs on a real interface
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
@@ -253,7 +255,7 @@ works this way (surveyed at `0ec77c6`). It is built in
 `lib/isis/runtime/log.rb`: `Runtime::Log` holds the logger, the bounded
 event list and the tracer, and `Log.writer` and `Log.trace_writer` give an
 executable its lines. The LAN proof of concept `Circuit` still writes to
-an IO and moves onto it with the LAN hello.
+an IO, and moves onto it next.
 
 How ospfv2 does it, and what isis4r copies:
 
@@ -1721,11 +1723,13 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks, the
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
-registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129,
-132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
+registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 6, 8,
+129, 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
-layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
+layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
+for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
+the hellos share, and
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
@@ -1736,14 +1740,15 @@ wire mark and the constructor dispatch. `docs/building-objects.md` and
 `docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
 1 is met**. The header fields were read in RFC 1142 clause 9 and agree
 with Wireshark and FRR, except octets 7 and 8, where the editions differ
-(see the list at the end). The
-LAN Hello still has its proof of concept API and moves onto the contract
-in gate 2. **Gate 2 is met against FRR**, measured 2026-10-31 with FRR
+(see the list at the end). **Gate 2 is met against FRR**, measured 2026-10-31 with FRR
 8.4.4's isisd, and again on 10.5.1: `test/integration/frr_p2p_test.rb` brings the point to point
 adjacency up on both sides, holds it for over three holding times without
 a flap, expires it on each side when the other goes silent, and forms
 none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
-check waits for. Still owed by gate 2: the LAN hello onto the contract. Not yet done in the hello: the padding RFC 1142 clause
+check waits for. The LAN hello is on the contract, and replays a hello
+captured from FRR 8.4.4 byte for byte. The LAN `Circuit` builds and reads
+it, but still logs to an IO rather than through `Runtime::Log`, and that
+is the last thing gate 2 owes. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
