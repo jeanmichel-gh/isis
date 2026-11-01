@@ -30,8 +30,26 @@ class FrrLab
       return [false, "needs FRR (zebra, isisd, vtysh)"]
     end
     return [false, "needs iproute2"] unless system("which ip > /dev/null")
+    return [false, apparmor_refusal] if isisd_confined?
 
     [true, nil]
+  end
+
+  APPARMOR_PROFILES = "/sys/kernel/security/apparmor/profiles"
+
+  # Ubuntu's apparmor package ships a profile for isisd (26.04 does; 24.04
+  # does not). It allows only FRR's default paths, such as
+  # /run/frr/isisd.pid and /etc/frr/isisd.conf, so isisd started with -N in
+  # its own directories exits with "Can't create pid lock file ...
+  # (Permission denied)", even when the directory is owned by frr. zebra has
+  # no profile, so it starts and isisd does not.
+  def self.isisd_confined?(profiles = APPARMOR_PROFILES)
+    File.readable?(profiles) && File.foreach(profiles).any? { |l| l.start_with?("isisd (enforce)") }
+  end
+
+  def self.apparmor_refusal
+    "AppArmor confines isisd to FRR's default paths, and the lab uses its own. " \
+      "Unload the profile until reboot with: sudo apparmor_parser -R /etc/apparmor.d/isisd"
   end
 
   attr_reader :name, :dir
