@@ -1750,7 +1750,7 @@ LAN hellos, adjacencies from initialising to Up when the neighbour lists
 this system's LAN address, and the DIS election, with each transition and
 each change of DIS logged with its reason; `lib/isis/receive/authentication.rb`,
 the authentication step both circuits share;
-the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
+the RFC 5303 three-way table, and `P2pCircuit`, a point to point
 circuit running the handshake on the injected scheduler and logging every
 transition and refusal with its reason. `P2pCircuit` also runs RFC 1142
 clause 7.3.15's update process on `lib/isis/database/database.rb`, the
@@ -1862,9 +1862,19 @@ database and originator: the hellos carry circuit type 3 (`circuit_type:
 at each level, which FRR reports as circuit type L1L2, and each level's
 databases agree on their own. Measured on the way: FRR 8.4.4 forms both
 adjacencies even when the hellos say circuit type 1 and 2, so the test
-reads FRR's own report of the type. Still owed by gate 2: a point to point
-circuit at both levels, the attached bit, the area addresses of a Level 2
-LSP from more than one area (7.2.11), and several LSP Numbers. The point to point circuit is Level 1 only. Not yet in the originator: a second LSP
+reads FRR's own report of the type. **A point to point circuit at both
+levels** has one adjacency and a `P2pCircuit::Level` per level
+(`lib/isis/adjacency/p2p_level.rb`), each with its own database,
+originator and update process; the adjacency serves the levels both sides
+run, or Level 2 only with no area in common (RFC 1142 8.2.4.2, whose
+Tables 4 to 7 the text lost). Measured 2026-11-01 against FRR 8.4.4: both
+levels on one adjacency, each level's databases agreeing; and with no area
+in common, the Level 2 databases agree while neither side's Level 1 LSP
+reaches the other. Measured on the way: FRR 8.4.4 lists a point to point
+adjacency at both levels as one line at level 3, and lists the area
+mismatched one at level 3 too. Still owed by gate 2: the attached bit,
+the area addresses of a Level 2 LSP from more than one area (7.2.11), and
+several LSP Numbers. Not yet in the originator: a second LSP
 Number when one LSP is full, and jitter on the refresh timer (clause
 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause

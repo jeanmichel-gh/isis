@@ -2,22 +2,30 @@
 
 module ISIS
   # A point to point circuit: one link, at most one neighbour, the RFC 5303
-  # three-way handshake on top of RFC 1142 clause 8.2. Level 1 only, which
-  # is phase 1's scope.
+  # three-way handshake on top of RFC 1142 clause 8.2. At Level 1, Level 2
+  # or both: one adjacency, and a P2pCircuit::Level per level the circuit
+  # runs, each with its own database, originator and update process.
   #
   # Everything that varies is injected: the transport moves frames, the
   # scheduler runs the hello and holding timers on its clock, and the log
   # takes every line, event and PDU. Nothing here reads the system clock.
   #
   # Each step is a method a test can replace on one object: build_hello
-  # makes the hello, transmit sends a PDU, receive_hello decides what a
-  # received hello changes, and receive_lsp and receive_snp what a received
-  # LSP or sequence numbers PDU does to the database and its flags. The
+  # makes the hello, transmit sends a PDU, and receive_hello decides what a
+  # received hello changes. What a received LSP or sequence numbers PDU
+  # does is its level's: level(n).receive_lsp and level(n).receive_snp. The
   # defaults follow the clauses quoted beside them, and every refusal is
   # logged with its reason.
   #
-  # The update process is UpdateProcess's, RFC 1142 clause 7.3.15 for one
-  # non-broadcast circuit: the SRM and SSN flags on the database's entries, a PSNP every
+  # Which levels the adjacency serves, RFC 1142 clause 8.2.4.2: with an
+  # area in common, the levels both sides run, from the hello's circuit
+  # type; with none, "the adjacency is only valid if both Intermediate
+  # systems are Level 2, and the IS shall mark the adjacency as Level 2
+  # Only". The clause's Tables 4 to 7 did not survive the text extraction,
+  # so this follows its prose.
+  #
+  # The update process at each level is UpdateProcess's, RFC 1142 clause
+  # 7.3.15 for one non-broadcast circuit: the SRM and SSN flags on the database's entries, a PSNP every
   # partialSNPInterval carrying the entries with SSN set, a CSNP when the
   # adjacency comes up, and the LSPs with SRM set sent every
   # minimumLSPTransmissionInterval until the neighbour acknowledges them.
@@ -27,19 +35,20 @@ module ISIS
   # started, are UpdateProcess's (clause 7.3.16.4).
   #
   # Authentication, RFC 5304 HMAC-MD5: hello_key for the hellos, the link
-  # level password, and area_key for Level 1 LSPs and SNPs. With a key,
+  # level password, and each level's area_key for that level's LSPs and
+  # SNPs. With a key,
   # what this circuit sends carries TLV 10 first, and what it receives is
   # refused unless its digest checks out under that key. Without one,
   # nothing is added and nothing is checked.
   class P2pCircuit
-    include UpdateProcess
-
     # AllISs. RFC 5309 section 4.1 recommends it for point to point hellos
     # on a LAN; second hand, from FRR's isis_pfpacket.c, which cites that
     # section. RFC 5309 itself is not read here.
     ALL_ISS = "09:00:2b:00:00:05"
 
-    Neighbor = Struct.new(:system_id, :snpa, :state, :extended_circuit_id, :holding_time, :areas, :expiry) do
+    # +usage+ is the levels the adjacency serves, [1], [2] or [1, 2].
+    Neighbor = Struct.new(:system_id, :snpa, :state, :extended_circuit_id, :holding_time, :areas, :expiry,
+                          :usage) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -51,13 +60,20 @@ module ISIS
     PARTIAL_SNP_INTERVAL = 2
     MINIMUM_LSP_TRANSMISSION_INTERVAL = 5
 
-    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :database, :originator
-    attr_accessor :areas, :hello_interval, :hello_multiplier, :metric, :hello_key, :area_key
+    CIRCUIT_TYPES = { [1] => :l1, [2] => :l2, [1, 2] => :l1l2 }.freeze
+    TYPE_LEVELS = CIRCUIT_TYPES.invert.freeze
 
+    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :levels
+    attr_accessor :areas, :hello_interval, :hello_multiplier, :metric, :hello_key
+
+    # +levels+ is the levels this circuit runs, each with its database,
+    # originator and key: { 1 => { database:, originator:, area_key: } }.
+    # Without it, the circuit runs Level 1 with +database+, +originator+
+    # and +area_key+, as it did before it ran two.
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, areas: ["49.0001"],
                    extended_circuit_id: 1, local_circuit_id: 1, hello_interval: 3, hello_multiplier: 10,
                    ip_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
-                   hello_key: nil, area_key: nil,
+                   hello_key: nil, area_key: nil, levels: nil,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL)
       @transport = transport
@@ -75,17 +91,50 @@ module ISIS
       @protocols = protocols
       @neighbor = nil
       @hello_timer = nil
-      @database = database || Database.new(level: 1, clock: scheduler.clock, scheduler: scheduler, log: log)
-      @database.attach(self)
-      @partial_snp_interval = partial_snp_interval
-      @lsp_transmission_interval = lsp_transmission_interval
-      @psnp_timer = nil
-      @srm_timer = nil
       @metric = metric
       @hello_key = hello_key
-      @area_key = area_key
-      @originator = originator
-      @originator&.attach(self)
+      levels ||= { 1 => { database: database, originator: originator, area_key: area_key } }
+      unless CIRCUIT_TYPES.key?(levels.keys.sort)
+        raise ArgumentError, "a point to point circuit runs Level 1, Level 2 or both, not #{levels.keys.inspect}"
+      end
+
+      @levels = levels.keys.sort.to_h do |n|
+        opts = levels[n]
+        db = opts[:database] || Database.new(level: n, clock: scheduler.clock, scheduler: scheduler, log: log)
+        raise ArgumentError, "the Level #{n} database is Level #{db.level}" unless db.level == n
+
+        [n, Level.new(circuit: self, level: n, database: db, originator: opts[:originator],
+                      area_key: opts[:area_key], partial_snp_interval: partial_snp_interval,
+                      lsp_transmission_interval: lsp_transmission_interval)]
+      end
+    end
+
+    # The Level object for +n+, or nil when this circuit does not run it.
+    def level(n)
+      @levels[n]
+    end
+
+    # The levels this circuit runs, and the circuit type its hellos say.
+    def level_numbers
+      @levels.keys
+    end
+
+    def circuit_type
+      CIRCUIT_TYPES.fetch(level_numbers)
+    end
+
+    # A circuit at one level answers for that level directly, as it did
+    # before it could run two: its database, its originator, its key, and
+    # the update process.
+    def database = only_level.database
+    def originator = only_level.originator
+    def area_key = only_level.area_key
+    def area_key=(key)
+      only_level.area_key = key
+    end
+
+    %i[receive_lsp receive_snp send_psnp send_csnp send_srm_lsps].each do |name|
+      define_method(name) { |*args| only_level.public_send(name, *args) }
     end
 
     # Send a hello now and every hello_interval after.
@@ -98,8 +147,7 @@ module ISIS
     def stop
       @hello_timer&.cancel
       @hello_timer = nil
-      [@psnp_timer, @srm_timer].each { |t| t&.cancel }
-      @psnp_timer = @srm_timer = nil
+      @levels.each_value(&:stop)
       self
     end
 
@@ -109,35 +157,11 @@ module ISIS
       @neighbor ? @neighbor.state : :down
     end
 
-    def up?
-      three_way_state == :up
-    end
+    # Up, and with +n+, Up and serving Level n.
+    def up?(n = nil)
+      return false unless three_way_state == :up
 
-    # For UpdateProcess: a point to point circuit, at Level 1.
-    def broadcast?
-      false
-    end
-
-    def level
-      1
-    end
-
-    # The originators whose LSPs this circuit may receive copies of.
-    def generators
-      [@originator].compact
-    end
-
-    # What this circuit puts in its system's TLV 22: the neighbour's System
-    # ID with "an appended zero octet (indicating non-pseudonode)" and the
-    # circuit's metric, from an adjacency Up (RFC 1142 7.3.7). Nil without.
-    def is_neighbor
-      [(@neighbor.system_id + "\x00".b).b, @metric] if up?
-    end
-
-    # The originator generated +entry+: set SRM for it here, on a circuit
-    # with an adjacency up (RFC 1142 7.3.5, 7.3.6).
-    def flood(entry)
-      set_srm(entry) if up?
+      n.nil? || @neighbor.usage.include?(n)
     end
 
     # The hello this circuit sends now. RFC 1142 clause 8.2.3 and RFC 5303
@@ -152,7 +176,7 @@ module ISIS
         three_way[:neighbor_extended_circuit_id] = @neighbor.extended_circuit_id
       end
       tlvs << Tlv::ThreeWayAdjacency.new(three_way_state, **three_way.compact)
-      hello = Pdu::P2pHello.new(circuit_type: :l1, source_id: Octets.new(@system_id), holding_time: holding_time,
+      hello = Pdu::P2pHello.new(circuit_type: circuit_type, source_id: Octets.new(@system_id), holding_time: holding_time,
                                 local_circuit_id: @local_circuit_id, tlvs: keyed(tlvs, @hello_key))
       hello.key = @hello_key
       hello
@@ -190,7 +214,7 @@ module ISIS
       case pdu
       when Pdu::P2pHello then receive_hello(pdu, frame.src)
       when Pdu::Lsp, Pdu::Csnp, Pdu::Psnp then receive_update(pdu)
-      else @log.debug("#{pdu_name(pdu)} ignored on a point to point circuit", circuit: @name)
+      else @log.debug("#{pdu.class.name.split('::').last} ignored on a point to point circuit", circuit: @name)
       end
     end
 
@@ -214,15 +238,30 @@ module ISIS
       reason = three_way && three_way_refusal(three_way)
       return refuse(*reason) if reason
 
-      # A Level 1 circuit and a neighbour that is Level 2 only: no
-      # adjacency. ISO's state table for this is not in the supplied text;
-      # this follows FRR's process_p2p_hello.
-      return drop_neighbor(:level, "neighbor is Level 2 only, this circuit is Level 1") if hello.circuit_type == :l2
-
       their_areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
-      # RFC 1142 clause 8.2.4.2 b: a Level 1 system with no area in common
-      # deletes the adjacency.
-      return drop_neighbor(:area, "no area in common: theirs #{their_areas.join(', ')}, ours #{@areas.join(', ')}") if (their_areas & normalized_areas).empty?
+      theirs = TYPE_LEVELS.fetch(hello.circuit_type)
+      common = level_numbers & theirs
+      usage =
+        if (their_areas & normalized_areas).empty?
+          # RFC 1142 clause 8.2.4.2: with no area in common, "the adjacency
+          # is only valid if both Intermediate systems are Level 2, and the
+          # IS shall mark the adjacency as Level 2 Only". Clause b 1 and b
+          # 2: a Level 1 system deletes the adjacency.
+          unless common.include?(2)
+            return drop_neighbor(:area, "no area in common: theirs #{their_areas.join(', ')}, ours #{@areas.join(', ')}")
+          end
+
+          [2]
+        else
+          common
+        end
+      # No level both sides run: no adjacency. ISO's tables for this are not
+      # in the supplied text; refusing a Level 1 circuit's Level 2 only
+      # neighbour follows FRR's process_p2p_hello.
+      if usage.empty?
+        return drop_neighbor(:level, "neighbor is Level #{theirs.join(' and ')} only, this circuit is " \
+                                     "Level #{level_numbers.join(' and ')}")
+      end
 
       if @neighbor && @neighbor.system_id != hello.source_id
         drop_neighbor(:replaced, "hello from #{hello.source_id_s}, a different neighbor")
@@ -235,7 +274,7 @@ module ISIS
       action = three_way ? Adjacency::ThreeWay.action(@neighbor.state, three_way.state) : :up
       @log.debug("three-way #{@neighbor.state}, received #{three_way ? three_way.state : 'no TLV 240'}: #{action}",
                  circuit: @name)
-      apply(action, hello, three_way, snpa)
+      apply(action, hello, three_way, snpa, usage)
       action
     end
 
@@ -265,7 +304,7 @@ module ISIS
       nil
     end
 
-    def apply(action, hello, three_way, snpa)
+    def apply(action, hello, three_way, snpa, usage)
       if action == :down
         drop_neighbor(:restarted, "neighbor reports three-way Up while ours is Down: neighbor restarted (RFC 5303 3.2)")
         return
@@ -280,45 +319,51 @@ module ISIS
       @neighbor.areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
       @neighbor.extended_circuit_id = three_way&.extended_circuit_id
       restart_holding_timer
-      return if before == @neighbor.state
+      was = @neighbor.usage || []
+      @neighbor.usage = usage
+      if before != @neighbor.state
+        @log.info("adjacency with #{@neighbor.system_id_s} #{before} -> #{@neighbor.state}" \
+                  "#{@neighbor.state == :up ? " at Level #{usage.join(' and ')}" : ''}",
+                  circuit: @name, kind: :adjacency, neighbor: @neighbor.system_id_s, from: before,
+                  to: @neighbor.state, levels: usage)
+      elsif @neighbor.state == :up && was != usage
+        @log.info("adjacency with #{@neighbor.system_id_s} now serves Level #{usage.join(' and ')}, " \
+                  "was Level #{was.join(' and ')}", circuit: @name, kind: :adjacency,
+                                                    neighbor: @neighbor.system_id_s, levels: usage)
+      end
+      return unless @neighbor.state == :up
 
-      @log.info("adjacency with #{@neighbor.system_id_s} #{before} -> #{@neighbor.state}",
-                circuit: @name, kind: :adjacency, neighbor: @neighbor.system_id_s, from: before, to: @neighbor.state)
-      adjacency_up if @neighbor.state == :up
+      gained = before == :up ? usage - was : usage
+      lost = before == :up ? was - usage : []
+      lost.each { |n| level(n).adjacency_down }
+      gained.each { |n| level(n).adjacency_up(@neighbor.system_id_s) }
     end
 
-    # Clause 7.3.15.3 b: CSNPs "are only transmitted on point to point
-    # circuits at initialisation", and the PSNP timer starts.
-    def adjacency_up
-      @originator&.changed("adjacency with #{@neighbor.system_id_s} on #{@name} up (RFC 1142 7.3.6)")
-      send_csnp
-      start_psnp_timer unless @psnp_timer
-    end
-
-    # The neighbour is gone, so nothing is owed to it on this circuit.
-    def adjacency_down
-      @originator&.changed("adjacency on #{@name} down (RFC 1142 7.3.6)")
-      @psnp_timer&.cancel
-      @psnp_timer = nil
-      clear_update_state
-    end
-
+    # An LSP or SNP goes to its level, when the circuit runs that level
+    # and the adjacency is up and serves it.
     def receive_update(pdu)
-      unless pdu.level == 1
-        return @log.debug("Level #{pdu.level.inspect} #{pdu_name(pdu)} ignored on a Level 1 circuit", circuit: @name)
-      end
-      return @log.debug("#{pdu_name(pdu)} ignored: no adjacency up", circuit: @name) unless up?
+      name = pdu.class.name.split("::").last
+      flooding = level(pdu.level)
+      return @log.debug("Level #{pdu.level.inspect} #{name} ignored: this circuit does not run it", circuit: @name) unless flooding
+      return @log.debug("#{name} ignored: no adjacency up at Level #{pdu.level}", circuit: @name) unless up?(pdu.level)
 
-      pdu.is_a?(Pdu::Lsp) ? receive_lsp(pdu) : receive_snp(pdu)
+      pdu.is_a?(Pdu::Lsp) ? flooding.receive_lsp(pdu) : flooding.receive_snp(pdu)
     end
 
-    # The PSNP timer, clause 7.3.15.4: every partialSNPInterval. The jitter
-    # clause 10.1 asks for is not applied yet.
-    def start_psnp_timer
-      @psnp_timer = @scheduler.after(@partial_snp_interval) do
-        send_psnp
-        start_psnp_timer
-      end
+    public :receive_update
+
+    def only_level
+      return @levels.values.first if @levels.size == 1
+
+      raise ArgumentError, "this circuit runs two levels: ask level(1) or level(2)"
+    end
+
+    def keyed(tlvs, key)
+      Receive::Authentication.keyed(tlvs, key)
+    end
+
+    def authentication_refusal(pdu, key, clause)
+      Receive::Authentication.refusal(pdu, key, clause)
     end
 
     # RFC 1142 clause 8.2.5: a neighbour not heard from within its holding
@@ -337,8 +382,9 @@ module ISIS
         @log.info("adjacency with #{@neighbor.system_id_s} #{@neighbor.state} -> down: #{why}",
                   circuit: @name, kind: :adjacency, neighbor: @neighbor.system_id_s, from: @neighbor.state,
                   to: :down, reason: reason)
+        usage = @neighbor.state == :up ? (@neighbor.usage || []) : []
         @neighbor = nil
-        adjacency_down
+        usage.each { |n| level(n).adjacency_down }
       else
         @log.info("hello refused: #{why}", circuit: @name, kind: :refused, reason: reason)
       end

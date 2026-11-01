@@ -178,7 +178,7 @@ class TestP2pCircuit < Minitest::Test
   def test_refusals_and_state_changes_log_at_info_and_pdus_at_debug
     start_both
     run_for(7)
-    assert(@lines.any? { |l, m| l == :info && m == "a-eth1 adjacency with 0000.0000.000b initializing -> up" })
+    assert(@lines.any? { |l, m| l == :info && m == "a-eth1 adjacency with 0000.0000.000b initializing -> up at Level 1" })
     assert(@lines.any? { |l, m| l == :debug && m.include?("three-way up, received up: accept") })
     directions = @traces.map(&:first).uniq.sort
     assert_equal %i[received sent], directions
@@ -245,7 +245,7 @@ class TestP2pCircuit < Minitest::Test
   # PSNPs lost a sends the LSP again every minimumLSPTransmissionInterval.
   def test_an_unacknowledged_lsp_is_sent_again
     seed(@a, lsp)
-    @b.define_singleton_method(:send_psnp) { nil }
+    @b.level(1).define_singleton_method(:send_psnp) { nil }
     up_both
     first = sent(ISIS::Pdu::Lsp).size
     run_for(11)
@@ -328,7 +328,7 @@ class TestP2pCircuit < Minitest::Test
   # Losing the neighbour clears what was owed to it.
   def test_flags_clear_when_the_adjacency_goes
     seed(@a, lsp)
-    @b.define_singleton_method(:send_psnp) { nil }
+    @b.level(1).define_singleton_method(:send_psnp) { nil }
     up_both
     refute_empty held(@a).srm
     @b.stop
