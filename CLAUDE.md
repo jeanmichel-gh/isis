@@ -1748,6 +1748,57 @@ Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
 compatibility statement, not a promise to implement every extension.
 
+## Labs and interop
+
+The gates above need an independent router. The plan is to follow what the
+sibling projects already do, and not to invent a third way. **Nothing here
+is built yet.** Surveyed 2026-10-31 at ospfv2 `0ec77c6` and routescope
+`265156a`. Record decisions here as they are made.
+
+**Two tiers, and they do different jobs.**
+
+1. **A namespace harness, for the gate tests.** ospfv2 has
+   `test/support/frr_lab.rb`: two network namespaces joined by a veth
+   pair, FRR run natively in one, the implementation in the other. It
+   needs root, iproute2 and FRR, runs only when `OSPFV2_FRR=1` is set, and
+   runs on GitHub runners with FRR installed from apt (the `interop-frr`
+   job in ospfv2's `ci.yml`). isis4r copies the pattern with `isisd` in
+   place of `ospfd`, gated by `ISIS_FRR=1`, under `test/integration/`. So a
+   gate is shown in CI against FRR, and the same test runs on a Linux VM
+   by hand.
+2. **routescope, for labs a person watches and drives.** routescope does
+   not build labs. It is a web console over labs that docker compose or
+   containerlab bring up, reached by `docker exec`, with one driver per
+   node kind, scenarios with `expect:` conditions, capture, and link
+   down, up, delay and loss on containerlab links. A lab is a folder with
+   `lab.yml` or `NAME.clab.yml` and one config per node.
+
+**What routescope needs before it can show an isis4r lab**, from its
+`docs/protocols.md` and code. Every one is an additive change in
+routescope, which its own rules require (`ospfv2/docs/console-plan.md`):
+
+* a node kind for isis4r in `Lab::KINDS`, and a driver in `drivers.rb`
+  that reads isis4r's state, which means isis4r needs a state API to read;
+* IS-IS commands and parsers in the FRR driver, for `isisd`;
+* a definition of a node being up for IS-IS, which today means an OSPF
+  neighbour or a BGP session;
+* IS-IS scenario conditions: adjacency, LSDB, routes;
+* a capture that is not OSPF's. It runs `ospfv2 capture`, filtered on IP
+  protocol 89 with an OSPF dissector, and IS-IS is not IP at all. It needs
+  an LLC filter and an isis4r dissector.
+
+**IS-IS is not IP, and the labs have to allow for it.** It runs directly
+over the link layer with LLC framing. A veth pair or a containerlab link
+carries raw Ethernet, so the transport works there (inferred, not yet
+run). The real transport opens a raw socket through datalink-socket, so
+an isis4r node needs root or `CAP_NET_RAW` in its namespace or container.
+Anything in a lab that assumes an IP address on the link for the protocol
+to work is OSPF's assumption, not ours.
+
+**Order.** The namespace harness comes with phase 1 gate 2, because that
+gate needs FRR. routescope support comes later, once there is state worth
+looking at, and is its own topic in routescope's repository.
+
 ## Rules for agents
 
 * Work on a branch named `claude/<short-topic>`. Never push to master.
