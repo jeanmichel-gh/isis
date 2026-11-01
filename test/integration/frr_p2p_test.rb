@@ -262,5 +262,31 @@ class TestFrrP2p < Minitest::Test
     assert_equal ["#{FrrLab::ISIS4R_ID}.00-00"], isis4r_lsps(1).keys, @lab.report
     refute frr_lsps(1).key?("#{FrrLab::ISIS4R_ID}.00-00"), @lab.report
   end
+
+  # Several LSP Numbers (RFC 1142 7.3.4): 60 more /32s and a 300 octet
+  # budget spread isis4r's advertisements over four LSPs once the
+  # adjacency is in TLV 22. LSP 0 is the header and TLVs 1, 129, 132 and
+  # 22, 55 octets, which leaves no room for a TLV 135 of 28 entries, 253;
+  # so LSPs 1 and 2 take one full TLV 135 each and LSP 3 the last six
+  # entries. Our arithmetic. FRR holds every one at isis4r's sequence, and
+  # installs the last prefix, which only LSP 3 carries.
+  def test_frr_learns_every_lsp_number
+    extra = (1..60).map { |i| { prefix: "198.18.0.#{i}/32", metric: 1 } }
+    @lab.start(isis4r: { prefixes: FrrLab::ISIS4R_PREFIXES + extra, lsp_buffer_size: 300 })
+    assert_eventually("adjacency did not come up") { both_up? }
+    own = /\A#{Regexp.escape(FrrLab::ISIS4R_ID)}\.00-/
+    assert_eventually("isis4r did not name FRR in its LSP") do
+      @lab.isis4r_database.dig("#{FrrLab::ISIS4R_ID}.00-00", "sequence").to_i >= 2
+    end
+    ids = @lab.isis4r_database.select { |id, e| id.match?(own) && e["lifetime"].positive? }.keys.sort
+    assert_equal 4, ids.size, @lab.report
+    assert_eventually("FRR does not hold every LSP Number at isis4r's sequence", 30) do
+      ids.all? { |id| @lab.frr_database.dig(id, "sequence") == @lab.isis4r_database.dig(id, "sequence") }
+    end
+    assert_eventually("FRR did not install 198.18.0.60/32 from the last LSP", 60) do
+      route = @lab.frr_route("198.18.0.60/32")
+      route && route["protocol"] == "isis" && route["installed"]
+    end
+  end
 end
 

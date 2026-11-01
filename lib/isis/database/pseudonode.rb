@@ -34,7 +34,7 @@ module ISIS
             protocols: [], metric_style: metric_style, area_key: area_key, refresh_interval: refresh_interval,
             minimum_interval: minimum_interval, buffer_size: buffer_size, is_type: is_type)
       @circuit = circuit
-      @lsp_id = (circuit.own_lan_id + "\x00".b).b
+      @lsp_base = circuit.own_lan_id.b
       @active = false
       attach(circuit)
     end
@@ -58,8 +58,12 @@ module ISIS
       was = @active
       @active = false
       super
-      held = @database[@lsp_id]
-      if was && held && !held.placeholder? && !held.remaining_lifetime.zero?
+      return self unless was
+
+      @numbers.each do |n|
+        held = @database[lsp_id(n)]
+        next if held.nil? || held.placeholder? || held.remaining_lifetime.zero?
+
         @database.purge(held, "this system resigned as DIS on #{@circuit.name} (RFC 1142 7.2.3)",
                         retain: Database::MAX_AGE)
       end
@@ -74,7 +78,14 @@ module ISIS
       super if @active
     end
 
-    def tlvs
+    private
+
+    # No Area Addresses, 7.3.8.
+    def fixed_tlvs
+      []
+    end
+
+    def variable_tlvs
       ids = [@system_id] + @circuit.up_neighbors.map(&:system_id)
       reachability(ids.map { |id| [(id + "\x00".b).b, 0] }, [])
     end

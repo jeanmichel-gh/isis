@@ -1872,11 +1872,21 @@ levels on one adjacency, each level's databases agreeing; and with no area
 in common, the Level 2 databases agree while neither side's Level 1 LSP
 reaches the other. Measured on the way: FRR 8.4.4 lists a point to point
 adjacency at both levels as one line at level 3, and lists the area
-mismatched one at level 3 too. Still owed by gate 2: the attached bit,
-the area addresses of a Level 2 LSP from more than one area (7.2.11), and
-several LSP Numbers. Not yet in the originator: a second LSP
-Number when one LSP is full, and jitter on the refresh timer (clause
-10.1). Not yet in the update process: PSNP jitter, and a database too
+mismatched one at level 3 too. **Several LSP Numbers** (RFC 1142 7.3.4):
+the originator fills LSP 0 with TLVs 1, 129 and 132 and then the
+reachability TLVs in order, each LSP to its buffer size, measured by
+encoding, and goes on in LSP 1, 2 and so on, each with its own sequence.
+A change regenerates only the LSPs whose content changed, stores them all
+before flooding any, and purges an LSP Number no longer needed. Measured
+2026-11-01 against FRR 8.4.4: with a 300 octet budget and 62 prefixes,
+FRR holds all four of isis4r's LSPs at isis4r's sequences and installs
+the prefix only the last one carries. Measured on the way: filling in
+order moves entries to a higher LSP Number when TLV 22 grows, which the
+clause calls undesirable, and the test shows it. Still owed by gate 2: the
+area addresses of a Level 2 LSP from more than one area (7.2.11). The
+attached bit goes with SPF in gate 3, where the phase list puts it, since
+clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
+the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in

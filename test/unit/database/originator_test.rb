@@ -270,3 +270,119 @@ class TestOriginatorLevel2 < Minitest::Test
   end
 end
 
+
+# Several LSP Numbers, RFC 1142 clause 7.3.4. No circuits: the database
+# and the originator alone, on a manual clock.
+class TestOriginatorLspNumbers < Minitest::Test
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    TestLogs.heading(name)
+    @log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
+    @db = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: @log)
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 buffer_size: 300, minimum_interval: 1, prefixes: prefixes(60))
+  end
+
+  def prefixes(count, from: 1)
+    (from...(from + count)).map { |i| { prefix: "10.1.#{i / 256}.#{i % 256}/32", metric: 1 } }
+  end
+
+  def held(number)
+    @db[@orig.lsp_id(number)]
+  end
+
+  def prefixes_in(number)
+    held(number).lsp.tlvs.select { |t| t.is_a?(ISIS::Tlv::ExtendedIpReachability) }.flat_map(&:to_hash)
+                .map { |e| e[:prefix] }
+  end
+
+  # 60 /32s at 9 octets each are TLV 135s of 28, 28 and 4 entries: 254,
+  # 254 and 38 octets. LSP 0 holds the 27 octet header, TLV 1 (6) and TLV
+  # 129 (3), 36, and the first TLV 135: 290. The second does not fit
+  # beside it under 300, so LSP 1 has it, 281, and LSP 2 the last, 65.
+  # Worked out here, by the octet.
+  def test_content_spills_into_more_lsp_numbers
+    @orig.start
+    assert_equal [0, 1, 2], @orig.numbers
+    assert_equal [290, 281, 65], [0, 1, 2].map { |n| held(n).lsp.encode.bytesize }
+    assert_equal [1, 1, 1], [0, 1, 2].map { |n| held(n).sequence }
+    # TLV 1 only in LSP 0 (7.3.4 a).
+    assert_equal [true, false, false], [0, 1, 2].map { |n| held(n).lsp.tlvs.any? { |t| t.type == 1 } }
+    assert_equal prefixes(60).map { |p| p[:prefix] }, [0, 1, 2].flat_map { |n| prefixes_in(n) }
+    assert @orig.generates?(@orig.lsp_id(2))
+    refute @orig.generates?(@orig.lsp_id(3))
+  end
+
+  # One more prefix changes only the last LSP: it alone is generated
+  # again, at sequence 2 (7.3.4: "It is not required to reissue the
+  # unchanged LSPs").
+  def test_a_change_regenerates_only_the_lsp_it_touches
+    @orig.start
+    @orig.prefixes += prefixes(1, from: 500)
+    @scheduler.advance(2)
+    @orig.changed("test")
+    assert_equal [1, 1, 2], [0, 1, 2].map { |n| held(n).sequence }
+  end
+
+  # Fewer prefixes need fewer LSPs: the last is purged, kept as a header
+  # with lifetime 0, and no longer generated.
+  def test_an_lsp_number_no_longer_needed_is_purged
+    @orig.start
+    @orig.prefixes = prefixes(30)
+    @scheduler.advance(2)
+    @orig.changed("test")
+    assert_equal [0, 1], @orig.numbers
+    assert held(2).purged?
+    refute @orig.generates?(@orig.lsp_id(2))
+    assert(@log.events.any? { |e| e.kind == :purge && e.message.include?("LSP Number 2 is no longer needed") })
+  end
+
+  # A newer copy of LSP 1 moves LSP 1's sequence past it, and leaves the
+  # others alone (7.3.16.1: the sequences per LSP Number "are
+  # independent").
+  def test_a_newer_copy_moves_only_its_own_sequence
+    @orig.start
+    newer = ISIS::Pdu::Lsp.new(level: 1, lsp_id: @orig.lsp_id_s(1), lifetime: 1000, sequence: 9, tlvs: [])
+    assert_equal :regenerated, @orig.receive_own(:newer, newer)
+    assert_equal [1, 10, 1], [0, 1, 2].map { |n| held(n).sequence }
+  end
+
+  # Content that fits one LSP stays in LSP 0.
+  def test_one_lsp_when_it_fits
+    @orig.prefixes = prefixes(3)
+    @orig.start
+    assert_equal [0], @orig.numbers
+  end
+
+  # What an originator asks of a circuit, recording what the database
+  # held at each flood.
+  class Recorder
+    attr_reader :seen
+
+    def initialize(db, ids)
+      @db = db
+      @ids = ids
+      @seen = []
+    end
+
+    def is_neighbor
+      nil
+    end
+
+    def flood(_entry)
+      @seen << @ids.map { |id| @db[id]&.sequence }
+    end
+  end
+
+  # Clause 7.3.4: the SRM flags of LSPs generated together "shall be set as
+  # an atomic action". Every LSP is stored before the first is flooded, so
+  # each flood already sees all three at their new sequence.
+  def test_all_lsps_are_stored_before_any_is_flooded
+    recorder = Recorder.new(@db, [0, 1, 2].map { |n| @orig.lsp_id(n) })
+    @orig.attach(recorder)
+    @orig.start
+    assert_equal [[1, 1, 1]] * 3, recorder.seen
+  end
+end
+

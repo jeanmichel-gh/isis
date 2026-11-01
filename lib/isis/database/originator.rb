@@ -8,8 +8,8 @@ module ISIS
   # the content is the same list: clause 7.3.9's Partition Designated
   # Level 2 IS option is not sent, since partition repair is not here.
   #
-  # One LSP, LSP Number 0, non-pseudonode. What it carries, after clause
-  # 7.3.7 and RFC 1195:
+  # Non-pseudonode, LSP Number 0 and as many more as the content needs.
+  # What it carries, after clause 7.3.7 and RFC 1195:
   #
   #   TLV 1    the manual area addresses
   #   TLV 129  the protocols supported
@@ -24,9 +24,24 @@ module ISIS
   # That is metric_style :wide, the default. :narrow sends TLV 2 and TLV
   # 128 in place of 22 and 135, with only the default metric supported,
   # and :transition sends all four, as a router moving between the two
-  # does. A metric too large for the narrow six bits raises. More than fits in one LSP
-  # raises rather than going out as a second LSP Number, which is not here
-  # yet.
+  # does. A metric too large for the narrow six bits raises.
+  #
+  # Content that does not fit in one LSP of buffer_size octets goes on in
+  # LSP Number 1, 2 and so on, clause 7.3.4's rules: "The Area Addresses
+  # option field shall occur only in the LSP with LSP Number zero", and IS
+  # neighbours before IP prefixes, where "after means at a higher octet
+  # number from the start of the same LSP or in an LSP with a higher LSP
+  # Number". So TLVs 1, 129 and 132 open LSP 0, and the reachability TLVs
+  # follow in order, each LSP filled before the next starts, measured by
+  # encoding. Each LSP Number has its own sequence (7.3.16.1: "The
+  # sequence numbers the Intermediate system generates for its Link State
+  # PDUs with different values for LSP number are independent"). On a
+  # change only the LSPs whose content changed are generated again (7.3.4:
+  # "It is not required to reissue the unchanged LSPs"), their SRM flags
+  # set together once all are stored, and an LSP Number no longer needed is
+  # purged. Filling in order means a removal can move a later entry to a
+  # lower LSP Number, which the clause calls undesirable rather than
+  # forbidden.
   #
   # Each step is a method a test can replace on one object: build makes
   # the LSP, and changed, refresh and receive_own decide when a new one is
@@ -41,8 +56,7 @@ module ISIS
     # 255 octet limit is a packing problem".
     LSP_BUFFER_SIZE = 1492
 
-    attr_reader :system_id, :database, :sequence, :circuits, :lsp_id, :refresh_interval, :minimum_interval,
-                :buffer_size
+    attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type
@@ -59,7 +73,9 @@ module ISIS
       # "3 (i.e. bits 1 and 2 set) Level 2 Intermediate system"). Nil
       # leaves it to the LSP's level: 1 at Level 1, 3 at Level 2.
       @is_type = is_type
-      @lsp_id = (@system_id + "\x00\x00".b).b
+      # The LSP ID without its LSP Number: the System ID and the pseudonode
+      # octet, 0 for this system's own LSPs.
+      @lsp_base = (@system_id + "\x00".b).b
       @database = database
       @scheduler = scheduler
       @log = log
@@ -76,8 +92,11 @@ module ISIS
       @buffer_size = buffer_size
       @circuits = []
       # Clause 7.3.16.1: "When a system initialises, it shall start with
-      # sequence number 1". The first generation adds one to this.
-      @sequence = 0
+      # sequence number 1". The first generation adds one to this, per LSP
+      # Number.
+      @sequences = Hash.new(0)
+      # The LSP Numbers generated now.
+      @numbers = []
       @generated_at = nil
       @pending = nil
       @refresh_timer = nil
@@ -91,8 +110,18 @@ module ISIS
       self
     end
 
-    def lsp_id_s
-      Pdu.lsp_id_s(@lsp_id)
+    # The LSP ID of LSP Number +number+.
+    def lsp_id(number = 0)
+      (@lsp_base + [number].pack("C")).b
+    end
+
+    def lsp_id_s(number = 0)
+      Pdu.lsp_id_s(lsp_id(number))
+    end
+
+    # The sequence of LSP Number +number+, 0 before it is generated.
+    def sequence(number = 0)
+      @sequences[number]
     end
 
     # The level of the LSPs this generates: its database's. A Level 2 LSP
@@ -117,29 +146,54 @@ module ISIS
     # True for an LSP ID this system currently generates: clause 7.3.15.1
     # d's "set of currently generated LSPs".
     def generates?(lsp_id)
-      lsp_id.b == @lsp_id
+      lsp_id = lsp_id.b
+      lsp_id.byteslice(0, @lsp_base.bytesize) == @lsp_base && @numbers.include?(lsp_id.getbyte(-1))
     end
 
-    # The LSP this system would send now with +sequence+. Builds and does
-    # nothing else.
-    # With area_key, TLV 10 goes first and the LSP carries an RFC 5304
-    # HMAC-MD5 digest.
-    def build(sequence: @sequence)
-      list = tlvs
+    # LSP Number +number+ as this system would send it now with +sequence+.
+    # Builds and does nothing else. +tlvs+ defaults to what that LSP Number
+    # carries now. With area_key, TLV 10 goes first and the LSP carries an
+    # RFC 5304 HMAC-MD5 digest.
+    def build(sequence: self.sequence, number: 0, tlvs: nil)
+      list = (tlvs || lsp_tlvs.fetch(number, [])).dup
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
-      lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(@lsp_id), lifetime: Database::MAX_AGE, sequence: sequence,
-                         tlvs: list, is_type: @is_type)
+      lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(lsp_id(number)), lifetime: Database::MAX_AGE,
+                         sequence: sequence, tlvs: list, is_type: @is_type)
       lsp.key = @area_key
       lsp
     end
 
-    # The TLVs, packed: entries into as many TLVs of one type as their
+    # Every TLV this system advertises, in order, whatever LSP Number each
+    # lands in: entries packed into as many TLVs of one type as their
     # encoded size needs, each at most 255 octets of value.
     def tlvs
-      list = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
-      list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
-      list.concat(reachability(@circuits.filter_map(&:is_neighbor), @prefixes))
-      list
+      fixed_tlvs + variable_tlvs
+    end
+
+    # The TLVs of each LSP Number, in order: LSP 0 first. Each LSP is filled
+    # to buffer_size octets, measured as the empty LSP's octets plus each
+    # TLV's, encoded once. Raises when a TLV cannot fit even an empty LSP,
+    # or the content needs more than the 256 LSP Numbers an octet holds.
+    def lsp_tlvs
+      empty = build(sequence: 0, tlvs: []).encode.bytesize
+      groups = [fixed_tlvs]
+      size = empty + groups.first.sum { |t| t.encode.bytesize }
+      raise Error, "#{lsp_id_s}'s first TLVs are #{size} octets, over the #{@buffer_size} octet budget" if size > @buffer_size
+
+      variable_tlvs.each do |tlv|
+        n = tlv.encode.bytesize
+        raise Error, "a TLV of #{n} octets does not fit an LSP of #{@buffer_size} octets" if empty + n > @buffer_size
+
+        if size + n > @buffer_size
+          groups << []
+          size = empty
+        end
+        groups.last << tlv
+        size += n
+      end
+      raise Error, "#{groups.size} LSPs needed, and an LSP Number is one octet" if groups.size > 256
+
+      groups
     end
 
     # Clause 7.3.6: an event "which would cause the information content to
@@ -152,7 +206,8 @@ module ISIS
 
       wait = @generated_at ? @generated_at + @minimum_interval - @scheduler.now : 0
       if wait.positive?
-        @log.debug("#{lsp_id_s}: #{reason}; generating in #{wait.round(1)} s, the minimum interval (RFC 1142 7.3.21)")
+        @log.debug("#{lsp_id_s}: #{reason}; generating in #{wait.round(1)} s, the minimum interval " \
+                   "(RFC 1142 7.3.21)")
         @pending = @scheduler.after(wait) do
           @pending = nil
           generate(reason, unless_unchanged: true)
@@ -181,15 +236,27 @@ module ISIS
     def receive_own(result, lsp)
       return result unless %i[newer confused].include?(result)
 
-      @pending&.cancel
-      @pending = nil
-      @sequence = [lsp.sequence, @sequence].max
-      generate("received #{lsp_id_s} with sequence #{seq(lsp.sequence)} " \
-               "(RFC 1142 #{result == :newer ? '7.3.16.1' : '7.3.16.2'})")
+      number = lsp.lsp_id.getbyte(-1)
+      @sequences[number] = [lsp.sequence, @sequences[number]].max
+      generate("received #{lsp_id_s(number)} with sequence #{seq(lsp.sequence)} " \
+               "(RFC 1142 #{result == :newer ? '7.3.16.1' : '7.3.16.2'})", only: number)
       :regenerated
     end
 
     private
+
+    # The TLVs that open LSP Number 0 and only it: TLV 1, which "shall occur
+    # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129 and 132.
+    def fixed_tlvs
+      list = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
+      list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
+      list
+    end
+
+    # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
+    def variable_tlvs
+      reachability(@circuits.filter_map(&:is_neighbor), @prefixes)
+    end
 
     # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
     # and +prefixes+, in the metric style.
@@ -216,28 +283,53 @@ module ISIS
       list
     end
 
-    def generate(reason, unless_unchanged: false)
-      held = @database[@lsp_id]
-      if unless_unchanged && held&.lsp && held.lsp.tlvs.to_shex == build.tlvs.to_shex
-        @log.debug("#{lsp_id_s}: #{reason}; content unchanged, not generated (RFC 1142 7.3.6)")
+    # Generate the LSP Numbers whose content changed, or with
+    # unless_unchanged false all of them, or with +only+ just that one.
+    # Every LSP is stored before any SRM flag is set, so two LSPs an entry
+    # moved between go out together (7.3.4: "the SRMflags ... for the two
+    # new LSPs shall be set as an atomic action"). Returns the LSP Number 0
+    # generated, or the first, or nil.
+    def generate(reason, unless_unchanged: false, only: nil)
+      groups = lsp_tlvs
+      wanted = (0...groups.size).to_a
+      numbers = only ? [only] & wanted : wanted
+      generated = numbers.filter_map do |n|
+        held = @database[lsp_id(n)]
+        if unless_unchanged && held&.lsp && !held.purged? &&
+           held.lsp.tlvs.to_shex == build(sequence: 0, number: n, tlvs: groups[n]).tlvs.to_shex
+          next
+        end
+
+        lsp = build(sequence: @sequences[n] + 1, number: n, tlvs: groups[n])
+        size = lsp.encode.bytesize
+        raise Error, "#{lsp_id_s(n)} is #{size} octets, over the #{@buffer_size} octet budget" if size > @buffer_size
+
+        @sequences[n] = lsp.sequence
+        @log.info("#{lsp_id_s(n)} sequence #{seq(lsp.sequence)} generated: #{reason}", kind: :origination,
+                                                                                       lsp_id: lsp_id_s(n),
+                                                                                       sequence: lsp.sequence)
+        @database.entry(lsp_id(n)).store(lsp)
+      end
+      stale = only ? [] : @numbers - wanted
+      @numbers = wanted unless only
+      stale.each do |n|
+        held = @database[lsp_id(n)]
+        next if held.nil? || held.placeholder? || held.remaining_lifetime.zero?
+
+        @database.purge(held, "LSP Number #{n} is no longer needed (RFC 1142 7.3.4)", retain: Database::MAX_AGE)
+      end
+      if generated.empty?
+        @log.debug("#{lsp_id_s}: #{reason}; content unchanged, not generated (RFC 1142 7.3.6)") if stale.empty?
         return nil
       end
 
-      lsp = build(sequence: @sequence + 1)
-      size = lsp.encode.bytesize
-      raise Error, "#{lsp_id_s} is #{size} octets, over the #{@buffer_size} octet budget" if size > @buffer_size
-
-      @sequence = lsp.sequence
-      entry = @database.entry(@lsp_id).store(lsp)
       @generated_at = @scheduler.now
-      @log.info("#{lsp_id_s} sequence #{seq(@sequence)} generated: #{reason}", kind: :origination,
-                                                                                lsp_id: lsp_id_s, sequence: @sequence)
       # Clause 7.3.6: "propagate the LSP(s) on every circuit by setting
       # SRMflag for each circuit". Each circuit sets it only with an
       # adjacency up, as clause 7.3.5 asks.
-      @circuits.each { |c| c.flood(entry) }
+      generated.each { |entry| @circuits.each { |c| c.flood(entry) } }
       schedule_refresh
-      lsp
+      generated.first.lsp
     end
 
     # Clause 7.3.6: "The timer maximumLSPGenerationInterval shall not be
