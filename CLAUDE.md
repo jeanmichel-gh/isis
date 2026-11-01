@@ -121,6 +121,7 @@ lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
+test/docs/                 the tests that hold each guide in docs/ to the code
 test/functional/           tests that put PDUs on a real interface
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
@@ -314,13 +315,17 @@ working in every change.
 
 **Wire bytes must be recognised by a mark, never by guessing.** A binary
 String and a field value String are the same class in Ruby. Mark the
-binary one explicitly, the way bgp4r marks with `is_packed`, and branch on
-the mark. Sniffing the content works until the day a field value happens
-to look like octets, and then it fails somewhere far away from the cause.
+binary one explicitly and branch on the mark. Sniffing the content works
+until the day a field value happens to look like octets, and then it fails
+somewhere far away from the cause. The mark here is `ISIS::Octets`, a
+String subclass, and not bgp4r's `is_packed`: a gem should not add methods
+to every user's Strings, and a frozen literal cannot carry that mark.
 
-Write the dispatch order down in `docs/building-objects.md` and keep it the
-same in every class. A reader who learns one constructor has learned all of
-them.
+The dispatch order is written down in `docs/building-objects.md` and lives
+in one place, `ISIS::Node`, which every node class includes. A reader who
+learns one constructor has learned all of them. The doc's test discovers
+every class that includes `ISIS::Node` and fails if the doc does not list
+it.
 
 ### Five ways out
 
@@ -1636,14 +1641,18 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors and `SystemId`),
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
 scheduler, `lib/isis/link/` with the LLC helpers and the socket and
-simulated transports, `lib/isis/tlv/tlv.rb`, `lib/isis/pdu/lan_hello.rb`,
-and `lib/isis/adjacency/` with the adjacency and the circuit, both on the
-injected clock. Tests are under `test/unit/`, and the time guard passes.
-The protocol code is still the proof of concept: a LAN Hello encode and
-parse and an L1 LAN adjacency. Phase 1 gate 1 is half met: the clock, the
-scheduler, the simulated transport and the guard exist, but there is no
-`pdu.rb` with a common header class, no `Unknown` at any level, no parse
-policy and no `to_shex`. The gem has not been
+simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
+registry, `Tlv::Unknown` and the TLV list, `lib/isis/pdu/lan_hello.rb`, and
+`lib/isis/adjacency/` with the adjacency and the circuit, both on the
+injected clock. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
+wire mark and the constructor dispatch, written up in
+`docs/building-objects.md`. Tests are under `test/unit/` and `test/docs/`,
+and the time guard passes. The LAN Hello still has its proof of concept
+API, but reads and writes its TLVs through the TLV list. Phase 1 gate 1 is
+met at the TLV level: framing, `Tlv::Unknown` and parse rules 1 to 4, with
+the TLV truncation tests. Still missing: `pdu.rb` with the common header
+class, the type registry and `Pdu::Unknown`, parse rules 5 to 7, and the
+capture object above a PDU. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
 
