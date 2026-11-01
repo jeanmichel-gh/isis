@@ -47,8 +47,9 @@ module ISIS
     ALL_ISS = "09:00:2b:00:00:05"
 
     # +usage+ is the levels the adjacency serves, [1], [2] or [1, 2].
+    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1).
     Neighbor = Struct.new(:system_id, :snpa, :state, :extended_circuit_id, :holding_time, :areas, :expiry,
-                          :usage) do
+                          :usage, :ip_addresses) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -63,7 +64,7 @@ module ISIS
     CIRCUIT_TYPES = { [1] => :l1, [2] => :l2, [1, 2] => :l1l2 }.freeze
     TYPE_LEVELS = CIRCUIT_TYPES.invert.freeze
 
-    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :levels
+    attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :levels, :local_circuit_id
     attr_accessor :areas, :hello_interval, :hello_multiplier, :metric, :hello_key
 
     # +levels+ is the levels this circuit runs, each with its database,
@@ -280,6 +281,11 @@ module ISIS
 
     private
 
+    # The IPv4 addresses a hello carries in TLV 132, as strings.
+    def ip_addresses(hello)
+      hello.tlvs.select { |t| t.is_a?(Tlv::IpInterfaceAddresses) }.flat_map { |t| t.addresses.map(&:to_s) }
+    end
+
     def holding_time
       [@hello_interval * @hello_multiplier, 0xffff].min
     end
@@ -317,6 +323,7 @@ module ISIS
       @neighbor.snpa = snpa
       @neighbor.holding_time = hello.holding_time
       @neighbor.areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
+      @neighbor.ip_addresses = ip_addresses(hello)
       @neighbor.extended_circuit_id = three_way&.extended_circuit_id
       restart_holding_timer
       was = @neighbor.usage || []
@@ -331,6 +338,9 @@ module ISIS
                   "was Level #{was.join(' and ')}", circuit: @name, kind: :adjacency,
                                                     neighbor: @neighbor.system_id_s, levels: usage)
       end
+      # Up to Initializing or Down, by the neighbour's TLV 240: the levels
+      # it served lose it, as when the holding timer expires.
+      was.each { |n| level(n).adjacency_down } if before == :up && @neighbor.state != :up
       return unless @neighbor.state == :up
 
       gained = before == :up ? usage - was : usage

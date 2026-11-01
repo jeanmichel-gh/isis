@@ -64,7 +64,9 @@ module ISIS
     end
 
     # One neighbour on the LAN, keyed by its LAN address (clause 8.4.1.4).
-    Neighbor = Struct.new(:system_id, :snpa, :state, :priority, :holding_time, :lan_id, :areas, :expiry) do
+    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1).
+    Neighbor = Struct.new(:system_id, :snpa, :state, :priority, :holding_time, :lan_id, :areas, :expiry,
+                          :ip_addresses) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -77,7 +79,7 @@ module ISIS
     attr_reader :circuit_type, :name, :level, :system_id, :snpa, :neighbors, :log, :scheduler, :transport, :dis, :database,
                 :originator, :pseudonode
     attr_accessor :areas, :priority, :hello_interval, :dis_hello_interval, :hello_multiplier, :hello_key, :metric,
-                  :area_key
+                  :area_key, :decision
 
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, level: 1, areas: ["49.0001"],
                    priority: PRIORITY, local_circuit_id: 1, hello_interval: HELLO_INTERVAL,
@@ -190,6 +192,29 @@ module ISIS
       return nil if @dis.nil? || lan_id.getbyte(-1).zero?
 
       [lan_id, @metric]
+    end
+
+    # The first hops for the Decision Process: each neighbour Up, at the
+    # circuit's metric. Clause 7.2.7 ranks by "l1CircuitID" or
+    # "l2CircuitID", this circuit's, the same for every adjacency on it, so
+    # "lANAddress" decides between two from one system.
+    def spf_adjacencies
+      up_neighbors.map { |n| [(n.system_id + "\x00".b).b, @metric, spf_adjacency(n)] }
+    end
+
+    # Annex C.2.4 step 0 i, the pseudonode LSP "for that circuit", with the
+    # adjacency to the DIS, which the systems it lists and this system has
+    # no adjacency to are reached through. Nil while this system is DIS,
+    # with no DIS, or with the DIS's adjacency not Up.
+    def spf_broadcast
+      return nil unless @dis.is_a?(Neighbor) && @dis.state == :up && !lan_id.getbyte(-1).zero?
+
+      [lan_id, @metric, spf_adjacency(@dis)]
+    end
+
+    def spf_adjacency(neighbor)
+      Spf::Adjacency.new(circuit: @name, neighbor: neighbor.system_id.b, circuit_id: @local_circuit_id,
+                         lan_address: neighbor.snpa.to_s, address: neighbor.ip_addresses&.first)
     end
 
     # The originator generated +entry+: set SRM for it here, with an
@@ -359,6 +384,8 @@ module ISIS
       neighbor.holding_time = hello.holding_time
       neighbor.lan_id = hello.lan_id
       neighbor.areas = their_areas
+      neighbor.ip_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::IpInterfaceAddresses) }
+                                   .flat_map { |t| t.addresses.map(&:to_s) }
       restart_holding_timer(key, neighbor)
 
       listed = hello.neighbors.any? { |n| n.to_s == @snpa.to_s }
@@ -462,6 +489,7 @@ module ISIS
         @pseudonode&.stop
       end
       @originator&.changed("Level #{@level} DIS on #{@name} now #{describe.call(winner)} (RFC 1142 7.3.7)")
+      @decision&.changed("Level #{@level} DIS on #{@name} now #{describe.call(winner)}")
     end
 
     # Clause 7.2.3: "When an Intermediate system declares itself as
@@ -503,6 +531,7 @@ module ISIS
     # none left nothing is owed on the circuit.
     def up_changed(why)
       @pseudonode.changed("#{why} (RFC 1142 7.3.8)") if dis? && @pseudonode
+      @decision&.changed("#{why} on #{@name}")
       clear_update_state if up_neighbors.empty?
     end
 

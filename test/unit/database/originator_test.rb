@@ -79,6 +79,20 @@ class TestOriginator < Minitest::Test
     assert_equal [1, 2], generated(@log_a)
   end
 
+  # The adjacency leaves Up by the neighbour's TLV 240, not by A's own
+  # holding timer: B stops reading, its timer expires, and its next hello
+  # says so. A's LSP drops B from TLV 22 (7.3.6).
+  def test_leaving_up_by_the_neighbours_hello_takes_it_out_of_tlv_22
+    start_both
+    run_for(10)
+    35.times do
+      @scheduler.advance(1)
+      @a.poll
+    end
+    refute @a.up?
+    refute own(@orig_a).tlvs.any? { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
+  end
+
   # Each side ends up holding the other's latest LSP, the one with TLV 22.
   def test_each_side_learns_the_others_lsp
     start_both

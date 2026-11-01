@@ -19,7 +19,7 @@ module ISIS
       include UpdateProcess
 
       attr_reader :circuit, :level, :database, :originator
-      attr_accessor :area_key
+      attr_accessor :area_key, :decision
 
       def initialize(circuit:, level:, database:, originator: nil, area_key: nil, partial_snp_interval:,
                      lsp_transmission_interval:)
@@ -64,6 +64,23 @@ module ISIS
         [(@circuit.neighbor.system_id + "\x00".b).b, @circuit.metric] if up?
       end
 
+      # The first hop for the Decision Process: the neighbour, at the
+      # circuit's metric, with the adjacency Up at this level. The circuit ID
+      # 7.2.7 ranks by is the ptPtCircuitID, the Local Circuit ID.
+      def spf_adjacencies
+        return [] unless up?
+
+        n = @circuit.neighbor
+        adj = Spf::Adjacency.new(circuit: @name, neighbor: n.system_id.b, circuit_id: @circuit.local_circuit_id,
+                                 address: n.ip_addresses&.first)
+        [[(n.system_id + "\x00".b).b, @circuit.metric, adj]]
+      end
+
+      # A point to point circuit has no pseudonode.
+      def spf_broadcast
+        nil
+      end
+
       # The originator generated +entry+: set SRM for it here, with the
       # adjacency up at this level (RFC 1142 7.3.5, 7.3.6).
       def flood(entry)
@@ -75,6 +92,7 @@ module ISIS
       # initialisation", and the PSNP timer starts.
       def adjacency_up(neighbor)
         @originator&.changed("adjacency with #{neighbor} on #{@name} up at Level #{@level} (RFC 1142 7.3.6)")
+        @decision&.changed("adjacency with #{neighbor} on #{@name} up")
         send_csnp
         start_psnp_timer unless @psnp_timer
       end
@@ -82,6 +100,7 @@ module ISIS
       # The adjacency stopped serving this level, so nothing is owed on it.
       def adjacency_down
         @originator&.changed("adjacency on #{@name} down at Level #{@level} (RFC 1142 7.3.6)")
+        @decision&.changed("adjacency on #{@name} down")
         stop
       end
 

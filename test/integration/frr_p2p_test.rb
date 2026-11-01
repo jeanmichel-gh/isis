@@ -263,6 +263,52 @@ class TestFrrP2p < Minitest::Test
     refute frr_lsps(1).key?("#{FrrLab::ISIS4R_ID}.00-00"), @lab.report
   end
 
+  # Routes computed (RFC 1142 7.2, Annex C.2), on the same two systems.
+  # FRR's loopback, 198.51.100.2/32, is in FRR's LSP at 10, and the link
+  # is at 10 each way, so isis4r reaches it at 20 through 10.0.12.2. FRR,
+  # computing the other way, reaches isis4r's 192.0.2.1/32 at 10 + 5
+  # through 10.0.12.1. Our arithmetic, and each side's number is checked
+  # against the other's LSP as FRR prints it.
+  def test_routes_computed_agree_with_frr
+    @lab.start(frr_loopback: "198.51.100.2/32")
+    assert_eventually("adjacency did not come up") { both_up? }
+    assert_eventually("FRR does not reach 192.0.2.1/32 through isis4r", 60) do
+      @lab.frr_isis_routes["192.0.2.1/32"] == { "metric" => 15, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+    frr_lsp = @lab.frr_database_detail(1)["#{FrrLab::FRR_ID}.00-00"].to_s
+    assert_match %r{Extended IP Reachability: 198\.51\.100\.2/32 \(Metric: 10\)}, frr_lsp, @lab.report
+    assert_eventually("isis4r does not reach 198.51.100.2/32 at 20 through FRR", 30) do
+      @lab.isis4r_routes["198.51.100.2/32"] ==
+        { "prefix" => "198.51.100.2/32", "metric" => 20,
+          "next_hops" => [{ "address" => "10.0.12.2", "circuit" => "veth0" }] }
+    end
+    # Measured on FRR 8.4.4: FRR lists the shared subnet, 10.0.12.0/24, at
+    # 20 through isis4r, its own at 10 not shown. isis4r keeps its own,
+    # at 10, as local.
+    assert_equal({ "prefix" => "10.0.12.0/24", "metric" => 10, "next_hops" => [] },
+                 @lab.isis4r_routes["10.0.12.0/24"], @lab.report)
+  end
+
+  # Each side's distance starts with its own metric on the link, so the
+  # routes may differ each way (RFC 1142 7.2.8.2: "It is permissible for
+  # two endpoints to report different defined values of the same metric
+  # for the same link. In this case, routes may be asymmetric"). FRR at 30
+  # reaches 192.0.2.1/32 at 30 + 5, and isis4r, at 10, still reaches the
+  # loopback at 10 + 10. When FRR's isisd stops, the route goes with the
+  # adjacency.
+  def test_asymmetric_metrics_and_a_lost_neighbour
+    @lab.start(frr_loopback: "198.51.100.2/32", frr_interface: ["isis metric 30"])
+    assert_eventually("FRR does not reach 192.0.2.1/32 at 35", 60) do
+      @lab.frr_isis_routes.dig("192.0.2.1/32", "metric") == 35
+    end
+    assert_eventually("isis4r does not reach 198.51.100.2/32 at 20", 30) do
+      @lab.isis4r_routes.dig("198.51.100.2/32", "metric") == 20
+    end
+    @lab.stop_frr_isisd
+    assert_eventually("isis4r keeps a route through FRR", 20) { @lab.isis4r_routes["198.51.100.2/32"].nil? }
+    assert_includes @lab.isis4r_log, "route 198.51.100.2/32 removed", @lab.report
+  end
+
   # Area addresses at Level 2 (RFC 1142 7.2.11): FRR's Level 1 LSP lists
   # 49.0001 and 49.0002, its two nets, and isis4r's lists 49.0001. So
   # isis4r's Level 2 LSP, as FRR holds it, lists the union, both, while
