@@ -41,7 +41,7 @@ module ISIS
     end
 
     def encode
-      tlvs = Tlv.encode(build_tlvs)
+      tlvs = Tlv::List.new(build_tlvs.map { |type, value| Tlv::Unknown.new(type, value) }).encode
       pdu_length = HEADER_LEN + tlvs.bytesize
 
       common = [
@@ -82,11 +82,13 @@ module ISIS
                   protocols: [])
       hello.lan_id = lan_id
 
-      Tlv.parse(tlv_bytes).each do |type, value|
-        case type
-        when TLV_AREA_ADDRESSES      then hello.area_addresses = parse_areas(value)
-        when TLV_IS_NEIGHBORS        then hello.neighbors = parse_neighbors(value)
-        when TLV_PROTOCOLS_SUPPORTED then hello.protocols = value.bytes
+      # Every TLV is read as an Unknown for now. The hello moves onto
+      # per-TLV classes in phase 1 gate 2.
+      Tlv::List.new(Octets.new(tlv_bytes)).each do |tlv|
+        case tlv.type
+        when TLV_AREA_ADDRESSES      then hello.area_addresses = parse_areas(tlv.value)
+        when TLV_IS_NEIGHBORS        then hello.neighbors = parse_neighbors(tlv.value)
+        when TLV_PROTOCOLS_SUPPORTED then hello.protocols = tlv.value.bytes
         end
       end
       hello

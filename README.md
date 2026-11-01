@@ -71,11 +71,13 @@ lib/isis/runtime/scheduler.rb   # timers as scheduled callbacks on a clock
 lib/isis/link/llc.rb            # IS-IS LLC header and AllL1ISs/AllL2ISs MACs
 lib/isis/link/socket_transport.rb    # real link over a Datalink::Socket
 lib/isis/link/simulated_transport.rb # in-memory link that never waits
-lib/isis/tlv/tlv.rb             # TLV encode/parse
+lib/isis/tlv/tlv.rb             # TLV framing, Tlv::Unknown, the TLV list
 lib/isis/pdu/lan_hello.rb       # LAN Hello (IIH) encode/parse
 lib/isis/adjacency/adjacency.rb # one neighbor relationship and its state
 lib/isis/adjacency/circuit.rb   # one IS instance on one link
 test/unit/                      # mirrors lib/isis/, one test file per source file
+test/docs/                      # tests that hold docs/ to the code
+docs/building-objects.md        # the four ways every node is built
 exe/isis-demo                   # two-node adjacency demo over loopback
 ```
 
