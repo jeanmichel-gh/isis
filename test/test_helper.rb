@@ -9,3 +9,47 @@ $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
 require "minitest/autorun"
 require "isis4r"
 require "datalink/backends/loopback"
+
+# Logs for a person watching tests run. A test hands its Runtime::Log a
+# logger and a tracer from here; with ISIS_LOG unset they only feed the
+# test's own sink, so the test can assert on what was logged. With
+# ISIS_LOG=info or ISIS_LOG=debug they also print to standard error, and
+# debug adds a trace of every PDU with its hex:
+#
+#   ISIS_LOG=debug ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/p2p_circuit_test.rb -v
+module TestLog
+  LEVEL = ENV.fetch("ISIS_LOG", "").downcase
+
+  module_function
+
+  def on?
+    %w[info debug].include?(LEVEL)
+  end
+
+  def debug?
+    LEVEL == "debug"
+  end
+
+  # A logger that calls +sink+, if given, and prints when ISIS_LOG is set.
+  def logger(clock, sink = nil)
+    printer = on? ? ISIS::Runtime::Log.writer($stderr, clock: clock, debug: debug?) : nil
+    lambda do |level, message|
+      sink&.call(level, message)
+      printer&.call(level, message)
+    end
+  end
+
+  # A tracer that calls +sink+, if given, and prints under ISIS_LOG=debug.
+  def tracer(clock, sink = nil)
+    printer = debug? ? ISIS::Runtime::Log.trace_writer($stderr, clock: clock, debug: true) : nil
+    lambda do |*args|
+      sink&.call(*args)
+      printer&.call(*args)
+    end
+  end
+
+  # A heading before a test's lines, so the output says which test it is.
+  def heading(name)
+    $stderr.puts "\n== #{name}" if on?
+  end
+end

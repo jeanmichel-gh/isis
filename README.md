@@ -61,6 +61,9 @@ rake test
 # or, without bundler:
 ruby -Ilib -I../datalink-socket/lib -Itest test/unit/pdu/lan_hello_test.rb
 ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/circuit_test.rb
+
+# see the logs of tests that run circuits: info, or debug with every PDU and its hex
+ISIS_LOG=debug ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/p2p_circuit_test.rb -v
 ```
 
 `test/unit/adjacency/circuit_test.rb` brings two instances to a full
