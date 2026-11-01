@@ -5,6 +5,8 @@ require_relative "../../test_helper"
 # Two point to point circuits on a simulated wire, on one manual clock.
 # Nothing waits in real time: the scheduler advances simulated seconds and
 # each circuit reads what the wire delivered.
+#
+# ISIS_LOG=info or ISIS_LOG=debug prints each test's log as it runs.
 class TestP2pCircuit < Minitest::Test
   A_ID = "0000.0000.000a"
   B_ID = "0000.0000.000b"
@@ -15,9 +17,10 @@ class TestP2pCircuit < Minitest::Test
     @wire = ISIS::Link::SimulatedWire.new
     @lines = []
     @traces = []
-    @log_a = ISIS::Runtime::Log.new(clock: @clock, logger: ->(l, m) { @lines << [l, m] },
-                                    tracer: ->(*t) { @traces << t })
-    @log_b = ISIS::Runtime::Log.new(clock: @clock)
+    TestLogs.heading(name)
+    @log_a = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock, ->(l, m) { @lines << [l, m] }),
+                                    tracer: TestLogs.tracer(@clock, ->(*t) { @traces << t }))
+    @log_b = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
     @a = circuit(A_ID, "00:00:00:00:00:0a", @log_a, name: "a-eth1")
     @b = circuit(B_ID, "00:00:00:00:00:0b", @log_b, name: "b-eth1", extended_circuit_id: 7)
   end

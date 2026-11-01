@@ -41,6 +41,19 @@ ruby -Ilib -I../datalink-socket/lib exe/isis-demo
 
 Expected output ends with both sides `up`.
 
+### The point to point handshake, with logs
+
+Two point to point circuits on a simulated wire run the RFC 5303 three-way
+handshake on simulated time, so it finishes at once. The adjacency comes
+up, then `b` goes silent and the holding time expires, with the reason in
+the log.
+
+```sh
+ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim            # info level
+ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim --debug    # every decision and PDU, with hex
+ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim --help     # timing and silence options
+```
+
 ## Tests
 
 ```sh
@@ -48,6 +61,9 @@ rake test
 # or, without bundler:
 ruby -Ilib -I../datalink-socket/lib -Itest test/unit/pdu/lan_hello_test.rb
 ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/circuit_test.rb
+
+# see the logs of tests that run circuits: info, or debug with every PDU and its hex
+ISIS_LOG=debug ruby -Ilib -I../datalink-socket/lib -Itest test/unit/adjacency/p2p_circuit_test.rb -v
 ```
 
 `test/unit/adjacency/circuit_test.rb` brings two instances to a full
@@ -83,6 +99,7 @@ test/docs/                      # tests that hold docs/ to the code
 docs/building-objects.md        # the four ways every node is built
 docs/parse-policy.md            # what happens when a length lies
 exe/isis-demo                   # two-node adjacency demo over loopback
+exe/isis-p2p-sim                # point to point handshake on simulated time, with logs
 ```
 
 ## Boundary with datalink-socket

@@ -294,7 +294,10 @@ What isis4r adds, because of its own rules:
   and both must match. A log statement that calls a method with a side
   effect is a defect.
 * **A test can install a logger and a tracer** to capture what a scenario
-  did, so a failing test can print the log of the run that failed.
+  did, so a failing test can print the log of the run that failed. `TestLogs` in `test/test_helper.rb` gives a test both, feeding the
+  test's own sink, and with `ISIS_LOG=info` (or 1) or `ISIS_LOG=debug` (or 2) printing
+  them as well, and an unknown value warns. `ruby --debug` is the interpreter's own debug mode and
+  shows none of this.
 
 ### Control plane and forwarding
 
@@ -1726,7 +1729,9 @@ layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/cap
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
-transition and refusal with its reason. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
+transition and refusal with its reason. `exe/isis-p2p-sim` runs two of them on
+simulated time with `--log` and `--debug`, for watching the handshake and
+its logs by hand. `ISIS::Octets` and `ISIS::Node` in `common.rb` carry the
 wire mark and the constructor dispatch. `docs/building-objects.md` and
 `docs/parse-policy.md` are held to the code by `test/docs/`. **Phase 1 gate
 1 is met**. The header fields were read in RFC 1142 clause 9 and agree

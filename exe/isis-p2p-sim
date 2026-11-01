@@ -1,0 +1,59 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Two point to point circuits on a simulated wire, running the RFC 5303
+# three-way handshake on simulated time. Nothing waits in real time, and
+# nothing needs privileges or an interface. Watch the adjacency come up,
+# then lose its neighbour and expire.
+#
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim --debug
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-p2p-sim --silence-at 20 --seconds 60 -l sim.log
+#
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
+
+require "optparse"
+require "isis4r"
+
+opts = { log: "-", debug: false, seconds: 50.0, silence_at: 10.0, hello_interval: 3, multiplier: 10 }
+OptionParser.new do |o|
+  o.banner = "usage: isis-p2p-sim [options]"
+  o.on("-l", "--log FILE", "log and trace to FILE, - for standard output (default)") { |v| opts[:log] = v }
+  o.on("-d", "--debug", "debug lines, and a trace of every PDU with its hex") { opts[:debug] = true }
+  o.on("--seconds N", Float, "simulated seconds to run (default 50)") { |v| opts[:seconds] = v }
+  o.on("--silence-at T", Float, "simulated second at which b stops, or -1 never (default 10)") { |v| opts[:silence_at] = v }
+  o.on("--hello-interval N", Integer, "hello interval in seconds (default 3)") { |v| opts[:hello_interval] = v }
+  o.on("--multiplier N", Integer, "holding time is interval times this (default 10)") { |v| opts[:multiplier] = v }
+end.parse!
+
+out = opts[:log] == "-" ? $stdout : File.open(opts[:log], "a").tap { |f| f.sync = true }
+clock = ISIS::Runtime::ManualClock.new
+scheduler = ISIS::Runtime::Scheduler.new(clock)
+wire = ISIS::Link::SimulatedWire.new
+
+circuits = [["a", "0000.0000.000a", "00:00:00:00:00:0a"], ["b", "0000.0000.000b", "00:00:00:00:00:0b"]].map do |name, id, mac|
+  log = ISIS::Runtime::Log.new(clock: clock,
+                               logger: ISIS::Runtime::Log.writer(out, clock: clock, debug: opts[:debug]),
+                               tracer: opts[:debug] ? ISIS::Runtime::Log.trace_writer(out, clock: clock, debug: true) : nil)
+  ISIS::P2pCircuit.new(transport: ISIS::Link::SimulatedTransport.new(wire), scheduler: scheduler, log: log,
+                       name: name, system_id: id, snpa: mac,
+                       hello_interval: opts[:hello_interval], hello_multiplier: opts[:multiplier])
+end
+a, b = circuits
+
+circuits.each(&:start)
+step = 0.5
+silenced = false
+until clock.now >= opts[:seconds]
+  scheduler.advance(step)
+  circuits.each(&:poll)
+  next if silenced || opts[:silence_at].negative? || clock.now < opts[:silence_at]
+
+  out.puts "#{clock.wall.utc.strftime('%FT%T.%LZ')} -----  b goes silent"
+  b.stop
+  b.transport.close
+  silenced = true
+end
+
+out.puts "#{clock.wall.utc.strftime('%FT%T.%LZ')} -----  end: a is #{a.three_way_state}, b is #{b.three_way_state}"
