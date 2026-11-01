@@ -17,7 +17,10 @@ module ISIS
   #            (7.3.7), at the circuit's metric
   #   TLV 135  the configured prefixes
   #
-  # Wide metrics only: no TLV 2 or 128 yet. More than fits in one LSP
+  # That is metric_style :wide, the default. :narrow sends TLV 2 and TLV
+  # 128 in place of 22 and 135, with only the default metric supported,
+  # and :transition sends all four, as a router moving between the two
+  # does. A metric too large for the narrow six bits raises. More than fits in one LSP
   # raises rather than going out as a second LSP Number, which is not here
   # yet.
   #
@@ -35,10 +38,12 @@ module ISIS
     LSP_BUFFER_SIZE = 1492
 
     attr_reader :system_id, :database, :sequence, :circuits, :lsp_id
-    attr_accessor :areas, :protocols, :ip_addresses, :prefixes
+    METRIC_STYLES = %i[wide narrow transition].freeze
+
+    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
-                   ip_addresses: [], prefixes: [],
+                   ip_addresses: [], prefixes: [], metric_style: :wide,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
                    buffer_size: LSP_BUFFER_SIZE)
@@ -51,6 +56,9 @@ module ISIS
       @protocols = protocols
       @ip_addresses = ip_addresses
       @prefixes = prefixes
+      raise ArgumentError, "metric style is :wide, :narrow or :transition" unless METRIC_STYLES.include?(metric_style)
+
+      @metric_style = metric_style
       @refresh_interval = refresh_interval
       @minimum_interval = minimum_interval
       @buffer_size = buffer_size
@@ -105,12 +113,25 @@ module ISIS
     def tlvs
       list = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
-      neighbors = @circuits.filter_map(&:is_neighbor).map do |id, metric|
-        Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric)
+      neighbors = @circuits.filter_map(&:is_neighbor)
+      if @metric_style != :wide
+        # The Virtual Flag takes the first octet of each TLV 2's value, and
+        # a Level 1 system writes 0 (RFC 1142 9.8).
+        narrow = neighbors.map do |id, metric|
+          metrics = Tlv::NarrowMetrics.build(metric: metric, ie_octets: Tlv::IsReachability::IE_OCTETS)
+          Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)
+        end
+        list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
+        reach = @prefixes.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
+        list.concat(pack(Tlv::IpInternalReachability, reach))
       end
-      list.concat(pack(Tlv::ExtendedIsReachability, neighbors))
-      reach = @prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
-      list.concat(pack(Tlv::ExtendedIpReachability, reach))
+      if @metric_style != :narrow
+        wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
+        list.concat(pack(Tlv::ExtendedIsReachability, wide))
+        reach = @prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
+        list.concat(pack(Tlv::ExtendedIpReachability, reach))
+      end
+      list
     end
 
     # Clause 7.3.6: an event "which would cause the information content to
@@ -200,12 +221,12 @@ module ISIS
 
     # Entries into TLVs of +klass+, as many to a TLV as fit in 255 octets
     # of value. Each entry is encoded once and measured.
-    def pack(klass, entries)
+    def pack(klass, entries, overhead: 0)
       groups = []
       size = 0
       entries.each do |e|
         n = e.encode.bytesize
-        if groups.empty? || size + n > 255
+        if groups.empty? || size + n > 255 - overhead
           groups << []
           size = 0
         end

@@ -180,6 +180,46 @@ class TestOriginator < Minitest::Test
   end
 
   # The smallest LSP here is 36 octets: 27 of header, TLV 1 and TLV 129.
+  # Narrow: TLV 2 and TLV 128 in place of 22 and 135.
+  #   02 0c 00 0a808080 00000000000b00   virtual flag 0, metric 10, neighbour b
+  #   80 0c 0a808080 0a000c00 ffffff00   10.0.12.0/24 metric 10
+  def test_narrow_metric_style
+    @orig_a.metric_style = :narrow
+    start_both
+    run_for(10)
+    tlvs = own(@orig_a).tlvs
+    assert_equal [1, 129, 132, 2, 128], tlvs.map(&:type)
+    assert_equal "020c" "00" "0a808080" "00000000000b00", tlvs.find { |t| t.type == 2 }.to_shex
+    assert_equal "800c" "0a808080" "0a000c00" "ffffff00", tlvs.find { |t| t.type == 128 }.to_shex
+  end
+
+  # Transition sends both, narrow first.
+  def test_transition_metric_style
+    @orig_a.metric_style = :transition
+    start_both
+    run_for(10)
+    assert_equal [1, 129, 132, 2, 128, 22, 135], own(@orig_a).tlvs.map(&:type)
+  end
+
+  # A metric the six bits cannot hold cannot go out narrow.
+  def test_a_wide_only_metric_cannot_go_narrow
+    @orig_a.metric_style = :narrow
+    @orig_a.prefixes = [{ prefix: "10.0.12.0/24", metric: 64 }]
+    assert_raises(ArgumentError) { @orig_a.start }
+  end
+
+  # The Virtual Flag octet counts against each TLV 2's 255: 1 + 23 * 11 is
+  # 254, so a 24th neighbour would start a second TLV.
+  def test_tlv_2_packing_counts_the_virtual_flag
+    # Stand-in circuits, each answering one neighbour at metric 1.
+    circuit = Struct.new(:is_neighbor) { def flood(_) = nil }
+    (1..24).each { |i| @orig_a.attach(circuit.new([["0000000000%02x00" % i].pack("H*"), 1])) }
+    @orig_a.metric_style = :narrow
+    @orig_a.prefixes = []
+    @orig_a.start
+    assert_equal [23, 1], own(@orig_a).tlvs.select { |t| t.type == 2 }.map { |t| t.entries.size }
+  end
+
   def test_an_lsp_over_the_budget_raises
     orig, = node("0000.0000.000c", "00:00:00:00:00:0c", @log_a, "c-eth1", buffer_size: 35)
     assert_raises(ISIS::Error) { orig.start }

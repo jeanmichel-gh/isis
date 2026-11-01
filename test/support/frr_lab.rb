@@ -69,8 +69,8 @@ class FrrLab
   # Brings both sides up. +hello_interval+ and +hello_multiplier+ apply to
   # both, so the holding time is short and a lost neighbour shows quickly.
   # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
-  # adds lines under FRR's interface.
-  def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [])
+  # adds lines under FRR's interface and +frr_router+ under its router isis.
+  def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [])
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -81,7 +81,7 @@ class FrrLab
       sh "ip -n #{ns} link set lo up"
       sh "ip -n #{ns} link set veth0 up"
     end
-    start_frr(hello_interval, hello_multiplier, frr_interface)
+    start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
                    prefixes: ISIS4R_PREFIXES,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
@@ -218,7 +218,7 @@ class FrrLab
 
   def state_file = File.join(@dir, "state.json")
 
-  def start_frr(hello_interval, hello_multiplier, iface_lines)
+  def start_frr(hello_interval, hello_multiplier, iface_lines, router_lines)
     FileUtils.mkdir_p([@run, @etc])
     conf = File.join(@etc, "frr.conf")
     File.write(conf, <<~CONF)
@@ -235,6 +235,7 @@ class FrrLab
       router isis LAB
        net 49.0001.#{FRR_ID}.00
        is-type level-1
+      #{router_lines.map { |l| " #{l}" }.join("\n")}
     CONF
     # zebra gets a file of its own: given isisd's, it rejects every IS-IS line.
     zebra_conf = File.join(@etc, "zebra.conf")

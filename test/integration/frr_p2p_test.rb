@@ -131,4 +131,18 @@ class TestFrrP2p < Minitest::Test
     assert_eventually("isis4r's LSP is still owed to FRR") { @lab.isis4r_database.dig(own, "srm")&.zero? }
   end
 
+  # The same with narrow metrics on both sides: FRR's "metric-style
+  # narrow" reads only TLVs 2 and 128, so the route can only come from
+  # isis4r's narrow encoding. Its metric is the link's 10 plus the
+  # prefix's 5.
+  def test_frr_learns_isis4rs_prefix_with_narrow_metrics
+    @lab.start(isis4r: { metric_style: "narrow" }, frr_router: ["metric-style narrow"])
+    assert_eventually("adjacency did not come up") { both_up? }
+    assert_eventually("FRR did not install 192.0.2.1/32 from narrow metrics", 60) do
+      route = @lab.frr_route("192.0.2.1/32")
+      route && route["protocol"] == "isis" && route["installed"] && route["metric"] == 15 &&
+        route["nexthops"].any? { |n| n["ip"] == "10.0.12.1" }
+    end
+  end
+
 end

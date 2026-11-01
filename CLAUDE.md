@@ -1727,8 +1727,10 @@ ISO 8473 checksum),
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks, the
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
-registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 6, 8,
-9, 22, 129, 132, 135 and 240, with `lib/isis/subtlv/subtlv.rb` holding the
+registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 2, 6, 8,
+9, 22, 128, 129, 132, 135 and 240, with `lib/isis/tlv/narrow_metrics.rb`
+for the four original metric octets TLVs 2 and 128 share and lay out
+differently, with `lib/isis/subtlv/subtlv.rb` holding the
 sub-TLV framing, the per parent registry, `SubTlv::Unknown` and the list
 a parent frames as its layout asks, and with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
@@ -1751,8 +1753,8 @@ adjacency comes up, PSNPs every partialSNPInterval for what SSN marks,
 LSPs with SRM set sent every minimumLSPTransmissionInterval until
 acknowledged, and the LSP and SNP receipt rules of 7.3.15.1 and 7.3.15.2.
 `lib/isis/database/originator.rb` builds this system's Level 1 LSP from
-configuration and the circuits' adjacencies, with TLVs 1, 129, 132, 22
-and 135: generated at sequence 1 on start, again on an adjacency Up or
+configuration and the circuits' adjacencies, with TLVs 1, 129 and 132,
+and 22 and 135, or 2 and 128, or all four, as its metric style says: generated at sequence 1 on start, again on an adjacency Up or
 Down no sooner than minimumLSPGenerationInterval, refreshed every
 maximumLSPGenerationInterval, and moved past a newer copy of itself, per
 RFC 1142 clauses 7.3.5, 7.3.6, 7.3.16.1 and 7.3.16.2. `exe/isis-p2p-sim` runs two of them on
@@ -1790,14 +1792,18 @@ sequence and checksum and install 192.0.2.1/32 through isis4r, a prefix
 that exists only in isis4r's TLV 135. Measured on FRR 8.4.4: FRR holds
 isis4r's LSP within a second of the adjacency, but installs the route
 about 30 seconds later, when it regenerates its own LSP with isis4r in
-its TLV 22, since its SPF needs the link in both LSPs. Measured on the way: on a point to point circuit FRR
+its TLV 22, since its SPF needs the link in both LSPs.
+`test_frr_learns_isis4rs_prefix_with_narrow_metrics` does the same with
+FRR on `metric-style narrow` and isis4r sending TLVs 2 and 128, and fails
+when isis4r sends wide. TLVs 2 and 128 parse, replay and rebuild FRR's,
+from an LSP FRR 8.4.4 sent with `metric-style narrow`. Measured on the way: on a point to point circuit FRR
 8.4.4 does not flood its own LSP when the adjacency comes up; it lists it
 in a CSNP and sends it when a PSNP asks or a CSNP omits it. Still owed by
-gate 3: TLVs 2 and 128, so narrow metrics too; TLV 10. Not yet in the
+gate 3: TLV 10. Not yet in the
 originator: a second LSP Number when one LSP is full, and jitter on the
-refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), LSP
-confusion (7.3.16.2), a received LSP with this system's ID (7.3.15.1 c
-and d), PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
+refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
+confusion over another system's LSP (7.3.16.2) and a stale LSP with this
+system's ID (7.3.15.1 c) are refused; PSNP jitter, and a database too large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
@@ -2142,6 +2148,11 @@ republication, so each of these is confirmed for that text and not for the
 * **TLV 6 entries**, clause 9.5: "6 octet MAC Address", fixed, so ID
   Length does not touch them.
 * **TLV 2 metric octets**, clause 9.8, quoted in the metrics section.
+  The clause's figure lost its field order in extraction; the field
+  descriptions, and FRR 8.4's `pack_item_oldstyle_reach`, put the four
+  metric octets before the Neighbour ID. FRR reads that ID as seven
+  octets whatever the ID Length; isis4r follows the clause, ID Length
+  plus one.
 
 **Where RFC 1142 and the implementations differ: octets 7 and 8.** RFC
 1142 calls them ECO and User ECO, "transmitted as zero, ignored on

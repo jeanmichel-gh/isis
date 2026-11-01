@@ -32,6 +32,7 @@ database = ISIS::Database.new(level: 1, clock: clock)
 originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
                                   log: log, areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
                                   prefixes: config.fetch(:prefixes, []),
+                                  metric_style: config.fetch(:metric_style, "wide").to_sym,
                                   minimum_interval: config.fetch(:minimum_lsp_interval, 1))
 circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SocketTransport.new(socket), scheduler: scheduler, log: log,
                                database: database, originator: originator,
