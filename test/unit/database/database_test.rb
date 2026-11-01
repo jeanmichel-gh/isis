@@ -20,6 +20,17 @@ class TestDatabase < Minitest::Test
     @db.entry(l.lsp_id).store(l)
   end
 
+  # A listener hears of every LSP stored, a purge included.
+  def test_a_listener_hears_each_store
+    heard = []
+    listener = Object.new
+    listener.define_singleton_method(:stored) { |e| heard << [e.lsp_id_s, e.purged?] }
+    @db.listen(listener)
+    entry = held
+    @db.purge(entry, "test")
+    assert_equal [["0000.0000.00cc.00-00", false], ["0000.0000.00cc.00-00", true]], heard
+  end
+
   # Clause 7.3.16.3: the Remaining Lifetime counts down while held.
   def test_remaining_lifetime_counts_down_on_the_clock
     entry = held(lifetime: 100)

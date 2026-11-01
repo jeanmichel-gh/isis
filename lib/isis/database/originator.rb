@@ -43,6 +43,17 @@ module ISIS
   # lower LSP Number, which the clause calls undesirable rather than
   # forbidden.
   #
+  # At Level 2, given the Level 1 database of the same system, TLV 1
+  # carries clause 7.2.11's area addresses in place of the manual ones:
+  # "the union of the sets of manualAreaAddresses reported in the Area
+  # Addresses field of all Level 1 LSPs with LSP number zero in the local
+  # Intermediate system's link state database", which clause 7.3.9 puts in
+  # the Level 2 LSP. "This includes all source systems, whether currently
+  # reachable or not", and this system's own Level 1 LSP. The union is
+  # computed again as each Level 1 LSP is stored, and a change to it is a
+  # change of content (7.3.6). A Level 2 only system has no Level 1
+  # database, and sends its manual area addresses.
+  #
   # Each step is a method a test can replace on one object: build makes
   # the LSP, and changed, refresh and receive_own decide when a new one is
   # made. The defaults follow the clauses quoted beside them.
@@ -55,6 +66,10 @@ module ISIS
     # ReceiveLSPBufferSize, the default originating budget. CLAUDE.md, "The
     # 255 octet limit is a packing problem".
     LSP_BUFFER_SIZE = 1492
+    # maximumAreaAddresses, which the Maximum Area Addresses octet's zero
+    # stands for. Second hand, from Wireshark: see CLAUDE.md, "Things to
+    # verify".
+    MAXIMUM_AREA_ADDRESSES = 3
 
     attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers
     METRIC_STYLES = %i[wide narrow transition].freeze
@@ -65,7 +80,7 @@ module ISIS
                    ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
-                   buffer_size: LSP_BUFFER_SIZE, is_type: nil)
+                   buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -90,6 +105,7 @@ module ISIS
       @refresh_interval = refresh_interval
       @minimum_interval = minimum_interval
       @buffer_size = buffer_size
+      @level1_database = level1_database
       @circuits = []
       # Clause 7.3.16.1: "When a system initialises, it shall start with
       # sequence number 1". The first generation adds one to this, per LSP
@@ -100,6 +116,9 @@ module ISIS
       @generated_at = nil
       @pending = nil
       @refresh_timer = nil
+      @started = false
+      @union = nil
+      level1_database&.listen(self)
     end
 
     # A circuit whose adjacency goes into TLV 22 and which floods the LSP.
@@ -133,6 +152,8 @@ module ISIS
 
     # Generate the first LSP and start the refresh timer.
     def start
+      @started = true
+      @union = area_addresses
       generate("initialisation (RFC 1142 7.3.16.1)")
       self
     end
@@ -140,7 +161,57 @@ module ISIS
     def stop
       [@refresh_timer, @pending].each { |t| t&.cancel }
       @refresh_timer = @pending = nil
+      @started = false
       self
+    end
+
+    # The area addresses TLV 1 carries: the manual ones, or at Level 2 with
+    # a Level 1 database, clause 7.2.11's union, as AreaAddress objects in
+    # ascending order. Clause 7.2.11: "If more than maximumAreaAddresses
+    # are present, the Intermediate system shall retain only those areas
+    # with numerically lowest area address (as described in 7.1.5)."
+    def area_addresses
+      manual = @areas.map { |a| AreaAddress.new(a) }
+      return manual unless @level1_database && level == 2
+
+      found = manual + @level1_database.entries.flat_map do |e|
+        next [] if e.lsp.nil? || e.lsp_id.getbyte(-1) != 0
+
+        e.lsp.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map(&:areas)
+      end
+      union = found.uniq(&:octets).sort { |a, b| Originator.compare_areas(a, b) }
+      kept = union.first(MAXIMUM_AREA_ADDRESSES)
+      dropped = manual.map(&:octets) - kept.map(&:octets)
+      unless dropped.empty? || @dropped == dropped
+        @log.warn("#{lsp_id_s}: manualAddressDroppedFromArea, " \
+                  "#{dropped.map { |o| AreaAddress.new_ntop(o) }.join(', ')} not among the lowest " \
+                  "#{MAXIMUM_AREA_ADDRESSES} area addresses (RFC 1142 7.2.11)",
+                  kind: :manual_address_dropped)
+      end
+      @dropped = dropped
+      kept
+    end
+
+    # Clause 7.1.5: "numerical comparison of addresses shall be performed on
+    # the encoded form of the address, by padding the shorter address with
+    # trailing zeros to the length of the longer address". That is the
+    # octets compared one by one, which Ruby's String#<=> does, except that
+    # two equal once padded, 49 and 4900, are equal to the clause; String
+    # puts the shorter first, which keeps the order total.
+    def self.compare_areas(a, b)
+      a.octets <=> b.octets
+    end
+
+    # A Level 1 LSP stored in the Level 1 database: generate again if the
+    # union of area addresses moved.
+    def stored(_entry)
+      return unless @started
+
+      union = area_addresses
+      return if union.map(&:octets) == @union.map(&:octets)
+
+      @union = union
+      changed("area addresses now #{union.join(', ')} (RFC 1142 7.2.11)")
     end
 
     # True for an LSP ID this system currently generates: clause 7.3.15.1
@@ -248,7 +319,7 @@ module ISIS
     # The TLVs that open LSP Number 0 and only it: TLV 1, which "shall occur
     # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129 and 132.
     def fixed_tlvs
-      list = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
+      list = [Tlv::AreaAddresses.new(area_addresses.map(&:to_s)), Tlv::ProtocolsSupported.new(@protocols)]
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       list
     end
