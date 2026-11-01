@@ -85,7 +85,11 @@ module ISIS
           h = unusual? ? { length: @length, octets: @prefix_octets.unpack1("H*") } : { prefix: prefix }
           h[:metric] = @metric
           h[:up_down] = true if @up_down
-          h[:subtlvs] = @subtlvs.to_hash[:tlvs] if @subtlvs
+          if @subtlvs
+            sub = @subtlvs.to_hash
+            h[:subtlvs] = sub[:tlvs]
+            h[:subtlv_tail] = sub[:tail] if sub[:tail]
+          end
           h
         end
 
@@ -203,7 +207,9 @@ module ISIS
         metric = Integer(e.fetch(:metric))
         raise ArgumentError, "metric #{metric} does not fit in 32 bits" unless (0..0xffff_ffff).cover?(metric)
 
-        subtlvs = e.key?(:subtlvs) ? SubTlv::List.new(TYPE, { tlvs: e[:subtlvs] }) : nil
+        subtlvs = if e.key?(:subtlvs) || e.key?(:subtlv_tail)
+                    SubTlv::List.new(TYPE, { tlvs: e.fetch(:subtlvs, []), tail: e.fetch(:subtlv_tail, "") })
+                  end
         Entry.new(metric: metric, length: length, prefix_octets: octets, up_down: e.fetch(:up_down, false),
                   subtlvs: subtlvs)
       end
