@@ -1,0 +1,225 @@
+# frozen_string_literal: true
+
+require "json"
+require "fileutils"
+require "tmpdir"
+require "open3"
+require "rbconfig"
+
+# FRR's isisd in one network namespace and isis4r in another, joined by a
+# veth pair. After ospfv2's test/support/frr_lab.rb, with isisd in place of
+# ospfd. Needs root, iproute2 and FRR (zebra, isisd, vtysh); the tests that
+# use it run only with ISIS_FRR=1.
+#
+#   lab = FrrLab.new("t1").start
+#   lab.wait_for { lab.frr_adjacency_state == "Up" && lab.isis4r_state == "up" }
+#   lab.stop
+#
+# Both sides are Level 1, point to point, area 49.0001. FRR is
+# 0000.0000.0002 at 10.0.12.2; isis4r is 0000.0000.0001 at 10.0.12.1.
+class FrrLab
+  FRR = "/usr/lib/frr"
+  ROOT = File.expand_path("../..", __dir__)
+  FRR_ID = "0000.0000.0002"
+  ISIS4R_ID = "0000.0000.0001"
+
+  def self.available?
+    return [false, "set ISIS_FRR=1 to run the FRR interop tests"] unless ENV["ISIS_FRR"] == "1"
+    return [false, "needs root for network namespaces"] unless Process.uid.zero?
+    unless %w[zebra isisd].all? { |d| File.executable?("#{FRR}/#{d}") } && system("which vtysh > /dev/null")
+      return [false, "needs FRR (zebra, isisd, vtysh)"]
+    end
+    return [false, "needs iproute2"] unless system("which ip > /dev/null")
+
+    [true, nil]
+  end
+
+  attr_reader :name, :dir
+
+  def initialize(name)
+    @name = name
+    @frr_ns = "#{name}-frr"
+    @isis_ns = "#{name}-isis4r"
+    @dir = Dir.mktmpdir("isis4r-#{name}")
+    @run = "/var/run/frr/#{name}"
+    @etc = "/etc/frr/#{name}"
+  end
+
+  # Brings both sides up. +hello_interval+ and +hello_multiplier+ apply to
+  # both, so the holding time is short and a lost neighbour shows quickly.
+  # +isis4r+ overrides the isis4r circuit's settings, and +frr_interface+
+  # adds lines under FRR's interface.
+  def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [])
+    cleanup
+    sh "ip netns add #{@frr_ns}"
+    sh "ip netns add #{@isis_ns}"
+    sh "ip link add veth0 netns #{@isis_ns} type veth peer name veth0 netns #{@frr_ns}"
+    sh "ip -n #{@isis_ns} addr add 10.0.12.1/24 dev veth0"
+    sh "ip -n #{@frr_ns} addr add 10.0.12.2/24 dev veth0"
+    [@isis_ns, @frr_ns].each do |ns|
+      sh "ip -n #{ns} link set lo up"
+      sh "ip -n #{ns} link set veth0 up"
+    end
+    start_frr(hello_interval, hello_multiplier, frr_interface)
+    start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
+                   hello_interval: hello_interval, hello_multiplier: hello_multiplier }.merge(isis4r))
+    self
+  end
+
+  # Stops isis4r only, so FRR sees its neighbour go silent.
+  def stop_isis4r
+    return unless @isis_pid
+
+    Process.kill("TERM", @isis_pid)
+    Process.wait(@isis_pid)
+  rescue Errno::ESRCH, Errno::ECHILD
+    nil
+  ensure
+    @isis_pid = nil
+  end
+
+  # Stops FRR's isisd only, so isis4r sees its neighbour go silent.
+  def stop_frr_isisd
+    pid_file = "#{@run}/isisd.pid"
+    Process.kill("TERM", File.read(pid_file).to_i) if File.exist?(pid_file)
+  rescue Errno::ESRCH
+    nil
+  end
+
+  def stop
+    stop_isis4r
+  ensure
+    cleanup
+  end
+
+  # ---- isis4r's side ----
+
+  def isis4r_state_doc
+    JSON.parse(File.read(state_file))
+  rescue Errno::ENOENT, JSON::ParserError
+    {}
+  end
+
+  # "down", "initializing" or "up".
+  def isis4r_state
+    isis4r_state_doc["state"]
+  end
+
+  def isis4r_log
+    File.read(File.join(@dir, "isis4r.log"))
+  rescue Errno::ENOENT
+    ""
+  end
+
+  # ---- FRR's side ----
+
+  def vtysh(cmd)
+    # stdout only: vtysh warns on stderr about a missing vtysh.conf.
+    out, = Open3.capture3("vtysh", "-N", @name, "-c", cmd)
+    out
+  end
+
+  def frr_json(cmd)
+    JSON.parse(vtysh("#{cmd} json"))
+  rescue JSON::ParserError
+    {}
+  end
+
+  # FRR's adjacency state for isis4r on veth0, "Up", "Initializing" or
+  # "Down", or nil when FRR has none. Read from the plain text of
+  # `show isis neighbor`, whose layout is a system ID, the interface, the
+  # level, the state, the holding time and the SNPA.
+  def frr_adjacency_state
+    line = vtysh("show isis neighbor").lines.find { |l| l.include?("veth0") }
+    line&.split&.at(3)
+  end
+
+  def frr_log
+    File.read(File.join(@dir, "isisd.log"))
+  rescue Errno::ENOENT
+    ""
+  end
+
+  # Everything a failed test wants printed.
+  def report
+    <<~REPORT
+      --- FRR: show isis neighbor
+      #{vtysh('show isis neighbor')}
+      --- FRR isisd log
+      #{frr_log.lines.last(40).join}
+      --- isis4r state
+      #{isis4r_state_doc}
+      --- isis4r log
+      #{isis4r_log.lines.last(60).join}
+    REPORT
+  end
+
+  def wait_for(timeout = 30)
+    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+    until yield
+      return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+
+      sleep 0.25
+    end
+    true
+  end
+
+  private
+
+  def state_file = File.join(@dir, "state.json")
+
+  def start_frr(hello_interval, hello_multiplier, iface_lines)
+    FileUtils.mkdir_p([@run, @etc])
+    conf = File.join(@etc, "frr.conf")
+    File.write(conf, <<~CONF)
+      hostname #{@name}
+      log file #{File.join(@dir, 'isisd.log')} debugging
+      debug isis adj-packets
+      interface veth0
+       ip router isis LAB
+       isis circuit-type level-1
+       isis network point-to-point
+       isis hello-interval #{hello_interval}
+       isis hello-multiplier #{hello_multiplier}
+      #{iface_lines.map { |l| " #{l}" }.join("\n")}
+      router isis LAB
+       net 49.0001.#{FRR_ID}.00
+       is-type level-1
+    CONF
+    # zebra gets a file of its own: given isisd's, it rejects every IS-IS line.
+    zebra_conf = File.join(@etc, "zebra.conf")
+    File.write(zebra_conf, "hostname #{@name}\n")
+    FileUtils.touch(File.join(@dir, "isisd.log"))
+    sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
+    { "zebra" => zebra_conf, "isisd" => conf }.each do |d, file|
+      sh "ip netns exec #{@frr_ns} #{FRR}/#{d} -N #{@name} -d -f #{file} -i #{@run}/#{d}.pid > /dev/null 2>&1"
+    end
+  end
+
+  def start_isis4r(config)
+    File.write(File.join(@dir, "isis4r.json"), JSON.generate(config))
+    @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby,
+                              "#{ROOT}/test/support/isis_runner.rb", File.join(@dir, "isis4r.json"), state_file,
+                              %i[out err] => File.join(@dir, "isis4r.log"))
+  end
+
+  def cleanup
+    %w[isisd zebra].each do |d|
+      pid_file = "#{@run}/#{d}.pid"
+      next unless File.exist?(pid_file)
+
+      begin
+        Process.kill("TERM", File.read(pid_file).to_i)
+      rescue Errno::ESRCH
+        nil
+      end
+      File.delete(pid_file)
+    end
+    sleep 0.3
+    [@frr_ns, @isis_ns].each { |ns| system("ip netns del #{ns} 2>/dev/null") }
+  end
+
+  def sh(cmd)
+    system(cmd) or raise "failed: #{cmd}"
+  end
+end
