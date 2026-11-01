@@ -20,19 +20,15 @@ module ISIS
     #   PDU Length             2 octets, "Entire length of this PDU"
     #   Local Circuit ID       1 octet
     #
-    # Circuit Type values, clause 9.7: 0 a "reserved value (if specified the
-    # entire PDU shall be ignored)", 1 Level 1 only, 2 Level 2 only, 3 both.
-    # Ignoring a PDU is the receive policy's call, so 0 is carried like any
-    # other value, and reserved bits that arrived set are kept and echoed.
+    # The Circuit Type octet is the field all three hellos share, in
+    # Pdu::CircuitType.
     #
     # This is not a LAN hello with parts removed, and shares no base with
     # one. CLAUDE.md, "Nine PDU types, five layouts".
     class P2pHello < Layout
+      include CircuitType
+
       TYPE = 17
-      CIRCUIT_TYPE_MASK = 0x03
-      CIRCUIT_RESERVED_MASK = 0xfc
-      CIRCUIT_TYPES = { 1 => :l1, 2 => :l2, 3 => :l1l2 }.freeze
-      CIRCUIT_NUMBERS = CIRCUIT_TYPES.invert.freeze
 
       attr_accessor :holding_time, :local_circuit_id
       attr_reader :source_id
@@ -48,21 +44,6 @@ module ISIS
           at = COMMON_HEADER + 1 + Pdu.id_width(octets.getbyte(3) || 0) + 2
           octets.byteslice(at, 2).unpack1("n")
         end
-      end
-
-      # :l1, :l2 or :l1l2, or the number when it is 0.
-      def circuit_type
-        n = @circuit_octet & CIRCUIT_TYPE_MASK
-        CIRCUIT_TYPES.fetch(n, n)
-      end
-
-      def circuit_type=(value)
-        @circuit_octet = (@circuit_octet & CIRCUIT_RESERVED_MASK) | circuit_type_number(value)
-      end
-
-      # The six reserved bits of the Circuit Type octet, as they arrived.
-      def circuit_reserved_bits
-        @circuit_octet & CIRCUIT_RESERVED_MASK
       end
 
       def source_id=(value)
@@ -124,22 +105,8 @@ module ISIS
                     holding_time: hash.fetch(:holding_time), local_circuit_id: hash.fetch(:local_circuit_id),
                     tlvs: Tlv::List.new({ tlvs: hash.fetch(:tlvs, []), tail: hash.fetch(:tail, "") }),
                     max_area_addresses: hash.fetch(:max_area_addresses, 0))
-        @circuit_octet |= hash.fetch(:circuit_bits, 0) & CIRCUIT_RESERVED_MASK
+        apply_circuit_bits(hash)
         @header.apply_unusual(hash)
-      end
-
-      def circuit_type_number(value)
-        n = value.is_a?(Symbol) ? CIRCUIT_NUMBERS.fetch(value) { raise ArgumentError, "no circuit type #{value.inspect}" } : Integer(value)
-        raise ArgumentError, "circuit type #{n} does not fit in two bits" unless (0..3).cover?(n)
-
-        n
-      end
-
-      def field(value, max, name)
-        n = Integer(value)
-        raise ArgumentError, "#{name} #{n} does not fit (0 to #{max})" unless (0..max).cover?(n)
-
-        n
       end
     end
 

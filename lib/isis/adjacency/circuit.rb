@@ -33,15 +33,17 @@ module ISIS
     # Build and send one Hello. Its IS Neighbors TLV lists every neighbor
     # we have heard, which is what lets the other side reach :up.
     def send_hello
-      hello = LanHello.new(
-        source_id: @system_id,
-        circuit_type: @level,
+      tlvs = [Tlv::AreaAddresses.new(@area), Tlv::ProtocolsSupported.new(:ipv4)]
+      neighbors = @adjacencies.values.map(&:snpa)
+      tlvs << Tlv::IsNeighbors.new(neighbors) unless neighbors.empty?
+      hello = Pdu::LanHello.new(
+        level: @level,
+        circuit_type: @level == 2 ? :l2 : :l1,
+        source_id: @system_id.to_s,
         holding_time: @holding_time,
         priority: @priority,
-        area_addresses: [@area],
-        neighbors: @adjacencies.values.map(&:snpa),
-        protocols: [NLPID_IPV4],
-        pdu_type: @level == 2 ? L2_LAN_IIH : L1_LAN_IIH
+        lan_id: "#{@system_id}.00", # self, pseudonode 0, until a DIS is elected
+        tlvs: tlvs
       )
       payload = Link.llc.wrap(hello.encode)
       frame = Datalink::Frame.ieee_802_3(dst: @all_iss, src: @snpa, payload: payload)
@@ -85,39 +87,44 @@ module ISIS
       @adjacencies.any? && @adjacencies.values.all?(&:up?)
     end
 
-    # Process one received frame. Returns the LanHello if it was an IS-IS
-    # Hello for us, else nil.
+    # Process one received frame. Returns the Pdu::LanHello if it was an
+    # IS-IS LAN hello for us, else nil.
     def process(frame)
       return nil unless frame.dst == @all_iss || frame.dst == @snpa
 
       sdu = frame.sdu # datalink-socket trims any 802.3 NIC padding for us
       return nil unless Link.isis_llc?(sdu)
 
-      _llc, pdu = Datalink::LLC.parse(sdu)
-      return nil if pdu.empty? || pdu.getbyte(0) != IRPD
-      return nil unless [L1_LAN_IIH, L2_LAN_IIH].include?(pdu.getbyte(4))
+      _llc, octets = Datalink::LLC.parse(sdu)
+      hello = Pdu.factory(Octets.new(octets))
+      return nil unless hello.is_a?(Pdu::LanHello)
 
-      hello = LanHello.parse(pdu)
-      return nil if hello.source_id == @system_id # ignore our own echo
+      unless hello.source_id.bytesize == SystemId::LENGTH
+        log("dropped LAN hello with a #{hello.source_id.bytesize} octet Source ID")
+        return nil
+      end
 
-      update_adjacency(hello, frame.src)
+      source = SystemId.from_bytes(hello.source_id)
+      return nil if source == @system_id # ignore our own echo
+
+      update_adjacency(hello, source, frame.src)
       hello
-    rescue ParseError, Datalink::ParseError => e
+    rescue Datalink::ParseError => e
       log("dropped malformed PDU: #{e.message}")
       nil
     end
 
     private
 
-    def update_adjacency(hello, src_mac)
-      key = hello.source_id.to_s
+    def update_adjacency(hello, source, src_mac)
+      key = source.to_s
       heard_us = hello.neighbors.any? { |m| m == @snpa }
       new_state = heard_us ? :up : :init
 
       adj = @adjacencies[key]
       if adj.nil?
         @adjacencies[key] = Adjacency.new(
-          system_id: hello.source_id, snpa: src_mac,
+          system_id: source, snpa: src_mac,
           state: new_state, holding_time: hello.holding_time, clock: @clock
         )
         log("adj #{key} -> #{new_state}")
