@@ -4,28 +4,31 @@ module ISIS
   # A circuit is one IS instance on one link. It sends Hellos, receives
   # them, and runs the adjacency handshake.
   #
-  # Two things are injected. The transport moves frames: a
+  # Three things are injected. The transport moves frames: a
   # Link::SocketTransport over a real Datalink::Socket, or a
   # Link::SimulatedTransport on an in-memory wire. The clock gives protocol
   # time: a Runtime::MonotonicClock by default, or a Runtime::ManualClock in
-  # tests, so holding times expire without real waiting.
+  # tests, so holding times expire without real waiting. The log takes
+  # every state change with its reason, and every PDU through its tracer.
+  # With none given, a Runtime::Log with nothing installed writes nothing.
   class Circuit
     DEFAULT_AREA = "49.0001"
 
-    attr_reader :system_id, :snpa, :area, :adjacencies, :transport, :clock
+    attr_reader :system_id, :snpa, :area, :adjacencies, :transport, :clock, :log, :name
 
     def initialize(transport, system_id:, snpa:, area: DEFAULT_AREA,
-                   level: 1, holding_time: 30, priority: 64, logger: nil,
-                   clock: Runtime::MonotonicClock.new)
+                   level: 1, holding_time: 30, priority: 64, name: "lan",
+                   clock: Runtime::MonotonicClock.new, log: nil)
       @transport = transport
       @clock = clock
+      @log = log || Runtime::Log.new(clock: clock)
+      @name = name
       @system_id = system_id.is_a?(SystemId) ? system_id : SystemId.new(system_id)
       @snpa = snpa.is_a?(Datalink::MAC) ? snpa : Datalink::MAC.new(snpa)
       @area = area
       @level = level
       @holding_time = holding_time
       @priority = priority
-      @logger = logger
       @adjacencies = {} # system id string => Adjacency
       @all_iss = Link.all_iss(level)
     end
@@ -48,6 +51,7 @@ module ISIS
       payload = Link.llc.wrap(hello.encode)
       frame = Datalink::Frame.ieee_802_3(dst: @all_iss, src: @snpa, payload: payload)
       @transport.send(frame)
+      @log.trace(:sent, @name, hello, @all_iss.to_s)
       hello
     end
 
@@ -66,7 +70,10 @@ module ISIS
     def expire_adjacencies
       @adjacencies.delete_if do |key, adj|
         dead = adj.expired?
-        log("adj #{key} expired") if dead
+        if dead
+          @log.info("adjacency with #{key} #{adj.state} -> down: holding time of #{adj.holding_time} s expired",
+                    circuit: @name, kind: :adjacency, neighbor: key, from: adj.state, to: :down, reason: :expired)
+        end
         dead
       end
     end
@@ -90,27 +97,31 @@ module ISIS
     # Process one received frame. Returns the Pdu::LanHello if it was an
     # IS-IS LAN hello for us, else nil.
     def process(frame)
-      return nil unless frame.dst == @all_iss || frame.dst == @snpa
+      unless frame.dst == @all_iss || frame.dst == @snpa
+        return ignore("frame for #{frame.dst}, neither AllISs for level #{@level} nor us")
+      end
 
       sdu = frame.sdu # datalink-socket trims any 802.3 NIC padding for us
-      return nil unless Link.isis_llc?(sdu)
+      return ignore("not IS-IS LLC") unless Link.isis_llc?(sdu)
 
       _llc, octets = Datalink::LLC.parse(sdu)
       hello = Pdu.factory(Octets.new(octets))
-      return nil unless hello.is_a?(Pdu::LanHello)
+      @log.trace(:received, @name, hello, frame.src.to_s)
+      return ignore("#{hello.class.name.split('::').last} is not a LAN hello") unless hello.is_a?(Pdu::LanHello)
 
       unless hello.source_id.bytesize == SystemId::LENGTH
-        log("dropped LAN hello with a #{hello.source_id.bytesize} octet Source ID")
+        @log.info("hello refused: a #{hello.source_id.bytesize} octet Source ID, and this circuit uses six",
+                  circuit: @name, kind: :refused, reason: :id_length)
         return nil
       end
 
       source = SystemId.from_bytes(hello.source_id)
-      return nil if source == @system_id # ignore our own echo
+      return ignore("own hello") if source == @system_id
 
       update_adjacency(hello, source, frame.src)
       hello
     rescue Datalink::ParseError => e
-      log("dropped malformed PDU: #{e.message}")
+      @log.info("frame refused: #{e.message}", circuit: @name, kind: :refused, reason: :malformed)
       nil
     end
 
@@ -120,6 +131,7 @@ module ISIS
       key = source.to_s
       heard_us = hello.neighbors.any? { |m| m == @snpa }
       new_state = heard_us ? :up : :init
+      why = heard_us ? "its TLV 6 lists our SNPA #{@snpa}" : "its TLV 6 does not list our SNPA #{@snpa} yet"
 
       adj = @adjacencies[key]
       if adj.nil?
@@ -127,20 +139,26 @@ module ISIS
           system_id: source, snpa: src_mac,
           state: new_state, holding_time: hello.holding_time, clock: @clock
         )
-        log("adj #{key} -> #{new_state}")
+        transition(key, :down, new_state, why)
       else
         adj.snpa = src_mac
         adj.holding_time = hello.holding_time
         if adj.state != new_state
-          log("adj #{key} #{adj.state} -> #{new_state}")
+          transition(key, adj.state, new_state, why)
           adj.state = new_state
         end
         adj.touch
       end
     end
 
-    def log(message)
-      @logger&.puts("[#{@system_id}] #{message}")
+    def transition(key, from, to, why)
+      @log.info("adjacency with #{key} #{from} -> #{to}: #{why}",
+                circuit: @name, kind: :adjacency, neighbor: key, from: from, to: to)
+    end
+
+    def ignore(why)
+      @log.debug("#{why}, ignored", circuit: @name)
+      nil
     end
   end
 end

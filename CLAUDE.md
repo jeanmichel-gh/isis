@@ -254,8 +254,8 @@ the lab is half a tool. The design is taken from ospfv2, which already
 works this way (surveyed at `0ec77c6`). It is built in
 `lib/isis/runtime/log.rb`: `Runtime::Log` holds the logger, the bounded
 event list and the tracer, and `Log.writer` and `Log.trace_writer` give an
-executable its lines. The LAN proof of concept `Circuit` still writes to
-an IO, and moves onto it next.
+executable its lines. Both circuits, `P2pCircuit` and the LAN `Circuit`,
+log through it.
 
 How ospfv2 does it, and what isis4r copies:
 
@@ -1731,6 +1731,8 @@ layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/cap
 for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
 the hellos share, and
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
+which run the two-way LAN handshake without DIS election and log each
+transition with its reason,
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
 transition and refusal with its reason. `exe/isis-p2p-sim` runs two of them on
@@ -1747,8 +1749,9 @@ a flap, expires it on each side when the other goes silent, and forms
 none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
 check waits for. The LAN hello is on the contract, and replays a hello
 captured from FRR 8.4.4 byte for byte. The LAN `Circuit` builds and reads
-it, but still logs to an IO rather than through `Runtime::Log`, and that
-is the last thing gate 2 owes. Not yet done in the hellos: the padding RFC 1142 clause
+it and logs through `Runtime::Log`, and `exe/isis-demo` runs two of them
+with `--log` and `--debug`. That closes gate 2's list. Not yet done in the
+hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.

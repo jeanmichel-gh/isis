@@ -1,16 +1,34 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Two IS instances on one in-memory wire, forming an IS-IS adjacency with
-# no privileges and no real interface. Watch them go Down -> Init -> Up.
+# Two IS instances on one in-memory wire, forming an IS-IS LAN adjacency
+# with no privileges and no real interface. Watch them go Down -> Init ->
+# Up, and the log say why.
 #
 #   ruby -Ilib -I../datalink-socket/lib exe/isis-demo
+#   ruby -Ilib -I../datalink-socket/lib exe/isis-demo --debug
 #
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
 
+require "optparse"
 require "isis4r"
 require "datalink/backends/loopback"
+
+opts = { log: "-", debug: false }
+OptionParser.new do |o|
+  o.banner = "usage: isis-demo [options]"
+  o.on("-l", "--log FILE", "log and trace to FILE, - for standard output (default)") { |v| opts[:log] = v }
+  o.on("-d", "--debug", "debug lines, and a trace of every PDU with its hex") { opts[:debug] = true }
+end.parse!
+
+out = opts[:log] == "-" ? $stdout : File.open(opts[:log], "a").tap { |f| f.sync = true }
+clock = ISIS::Runtime::MonotonicClock.new
+
+def log_for(out, clock, debug)
+  ISIS::Runtime::Log.new(clock: clock, logger: ISIS::Runtime::Log.writer(out, clock: clock, debug: debug),
+                         tracer: debug ? ISIS::Runtime::Log.trace_writer(out, clock: clock, debug: true) : nil)
+end
 
 wire = Datalink::Backends::Loopback::Wire.new
 
@@ -23,10 +41,10 @@ b_sock = socket(wire)
 
 a = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(a_sock),
                       system_id: "0000.0000.0001", snpa: "00:00:00:00:00:01",
-                      holding_time: 30, logger: $stdout)
+                      holding_time: 30, clock: clock, name: "a", log: log_for(out, clock, opts[:debug]))
 b = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(b_sock),
                       system_id: "0000.0000.0002", snpa: "00:00:00:00:00:02",
-                      holding_time: 30, logger: $stdout)
+                      holding_time: 30, clock: clock, name: "b", log: log_for(out, clock, opts[:debug]))
 
 sid_a = ISIS::SystemId.new("0000.0000.0001")
 sid_b = ISIS::SystemId.new("0000.0000.0002")
