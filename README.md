@@ -36,10 +36,11 @@ after the refactor.
 No privileges needed. It runs two instances on one in-memory wire.
 
 ```sh
-ruby -Ilib -I../datalink-socket/lib exe/isis-demo
+ruby -Ilib -I../datalink-socket/lib exe/isis-demo            # each state change and why
+ruby -Ilib -I../datalink-socket/lib exe/isis-demo --debug    # plus every hello, decoded and in hex
 ```
 
-Expected output ends with both sides `up`.
+Expected output ends with both sides `up`. `-l FILE` sends the log to a file.
 
 ### The point to point handshake, with logs
 
