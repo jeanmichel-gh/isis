@@ -889,7 +889,12 @@ the answer in the class, and do not pass the ID length to a class that does
 not need it: a class that accepts it will eventually use it.
 
 **Keep the list of parse-time inputs short and write it down.** Today it is
-the ID length. If a second one appears, that is a design event worth a
+the ID length, as `id_width:`. It reaches a TLV through `Tlv.factory` only
+if the class names it in `PARSE_INPUTS`, and wire octets take it as a
+keyword, `Klass.new(octets, id_width: 8)`. The first class to need it is
+TLV 240, whose Neighbor System ID is ID Length octets wide and whose own
+length cannot say which: 11 octets is a six octet ID alone or a two octet
+ID with a circuit ID after it. `docs/building-objects.md` has the rule. If a second one appears, that is a design event worth a
 paragraph in the guide, not a quiet extra argument.
 
 **The ID Length encoding is a trap and must be verified in the spec, not
@@ -1658,8 +1663,8 @@ only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
 scheduler, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
-registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129
-and 132, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
+registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129,
+132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
 layout, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, and
@@ -1987,8 +1992,8 @@ Still unread:
 * **The RFCs named in the phases.** RFC 8667, 9350, 9352 and 8706 are cited
   by title for scope, not read here. RFC 9885 was read in part, sections 4
   and 5 on what a Multi-Part TLV is and how it is received; the per TLV key
-  definitions it defers to other documents are not read. TLV 240 for the
-  RFC 5303 handshake is from memory. Check each before implementing it.
+  definitions it defers to other documents are not read. Check each
+  before implementing it.
 
 Already settled, with where each came from, so nobody pays for it twice.
 Each of these cost a fetch, and two of them overturned what this file
@@ -2011,7 +2016,13 @@ confidently said:
   a useless one for how any of them works. Read, against the expectation
   that it would turn out to be a misuse.
 * **RFC 5303** is point to point adjacencies, by title and by content, so
-  it does not support a claim about LAN behaviour.
+  it does not support a claim about LAN behaviour. Sections 3.1 and 3.2
+  read through datatracker for TLV 240 and the handshake: type 240,
+  length 1 to 17, state 0 Up, 1 Initializing, 2 Down, then a 4 octet
+  Extended Local Circuit ID, an ID Length Neighbor System ID and a 4 octet
+  Neighbor Extended Local Circuit ID. Its verified errata 2587 to 2593
+  renumber the ISO clauses it cites, 8.2.4 to 8.2.5, and leave the state
+  table as it was.
 * **RFC 3719 section 5**, quoted in the packing section: the two
   originating buffer sizes as "private management parameters", the rule
   that each must be at or below `ReceiveLSPBufferSize` and within the link

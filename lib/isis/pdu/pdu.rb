@@ -333,7 +333,8 @@ module ISIS
 
         extent = [@declared_pdu_length, octets.bytesize].min
         parse_fixed(octets.byteslice(COMMON_HEADER, header_end - COMMON_HEADER))
-        @tlvs = Tlv::List.new(Octets.new(octets.byteslice(header_end, extent - header_end)))
+        @tlvs = Tlv::List.new(Octets.new(octets.byteslice(header_end, extent - header_end)),
+                              id_width: @header.id_width)
         octets.replace(octets.byteslice(extent..) || "")
         @retained = normalized
       end
