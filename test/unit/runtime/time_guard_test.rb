@@ -19,8 +19,9 @@ class TestTimeGuard < Minitest::Test
   LIB = File.expand_path("../../../lib/isis", __dir__)
 
   ALLOWED = {
-    # The real monotonic clock: the one place that reads the system's.
-    "runtime/clock.rb" => "MonotonicClock#now"
+    # The real clock: the one place that reads the system's, for protocol
+    # time and for the wall time on log lines.
+    "runtime/clock.rb" => "MonotonicClock#now and #wall"
   }.freeze
 
   FORBIDDEN = {

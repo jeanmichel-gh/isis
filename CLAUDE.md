@@ -221,7 +221,8 @@ is justified in the pull request that adds it. The guard is
 `test/unit/runtime/time_guard_test.rb`. It reads Ruby tokens, so comments
 and strings do not trip it, and it fails on an allowed entry whose file no
 longer makes the call. Today the list holds one file,
-`lib/isis/runtime/clock.rb`, the real monotonic clock. The real transport
+`lib/isis/runtime/clock.rb`, the real monotonic clock, which also answers
+the wall time for log lines. The real transport
 needs no entry: it blocks inside datalink-socket, not by sleeping.
 
 ### Pass-through equivalence
@@ -247,8 +248,12 @@ defect.
 info or debug, and find out from the log what happened and why.** That
 is a requirement on every mechanism, not a feature added at the end. A
 router that converges in a test but cannot say why it did not converge in
-the lab is half a tool. Nothing is built yet; this is the design, taken
-from ospfv2, which already works this way (surveyed at `0ec77c6`).
+the lab is half a tool. The design is taken from ospfv2, which already
+works this way (surveyed at `0ec77c6`). It is built in
+`lib/isis/runtime/log.rb`: `Runtime::Log` holds the logger, the bounded
+event list and the tracer, and `Log.writer` and `Log.trace_writer` give an
+executable its lines. The LAN proof of concept `Circuit` still writes to
+an IO and moves onto it with the LAN hello.
 
 How ospfv2 does it, and what isis4r copies:
 
@@ -1710,8 +1715,8 @@ is lost when the chat is.
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors and `SystemId`),
-`lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks and the
-scheduler, `lib/isis/link/` with the LLC helpers and the socket and
+`lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks, the
+scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 8, 129,
 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
