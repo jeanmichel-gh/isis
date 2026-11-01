@@ -14,21 +14,38 @@ module ISIS
   # it arrived, and answers the remaining lifetime from the clock.
   #
   # This system's own LSP is stored here by the Originator, like any other.
-  # Not here yet: LSP expiry and purging (clause 7.3.16.4).
+  #
+  # With a scheduler, an LSP expires when its Remaining Lifetime reaches
+  # zero, and a purged LSP's header is removed when it has been held long
+  # enough. RFC 1142 clause 7.3.16.4. Without one, nothing ages away on its
+  # own, which suits a test that only wants a store.
+  #
+  # A purge keeps the header alone, with lifetime 0, the same sequence,
+  # and a checksum computed again over the header. Measured on FRR 8.4.4:
+  # its purge is exactly that, and isis4r builds the same octets
+  # (test/fixtures/frr-8.4.4-l1-lsp-purge.hex). An authenticated purge
+  # also carries TLV 10 (RFC 5304 section 2); the circuit adds it as it
+  # sends, since the key is the circuit's.
   class Database
     # RFC 1142 clause 7.3.21: "MaxAge is an architectural constant equal to
     # 20 minutes."
     MAX_AGE = 1200
+    # Clause 7.3.21: "ZeroAgeLifetime is an architectural constant with a
+    # value of 1 minute."
+    ZERO_AGE_LIFETIME = 60
 
     # One stored LSP, or, with sequence 0 and no LSP, the placeholder
     # clause 7.3.15.2 b 4 asks for when an SNP reports an LSP this system
     # does not have: "create an entry with sequence number 0".
     class Entry
       attr_reader :lsp_id, :lsp, :sequence, :checksum, :srm, :ssn
+      attr_accessor :timer
 
-      def initialize(lsp_id, clock)
+      def initialize(lsp_id, clock, database = nil)
         @lsp_id = lsp_id
         @clock = clock
+        @database = database
+        @timer = nil
         @sequence = 0
         @checksum = 0
         @lifetime = 0
@@ -38,13 +55,20 @@ module ISIS
         @ssn = Set.new
       end
 
-      def store(lsp)
+      # +retain+, for a purge, is how long its header is kept.
+      def store(lsp, retain: nil)
         @lsp = lsp
         @sequence = lsp.sequence
         @checksum = lsp.checksum
         @lifetime = lsp.lifetime
         @stored_at = @clock.now
+        @database&.stored(self, retain)
         self
+      end
+
+      # A purge, or an LSP that expired: lifetime 0 (clause 7.3.16.4).
+      def purged?
+        !placeholder? && @lifetime.zero?
       end
 
       def placeholder?
@@ -66,12 +90,23 @@ module ISIS
       end
     end
 
-    attr_reader :level, :clock
+    attr_reader :level, :clock, :scheduler, :circuits
 
-    def initialize(level:, clock:)
+    def initialize(level:, clock:, scheduler: nil, log: nil)
       @level = level
       @clock = clock
+      @scheduler = scheduler
+      @log = log
       @entries = {}
+      @circuits = []
+    end
+
+    # A circuit that floods from this database. It answers flood(entry),
+    # which sets SRM on it when it has an adjacency up. Clause 7.3.16.4 a
+    # sets SRM "for that LSP" on all circuits when it expires.
+    def attach(circuit)
+      @circuits << circuit unless @circuits.include?(circuit)
+      self
     end
 
     def [](lsp_id)
@@ -80,7 +115,49 @@ module ISIS
 
     # The entry for +lsp_id+, made if there is none.
     def entry(lsp_id)
-      @entries[lsp_id.b] ||= Entry.new(lsp_id.b, @clock)
+      @entries[lsp_id.b] ||= Entry.new(lsp_id.b, @clock, self)
+    end
+
+    # Drop the entry for +lsp_id+, and its timer.
+    def delete(lsp_id)
+      entry = @entries.delete(lsp_id.b)
+      entry&.timer&.cancel
+      entry
+    end
+
+    # Purge +entry+ now, clause 7.3.16.4: keep the header alone with lifetime
+    # 0 and set SRM on every circuit. +retain+ is how long the header stays:
+    # ZeroAgeLifetime for an LSP that expired, and MaxAge for a purge this
+    # system starts of an LSP whose lifetime had not run out ("When a purge
+    # of an LSP with non-zero Remaining Lifetime is initiated, the header
+    # shall be retained for MaxAge"). Returns the entry.
+    def purge(entry, reason, retain: ZERO_AGE_LIFETIME)
+      header = Pdu::Lsp.new(level: @level, lsp_id: Octets.new(entry.lsp_id), lifetime: 0, sequence: entry.sequence,
+                            tlvs: [])
+      header.flags = entry.lsp.flags if entry.lsp
+      entry.store(header, retain: retain)
+      @log&.info("LSP #{entry.lsp_id_s} sequence #{format('0x%08x', entry.sequence)} purged: #{reason}",
+                 kind: :purge, lsp_id: entry.lsp_id_s, sequence: entry.sequence)
+      @circuits.each { |c| c.flood(entry) }
+      entry
+    end
+
+    # Called by an entry as it stores an LSP: set the timer for what comes
+    # next. An LSP with lifetime left expires when it runs out (7.3.16.3).
+    # A purge's header goes after ZeroAgeLifetime, or the retention purge
+    # asked for (7.3.16.4 c).
+    def stored(entry, retain = nil)
+      return unless @scheduler
+
+      entry.timer&.cancel
+      entry.timer =
+        if entry.purged?
+          @scheduler.after(retain || ZERO_AGE_LIFETIME) { remove(entry) }
+        else
+          @scheduler.after(entry.remaining_lifetime) do
+            purge(entry, "Remaining Lifetime reached zero (RFC 1142 7.3.16.4)")
+          end
+        end
     end
 
     # Every entry in ascending LSP ID order, the order clause 9.10 asks of
@@ -110,10 +187,11 @@ module ISIS
     # zero lifetime arriving against a held non-zero one is a purge, which
     # clause 7.3.16.4 makes newer.
     #
-    # The same sequence and lifetimes with different checksums is clause
-    # 7.3.16.2's LSP confusion, which asks for the LSP to be treated as
-    # expired. That needs purging, which is not here yet, so it is reported
-    # as :confused and not folded into one of the other three.
+    # Two purges of one sequence are equal whatever their checksums, since
+    # equal is "Remaining Lifetimes both zero" (7.3.16.4 b 2). The same
+    # sequence and non-zero lifetimes with different checksums is clause
+    # 7.3.16.2's LSP confusion, reported as :confused for the update
+    # process to purge.
     def self.compare(held, sequence:, lifetime:, checksum:)
       return :newer if sequence > held.sequence
       return :older if sequence < held.sequence
@@ -121,9 +199,18 @@ module ISIS
       held_zero = held.remaining_lifetime.zero?
       return :newer if lifetime.zero? && !held_zero
       return :older if !lifetime.zero? && held_zero
-      return :equal if checksum == held.checksum
+      return :equal if held_zero || checksum == held.checksum
 
       :confused
+    end
+
+    private
+
+    def remove(entry)
+      return unless @entries[entry.lsp_id].equal?(entry)
+
+      @log&.debug("LSP #{entry.lsp_id_s} header removed, its purge held long enough (RFC 1142 7.3.16.4 c)")
+      delete(entry.lsp_id)
     end
   end
 end

@@ -409,4 +409,17 @@ class TestLsp < Minitest::Test
     assert lsp.checksum_ok?
   end
 
+  # FRR 8.4.4 purging its pseudonode LSP when it resigned as DIS: the
+  # header alone, 27 octets, lifetime 0, the same sequence 1, and a
+  # checksum computed again over the header, 0xe019, not the 0x7555 the
+  # LSP had. So building that header from values gives FRR's octets.
+  PURGE = File.read(File.expand_path("../../fixtures/frr-8.4.4-l1-lsp-purge.hex", __dir__)).strip
+
+  def test_frr_purge_replays_and_rebuilds
+    lsp = ISIS::Pdu.factory(octets(PURGE))
+    assert_equal [0, 1, 0xe019, 0], [lsp.lifetime, lsp.sequence, lsp.checksum, lsp.tlvs.size]
+    assert_equal PURGE, lsp.to_shex
+    built = ISIS::Pdu::Lsp.new(level: 1, lsp_id: "0000.0000.0002.02-00", lifetime: 0, sequence: 1, tlvs: [])
+    assert_equal PURGE, built.to_shex
+  end
 end

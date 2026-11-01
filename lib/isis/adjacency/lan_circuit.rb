@@ -27,10 +27,11 @@ module ISIS
   # system is DIS it generates the pseudonode LSP (clause 7.3.8), through a
   # Pseudonode. Level 1 only with an originator, since the originator is.
   #
-  # Not here yet: purges (clause 7.3.16.4), so the previous DIS's
-  # pseudonode LSP is left to age out; hello padding to maxsize (clause
-  # 8.4.1); and the jitter of clause 10.1 on the hello, PSNP and CSNP
-  # timers.
+  # A DIS that resigns purges its pseudonode LSP, and one that takes over
+  # purges its predecessor's (clause 7.2.3).
+  #
+  # Not here yet: hello padding to maxsize (clause 8.4.1), and the jitter
+  # of clause 10.1 on the hello, PSNP and CSNP timers.
   class LanCircuit
     include UpdateProcess
 
@@ -108,7 +109,8 @@ module ISIS
       @hello_timer = nil
       @pending_hello = nil
       @last_hello_at = nil
-      @database = database || Database.new(level: level, clock: scheduler.clock)
+      @database = database || Database.new(level: level, clock: scheduler.clock, scheduler: scheduler, log: log)
+      @database.attach(self)
       @metric = metric
       @area_key = area_key
       @complete_snp_interval = complete_snp_interval
@@ -143,11 +145,13 @@ module ISIS
       self
     end
 
+    # Stops the timers. A pseudonode this system ran is purged in the
+    # database first, though with the timers gone the purge is not sent.
     def stop
+      @pseudonode&.stop
       [@hello_timer, @pending_hello, @election_timer, @psnp_timer, @csnp_timer, @srm_timer].each { |t| t&.cancel }
       @neighbors.each_value { |n| n.expiry&.cancel }
       @hello_timer = @pending_hello = @election_timer = @psnp_timer = @csnp_timer = @srm_timer = nil
-      @pseudonode&.stop
       self
     end
 
@@ -434,6 +438,7 @@ module ISIS
         hello_contents_changed
       end
       if winner == :self
+        purge_previous_pseudonode(before)
         @pseudonode&.start
         # Not asked by clause 7.3.15.3, which sends one every
         # completeSNPInterval: one at once, so the LAN need not wait for
@@ -443,6 +448,22 @@ module ISIS
         @pseudonode&.stop
       end
       @originator&.changed("Level #{@level} DIS on #{@name} now #{describe.call(winner)} (RFC 1142 7.3.7)")
+    end
+
+    # Clause 7.2.3: "When an Intermediate system declares itself as
+    # designated Intermediate system and it is in possession of a Link State
+    # PDU of the same level issued by the previous Designated Intermediate
+    # System for that circuit (if any), it shall initiate a network wide
+    # purge of that (or those) Link State PDU(s)". LSP Number 0 only, the
+    # one a pseudonode this side has seen uses.
+    def purge_previous_pseudonode(before)
+      return unless before.is_a?(Neighbor) && before.lan_id && !before.lan_id.getbyte(-1).zero?
+
+      held = @database[(before.lan_id + "\x00".b).b]
+      return if held.nil? || held.placeholder? || held.remaining_lifetime.zero?
+
+      @database.purge(held, "the previous DIS's pseudonode, this system is now DIS on #{@name} (RFC 1142 7.2.3)",
+                      retain: Database::MAX_AGE)
     end
 
     # The PSNP timer, clause 7.3.15.4 a: every partialSNPInterval, from a

@@ -23,9 +23,8 @@ module ISIS
   # minimumLSPTransmissionInterval until the neighbour acknowledges them.
   # With an Originator, the circuit's adjacency goes into this system's
   # LSP, an Up or Down asks it for a new one (clause 7.3.6), and a received
-  # copy of it is handled by clause 7.3.15.1 d. Not here yet: purges
-  # (clause 7.3.16.4), so LSP confusion (7.3.16.2) and a stale LSP of this
-  # system's (7.3.15.1 c) are refused.
+  # copy of it is handled by clause 7.3.15.1 d. Purges, received and
+  # started, are UpdateProcess's (clause 7.3.16.4).
   #
   # Authentication, RFC 5304 HMAC-MD5: hello_key for the hellos, the link
   # level password, and area_key for Level 1 LSPs and SNPs. With a key,
@@ -76,7 +75,8 @@ module ISIS
       @protocols = protocols
       @neighbor = nil
       @hello_timer = nil
-      @database = database || Database.new(level: 1, clock: scheduler.clock)
+      @database = database || Database.new(level: 1, clock: scheduler.clock, scheduler: scheduler, log: log)
+      @database.attach(self)
       @partial_snp_interval = partial_snp_interval
       @lsp_transmission_interval = lsp_transmission_interval
       @psnp_timer = nil

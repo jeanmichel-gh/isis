@@ -135,16 +135,19 @@ class FrrLab
     isis4r_state_doc.fetch("database", []).to_h { |e| [e["lsp_id"], e] }
   end
 
-  # FRR's own LSPs as `show isis database` lists them: LSP ID, sequence,
-  # checksum. FRR prints its own LSPs under its hostname, so the hostname
-  # is written back as FRR's System ID.
+  # FRR's LSPs as `show isis database` lists them: LSP ID, sequence,
+  # checksum, and whether it is a purge. FRR prints its own LSPs under its
+  # hostname, so the hostname is written back as FRR's System ID. Measured
+  # on FRR 8.4.4: an LSP with zero Remaining Lifetime shows its holdtime in
+  # parentheses, "(1192)", the time left before the header goes.
   def frr_database
     vtysh("show isis database").lines.filter_map do |line|
-      next unless (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x(\h{8})\s+0x(\h{4})/))
+      next unless (m = line.match(/^(\S+)\.(\h\h)-(\h\h)\s+\*?\s+\d+\s+0x(\h{8})\s+0x(\h{4})\s+(\(?)\d+/))
 
-      host, pseudonode, number, sequence, checksum = m.captures
+      host, pseudonode, number, sequence, checksum, paren = m.captures
       system = host == @name ? FRR_ID : host
-      ["#{system}.#{pseudonode}-#{number}", { "sequence" => sequence.hex, "checksum" => checksum.hex }]
+      ["#{system}.#{pseudonode}-#{number}",
+       { "sequence" => sequence.hex, "checksum" => checksum.hex, "purged" => paren == "(" }]
     end.to_h
   end
 

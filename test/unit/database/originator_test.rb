@@ -183,12 +183,15 @@ class TestOriginator < Minitest::Test
     assert_equal 2, own(@orig_a).sequence
   end
 
-  # 7.3.15.1 c: an LSP with our ID that we do not generate is refused,
-  # since purging it is not implemented; and nothing is generated.
-  def test_a_stale_lsp_of_ours_we_do_not_generate_is_refused
+  # 7.3.15.1 c: an LSP with our ID that we do not generate is purged
+  # network wide at its own sequence, and nothing is generated.
+  def test_a_stale_lsp_of_ours_we_do_not_generate_is_purged
     @orig_a.start
     stale = ISIS::Pdu::Lsp.new(level: 1, lsp_id: "0000.0000.000a.00-01", lifetime: 1000, sequence: 9, tlvs: [])
-    assert_equal :own, @a.receive_lsp(stale)
+    assert_equal :purged, @a.receive_lsp(stale)
+    held = @a.database[stale.lsp_id]
+    assert_equal [9, 0], [held.sequence, held.remaining_lifetime]
+    assert_equal 0, held.lsp.tlvs.size
     assert_equal [1], generated(@log_a)
   end
 

@@ -28,7 +28,7 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              logger: ISIS::Runtime::Log.writer($stdout, clock: clock, debug: true),
                              tracer: ISIS::Runtime::Log.trace_writer($stdout, clock: clock, debug: true))
 socket = Datalink::Socket.new(iface, recv_timeout: 0.1).open
-database = ISIS::Database.new(level: 1, clock: clock)
+database = ISIS::Database.new(level: 1, clock: clock, scheduler: scheduler, log: log)
 transport = ISIS::Link::SocketTransport.new(socket)
 lan = config[:network] == "broadcast"
 originator = ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,

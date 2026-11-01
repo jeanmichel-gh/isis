@@ -236,7 +236,7 @@ class TestLanUpdate < Minitest::Test
                                  tracer: TestLogs.tracer(@clock, lambda { |dir, _c, pdu, _p|
                                    sent << [@clock.now, pdu] if dir == :sent
                                  }))
-    database = ISIS::Database.new(level: 1, clock: @clock)
+    database = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: log)
     @originators[who] = ISIS::Originator.new(system_id: IDS.fetch(who), database: database, scheduler: @scheduler,
                                              log: log, metric_style: metric_style, minimum_interval: 1)
     @circuits[who] = ISIS::LanCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire),
@@ -262,6 +262,10 @@ class TestLanUpdate < Minitest::Test
   # What a database holds, as LSP ID => sequence, without placeholders.
   def held(who)
     @circuits.fetch(who).database.entries.reject(&:placeholder?).to_h { |e| [e.lsp_id_s, e.sequence] }
+  end
+
+  def purged?(who, lsp_id)
+    @circuits.fetch(who).database[ISIS::Pdu.lsp_id_octets(lsp_id)]&.purged?
   end
 
   def sent(who, type)
@@ -475,8 +479,9 @@ class TestLanUpdate < Minitest::Test
   end
 
   # A priority change moves the DIS to a: b stops generating its
-  # pseudonode (7.3.15.1 c), a starts its own, and both LSPs name a's LAN
-  # ID. b's old pseudonode stays until it ages out: purges are not here.
+  # pseudonode (7.3.15.1 c) and purges it (7.2.3), a starts its own, and
+  # both LSPs name a's LAN ID. Both databases hold b's old pseudonode as a
+  # purge, lifetime 0.
   def test_a_dis_change_moves_the_pseudonode
     node(:a)
     node(:b)
@@ -493,6 +498,24 @@ class TestLanUpdate < Minitest::Test
     end
     assert_includes held(:b).keys, "0000.0000.000a.01-00"
     assert_equal held(:a), held(:b)
+    [:a, :b].each { |who| assert purged?(who, "0000.0000.000b.01-00"), who }
+    refute purged?(:a, "0000.0000.000a.01-00")
+    assert(@circuits[:b].log.events.any? { |e| e.kind == :purge && e.message.include?("resigned as DIS") })
+  end
+
+  # Clause 7.2.3: a DIS that takes over purges its predecessor's
+  # pseudonode, here because b, the DIS, went silent and could not.
+  def test_a_new_dis_purges_the_old_one_s_pseudonode
+    node(:a)
+    node(:b, priority: 100)
+    node(:c)
+    up(:a, :b, :c)
+    assert @circuits[:b].dis?
+    @circuits.delete(:b).stop
+    run_for(35)
+    assert @circuits[:c].dis?
+    [:a, :c].each { |who| assert purged?(who, "0000.0000.000b.01-00"), who }
+    assert(@circuits[:c].log.events.any? { |e| e.kind == :purge && e.message.include?("previous DIS") })
   end
 
   # A pseudonode LSP follows the adjacencies Up: c joining puts it in. c
