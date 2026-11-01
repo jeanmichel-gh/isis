@@ -1719,7 +1719,8 @@ is lost when the chat is.
 
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
-`lib/isis/version.rb`, `lib/isis/common.rb` (errors and `SystemId`),
+`lib/isis/version.rb`, `lib/isis/common.rb` (errors, `SystemId` and the
+ISO 8473 checksum),
 `lib/isis/codepoints.rb`, `lib/isis/runtime/` with the clocks, the
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
@@ -1727,7 +1728,9 @@ registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 6, 8,
 129, 132 and 240, with `AreaAddress` in `common.rb`, `lib/isis/pdu/pdu.rb` with the
 common header, the type registry, `Pdu::Unknown`, `Truncated`, `Malformed`
 and the computed length mechanism, `lib/isis/pdu/psnp.rb`, the first
-layout, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
+layout, `lib/isis/pdu/lsp.rb`, the LSP for both levels with its checksum
+replayed on parse and recomputed when the span moves, and the flags octet
+asserted mask by mask against RFC 1142, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
 for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
 the hellos share, and
 `lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
@@ -1750,8 +1753,13 @@ none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
 check waits for. The LAN hello is on the contract, and replays a hello
 captured from FRR 8.4.4 byte for byte. The LAN `Circuit` builds and reads
 it and logs through `Runtime::Log`, and `exe/isis-demo` runs two of them
-with `--log` and `--debug`. That closes gate 2's list. Not yet done in the
-hellos: the padding RFC 1142 clause
+with `--log` and `--debug`. That closes gate 2's list. **Gate 3 has
+begun**: the LSP layout parses, replays and rebuilds an LSP captured from
+FRR 8.4.4 byte for byte, checksum included. One thing measured for the
+rest of the gate: on a point to point circuit FRR 8.4.4 does not flood its
+own LSP when the adjacency comes up. It lists it in a CSNP and sends it
+only when a PSNP asks, so isis4r has to answer CSNPs before FRR will tell
+it anything. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.
