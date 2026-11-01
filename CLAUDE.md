@@ -254,7 +254,7 @@ the lab is half a tool. The design is taken from ospfv2, which already
 works this way (surveyed at `0ec77c6`). It is built in
 `lib/isis/runtime/log.rb`: `Runtime::Log` holds the logger, the bounded
 event list and the tracer, and `Log.writer` and `Log.trace_writer` give an
-executable its lines. Both circuits, `P2pCircuit` and the LAN `Circuit`,
+executable its lines. Both circuits, `P2pCircuit` and `LanCircuit`,
 log through it.
 
 How ospfv2 does it, and what isis4r copies:
@@ -1744,9 +1744,12 @@ with `replay` and `preserve_authentication!` as the two ways round that, `lib/is
 for both levels, `lib/isis/pdu/p2p_hello.rb`, the point to point hello, `lib/isis/pdu/capture.rb`, `lib/isis/pdu/lan_hello.rb`, the LAN hello
 for both levels, with `lib/isis/pdu/circuit_type.rb`, the Circuit Type field
 the hellos share, and
-`lib/isis/adjacency/` with the LAN proof of concept adjacency and circuit,
-which run the two-way LAN handshake without DIS election and log each
-transition with its reason,
+`lib/isis/adjacency/` with `LanCircuit`, a broadcast circuit at one
+level running RFC 1142 clauses 8.4.1 to 8.4.4 on the injected scheduler:
+LAN hellos, adjacencies from initialising to Up when the neighbour lists
+this system's LAN address, and the DIS election, with each transition and
+each change of DIS logged with its reason; `lib/isis/receive/authentication.rb`,
+the authentication step both circuits share;
 the RFC 5303 three-way table, and `P2pCircuit`, a Level 1 point to point
 circuit running the handshake on the injected scheduler and logging every
 transition and refusal with its reason. `P2pCircuit` also runs RFC 1142
@@ -1773,9 +1776,9 @@ adjacency up on both sides, holds it for over three holding times without
 a flap, expires it on each side when the other goes silent, and forms
 none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
 check waits for. The LAN hello is on the contract, and replays a hello
-captured from FRR 8.4.4 byte for byte. The LAN `Circuit` builds and reads
-it and logs through `Runtime::Log`, and `exe/isis-demo` runs two of them
-with `--log` and `--debug`. That closes gate 2's list. **Gate 3 has
+captured from FRR 8.4.4 byte for byte. That closes gate 2's list.
+`exe/isis-demo` runs two `LanCircuit`s on datalink-socket's loopback
+wire with `--log` and `--debug`. **Gate 3 has
 begun**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
 CSNP captured from FRR 8.4.4 byte for byte, the LSP's checksum included,
 and TLV 9 reads the CSNP's entries at the PDU's ID Length. TLV 135
@@ -1813,7 +1816,15 @@ keys FRR installs isis4r's prefix and isis4r stores FRR's LSP; a wrong
 hello key forms no adjacency on either side; a wrong area key leaves the
 adjacency up and each side without the other's LSP. Measured on the way:
 FRR 8.4.4's first LSP after start can go out with no TLV 10 although its
-area password is configured, and isis4r refuses that one. Not yet in the
+area password is configured, and isis4r refuses that one. **Phase 2 gate
+1 has begun**: `test/integration/frr_lan_test.rb` brings a broadcast
+adjacency up with FRR 8.4.4, has both sides agree on the Level 1 DIS and
+its LAN ID whichever side wins, follows a DIS change made by raising
+FRR's priority with no adjacency going down, and expires FRR when it goes
+silent, after which isis4r, alone, elects no DIS. Measured on the way:
+FRR's first LAN hellos carry a LAN ID of zeros until its own election.
+Still owed by gate 1: the update process on a LAN, CSNPs from the DIS and
+PSNPs from the others, and pseudonode LSPs, so the databases agree. Not yet in the
 originator: a second LSP Number when one LSP is full, and jitter on the
 refresh timer (clause 10.1). Not yet in the update process: purges (7.3.16.4), so LSP
 confusion over another system's LSP (7.3.16.2) and a stale LSP with this

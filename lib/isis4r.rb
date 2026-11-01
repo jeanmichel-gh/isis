@@ -2,10 +2,9 @@
 
 # isis4r: build, parse and speak IS-IS. Entry point; requires everything.
 #
-# Today this is still the proof of concept: one L1 LAN adjacency formed
-# with LAN Hellos over IEEE 802.3 and LLC, on the datalink-socket loopback
-# backend with no privileges, or on a real interface with root. See
-# CLAUDE.md for where it is going.
+# Point to point and LAN circuits over IEEE 802.3 and LLC, on the
+# datalink-socket loopback backend with no privileges, or on a real
+# interface with root. CLAUDE.md has the status and where it is going.
 
 require "datalink"
 
@@ -43,7 +42,7 @@ require "isis/pdu/capture"
 require "isis/pdu/lan_hello"
 require "isis/database/database"
 require "isis/database/originator"
-require "isis/adjacency/adjacency"
-require "isis/adjacency/circuit"
+require "isis/receive/authentication"
 require "isis/adjacency/three_way"
 require "isis/adjacency/p2p_circuit"
+require "isis/adjacency/lan_circuit"

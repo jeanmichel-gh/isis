@@ -2,8 +2,9 @@
 # frozen_string_literal: true
 
 # Two IS instances on one in-memory wire, forming an IS-IS LAN adjacency
-# with no privileges and no real interface. Watch them go Down -> Init ->
-# Up, and the log say why.
+# and electing a DIS, with no privileges and no real interface, on the
+# real clock. Watch them go down -> initializing -> up, elect b, and the
+# log say why.
 #
 #   ruby -Ilib -I../datalink-socket/lib exe/isis-demo
 #   ruby -Ilib -I../datalink-socket/lib exe/isis-demo --debug
@@ -38,34 +39,36 @@ end
 
 a_sock = socket(wire)
 b_sock = socket(wire)
+scheduler = ISIS::Runtime::Scheduler.new(clock)
 
-a = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(a_sock),
-                      system_id: "0000.0000.0001", snpa: "00:00:00:00:00:01",
-                      holding_time: 30, clock: clock, name: "a", log: log_for(out, clock, opts[:debug]))
-b = ISIS::Circuit.new(ISIS::Link::SocketTransport.new(b_sock),
-                      system_id: "0000.0000.0002", snpa: "00:00:00:00:00:02",
-                      holding_time: 30, clock: clock, name: "b", log: log_for(out, clock, opts[:debug]))
-
-sid_a = ISIS::SystemId.new("0000.0000.0001")
-sid_b = ISIS::SystemId.new("0000.0000.0002")
-
-puts "Starting two IS-IS instances on a shared wire..."
-10.times do |i|
-  a.send_hello
-  b.send_hello
-  a.poll
-  b.poll
-  if a.up?(sid_b) && b.up?(sid_a)
-    puts "Converged after #{i + 1} hello exchange(s)."
-    break
-  end
-  sleep 0.1
+# Hellos every second, so the election runs two seconds in (RFC 1142
+# 8.4.4 d). b has the higher priority, so b is DIS.
+def lan(sock, scheduler, out, clock, opts, name, id, mac, priority)
+  ISIS::LanCircuit.new(transport: ISIS::Link::SocketTransport.new(sock), scheduler: scheduler,
+                       log: log_for(out, clock, opts[:debug]), name: name, system_id: id, snpa: mac,
+                       priority: priority, hello_interval: 1)
 end
 
+a = lan(a_sock, scheduler, out, clock, opts, "a", "0000.0000.0001", "00:00:00:00:00:01", 64)
+b = lan(b_sock, scheduler, out, clock, opts, "b", "0000.0000.0002", "00:00:00:00:00:02", 100)
+
+puts "Starting two IS-IS instances on a shared LAN..."
+[a, b].each(&:start)
+done = lambda do
+  a.up_neighbors.size == 1 && b.up_neighbors.size == 1 && b.dis? && a.dis.is_a?(ISIS::LanCircuit::Neighbor)
+end
+deadline = clock.now + 10
+until done.call || clock.now > deadline
+  scheduler.run_due
+  [a, b].each { |c| c.poll(timeout: 0.05) }
+end
+[a, b].each(&:stop)
+
 puts
-puts "A (#{a.system_id}) sees B: #{a.adjacency_state(sid_b)}"
-puts "B (#{b.system_id}) sees A: #{b.adjacency_state(sid_a)}"
-puts "adjacency up both ways: #{a.up?(sid_b) && b.up?(sid_a)}"
+puts "A (0000.0000.0001) sees B: #{a.neighbors.values.first&.state || :down}"
+puts "B (0000.0000.0002) sees A: #{b.neighbors.values.first&.state || :down}"
+puts "adjacency up both ways: #{a.up_neighbors.any? && b.up_neighbors.any?}"
+puts "DIS: #{b.dis? ? 'b' : 'none'}, LAN ID #{a.lan_id_s} on both sides: #{a.lan_id_s == b.lan_id_s}"
 
 a_sock.close
 b_sock.close
