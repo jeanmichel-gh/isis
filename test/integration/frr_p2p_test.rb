@@ -309,6 +309,55 @@ class TestFrrP2p < Minitest::Test
     assert_includes @lab.isis4r_log, "route 198.51.100.2/32 removed", @lab.report
   end
 
+  # Routes installed (Phase 2 gate 4): a host behind isis4r, 203.0.113.2,
+  # pings FRR's loopback. The request goes through isis4r's kernel on the
+  # route the netlink adapter installed, the only route there to
+  # 198.51.100.2, and the reply comes back on FRR's route to the host's
+  # subnet, which isis4r advertises. When FRR's isisd stops, the route
+  # leaves the kernel with the adjacency, and nothing of isis4r's is left.
+  def test_a_host_reaches_frr_through_isis4rs_installed_route
+    @lab.start(frr_loopback: "198.51.100.2/32", host: true)
+    assert_eventually("isis4r did not install 198.51.100.2 through FRR", 60) do
+      @lab.isis4r_kernel_routes.match?(/^198\.51\.100\.2 via 10\.0\.12\.2 dev veth0 metric 21\b/)
+    end
+    assert_eventually("FRR does not reach the host's subnet through isis4r", 60) do
+      @lab.frr_isis_routes["203.0.113.0/24"] == { "metric" => 20, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+    assert_eventually("the host did not reach FRR's loopback through isis4r", 10) { @lab.host_ping("198.51.100.2") }
+    @lab.stop_frr_isisd
+    assert_eventually("isis4r left routes in its kernel", 20) { @lab.isis4r_kernel_routes.strip.empty? }
+    refute @lab.host_ping("198.51.100.2"), @lab.report
+  end
+
+  # isis4r stopping takes its routes out of the kernel, so a stopped
+  # isis4r does not leave traffic going to a neighbour it no longer
+  # watches.
+  def test_isis4r_stopping_removes_its_routes
+    @lab.start(frr_loopback: "198.51.100.2/32", host: true)
+    assert_eventually("isis4r did not install 198.51.100.2", 60) do
+      @lab.isis4r_kernel_routes.include?("198.51.100.2 via 10.0.12.2")
+    end
+    @lab.stop_isis4r
+    assert_equal "", @lab.isis4r_kernel_routes.strip, @lab.report
+  end
+
+  # The same in IPv6: the host, 2001:db8:203::2, pings FRR's IPv6
+  # loopback through isis4r, whose route goes through FRR's link-local
+  # address.
+  def test_a_host_reaches_frr_over_ipv6_through_isis4r
+    unless File.exist?("/proc/sys/net/ipv6")
+      skip "the kernel has no IPv6 (ISIS_SKIP_IPV6=1)" if ENV["ISIS_SKIP_IPV6"] == "1"
+      flunk "the kernel has no IPv6; set ISIS_SKIP_IPV6=1 to skip this test on purpose"
+    end
+    @lab.start(ipv6: true, frr_loopback6: "2001:db8:ff::2/128", host: true)
+    assert_eventually("isis4r did not install 2001:db8:ff::2 through FRR's link-local address", 60) do
+      @lab.isis4r_kernel_routes("-6").include?("2001:db8:ff::2 via #{@lab.frr_link_local} dev veth0 metric 21")
+    end
+    assert_eventually("the host did not reach FRR's IPv6 loopback through isis4r", 60) do
+      @lab.host_ping("2001:db8:ff::2")
+    end
+  end
+
   # IPv6 (RFC 5308) on the same adjacency. FRR's loopback, 2001:db8:ff::2/128,
   # is in FRR's LSP at 10, so isis4r reaches it at 10 + 10 through FRR's
   # link-local address, which FRR's hellos carry in TLV 232. FRR reaches
