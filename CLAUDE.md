@@ -121,6 +121,8 @@ lib/isis/receive/          the receive policy: what a received PDU may change
 lib/isis/spf/              route calculation
 lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
+lib/isis/router.rb         a whole system from one configuration;
+                           router/host.rb, the Linux host it runs on
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/docs/                 the tests that hold each guide in docs/ to the code
@@ -2072,9 +2074,15 @@ integration has begun**, in the order below: first, the originator takes
 `hostname:` and sends it in TLV 137 in LSP 0 (RFC 5301 section 3), since
 routescope's map finds an IS-IS neighbour by its hostname. Measured
 2026-11-02 against FRR 8.4.4: FRR lists isis4r by that name in `show isis
-hostname` and `show isis neighbor`. Next: `ISIS::Router` built from one
-configuration, an `isisd` with a JSON API over a Unix socket as ospfd
-has, a container image, and an isis4r node kind in routescope. Not yet in
+hostname` and `show isis neighbor`. Then `lib/isis/router.rb`: an
+`ISIS::Router` builds a whole system from one configuration, the
+databases, originators and Decision Processes per level, a circuit per
+interface, a LAN circuit per level on a broadcast one, and the leak and
+summary at both levels; `Router::Host` gives it the Linux links, netlink
+and the route source. The interop runner now runs through it, and the
+interop suite passes unchanged. Next: an `isisd` with a JSON API over a
+Unix socket as ospfd has, a container image, and an isis4r node kind in
+routescope. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
