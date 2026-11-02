@@ -1954,7 +1954,29 @@ sandbox it was written in lacks, so it was first run in CI; there
 on isis4r's own Level 1 LSP when it is at both levels (7.2.9.2), which
 needs Level 2 routes to other areas; external routes and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
-clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
+clause 7.2.9.2 sets it "after computing the level 2 routes". **Phase 2
+gate 4 has begun**: `lib/isis/forwarding/forwarding.rb` turns each change
+in a Decision Process's routes into a route operation, install, replace
+or withdraw, a route this system advertises itself counting as absent,
+and `lib/isis/forwarding/netlink.rb` applies them in pure Ruby: rtnetlink
+over an AF_NETLINK socket, RTPROT_ISIS, one next hop or RTA_MULTIPATH,
+each level at its own priority, Level 1 lower (7.2.12), and a flush of
+its own routes. The runner, with `forwarding: true`, flushes at start and
+on stop. Measured 2026-11-01 against FRR 8.4.4: a host behind isis4r
+pings FRR's loopback on the route isis4r installed and FRR's route back
+to the host's subnet, over IPv4 and, in CI, over IPv6; when FRR's isisd
+stops, and when isis4r stops, none of isis4r's routes is left in its
+kernel. **A link failure moves forwarding**, on the equal cost triangle
+with a host behind isis4r: the kernel holds the far loopback over both
+next hops; the far end of isis4r's direct link goes down, which leaves
+isis4r's end up without carrier, a next hop the kernel would go on
+using; when the adjacency expires isis4r replaces the route with the one
+path left, the host still reaches the loopback, and no route of
+isis4r's is left on that link. Measured on the way: a new namespace
+starts with forwarding off and zebra leaves it so, so the lab turns it
+on in the FRRs' namespaces when there is a host; and the lab needs
+`ping`, from iputils-ping. Still owed by gate 4: pass-through
+equivalence. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
