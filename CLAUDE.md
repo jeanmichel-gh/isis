@@ -135,6 +135,8 @@ test/fixtures/             PDUs captured from real routers, as hex, named
 test/functional/           tests that put PDUs on a real interface
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
+examples/containerlab/     labs of isis4r and FRR; test/lab/ runs them
+Dockerfile                 the isis4r image
 ```
 
 **Everything under `lib/` is namespaced under `isis/`, except the entry
@@ -2094,8 +2096,18 @@ asks it. `docs/isisd.md` lists every method, held to the API by
 adjacency up, names FRR by its hostname, and shows FRR's LSP at FRR's
 sequence and the route to FRR's loopback. Measured on the way: YAML
 reads an area 49.0010 as the number 49.001, so isisd reads the areas as
-the file wrote them. routescope reads isisd through this API. Next: a
-container image, and a lab with isis4r and FRR that routescope shows. Not yet in
+the file wrote them. routescope reads isisd through this API. A
+`Dockerfile` builds the isis4r image, its unit tests run in it, and
+`examples/containerlab/isis4r-frr` puts isis4r between a Level 1 FRR and
+a Level 2 FRR. `test/lab/isis4r-frr.sh` runs that lab's own files and
+checks the routing through isis4r, in containerlab (the CI job `lab
+(containerlab)`) or in network namespaces with no Docker. Measured
+2026-11-02 in namespaces, on FRR 8.4.4: both adjacencies up, f1's default
+route through isis4r, f2's route to f1's loopback through it, and f1
+pinging f2's loopback. The image is built only in CI, since this
+sandbox reaches no container registry; there, measured 2026-11-02, it
+builds, 760 tests pass in it, and the lab passes every check under
+containerlab with FRR 10.2.1. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
