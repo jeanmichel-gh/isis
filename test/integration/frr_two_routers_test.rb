@@ -156,6 +156,32 @@ class TestFrrTwoRouters < Minitest::Test
     assert_equal through_first, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric"), @lab.report
   end
 
+  # Forwarding through a link failure (Phase 2 gate 4), on the same
+  # equal cost triangle with a host behind isis4r. The kernel route to the
+  # far loopback has both next hops, and the host reaches it. Then the far
+  # end of isis4r's direct link goes down: isis4r's veth1 only loses
+  # carrier, and the kernel would go on sending half the traffic into it.
+  # When the adjacency's holding time runs out, isis4r replaces the route
+  # with the one path left, the host still reaches the loopback, and no
+  # route of isis4r's is left on veth1.
+  def test_a_link_failure_moves_forwarding_to_the_other_path
+    @lab.start(host: true, frr2: { is_type: "level-1", loopback: FRR2_LOOPBACK,
+                                   isis4r_link: { frr_metric: 20, isis4r_metric: 20 } })
+    far = FRR2_LOOPBACK.split("/").first
+    both = ["#{far} metric 21", "nexthop via 10.0.12.2 dev veth0 weight 1",
+            "nexthop via 10.0.13.3 dev veth1 weight 1"]
+    assert_eventually("isis4r did not install the far loopback over both paths", 60) do
+      @lab.isis4r_kernel_route(far) == both
+    end
+    assert_eventually("the host does not reach the far loopback", 30) { @lab.host_ping(far) }
+    @lab.frr2_isis4r_link_down
+    assert_eventually("isis4r did not move the far loopback to the first FRR", 20) do
+      @lab.isis4r_kernel_route(far) == ["#{far} via 10.0.12.2 dev veth0 metric 21"]
+    end
+    refute_match(/veth1/, @lab.isis4r_kernel_routes, @lab.report)
+    assert_eventually("the host does not reach the far loopback after the failure", 30) { @lab.host_ping(far) }
+  end
+
   # Overload (RFC 1142 7.2.8.1 and 7.3.19.1) in a triangle where isis4r is
   # the cheap way between the two FRRs: its links at 10, the FRRs' own link
   # at 50. So the first FRR reaches the far loopback through isis4r, at

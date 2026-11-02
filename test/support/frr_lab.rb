@@ -139,6 +139,14 @@ class FrrLab
     @frr_is_type = frr_is_type
     @frr2 = frr2
     link_frr2 if frr2
+    # A new namespace starts with forwarding off, and zebra leaves it so,
+    # so the FRRs forward the host's traffic only when told to.
+    if host
+      [@frr_ns, (@frr2_ns if frr2)].compact.each do |ns|
+        sh "ip netns exec #{ns} sysctl -qw net.ipv4.ip_forward=1"
+        sh "ip netns exec #{ns} sysctl -qw net.ipv6.conf.all.forwarding=1" if ipv6
+      end
+    end
     start_frr(hello_interval, hello_multiplier, frr_interface, frr_router)
     start_frr2(hello_interval, hello_multiplier) if frr2
     extra = if (link = frr2&.dig(:isis4r_link))
@@ -188,6 +196,14 @@ class FrrLab
   # Takes isis4r's link to the second FRR down, on isis4r's side.
   def isis4r_frr2_link_down
     sh "ip -n #{@isis_ns} link set veth1 down"
+  end
+
+  # The same link, taken down at the second FRR's end. isis4r's veth1
+  # stays up and only loses carrier, and the kernel keeps a next hop on a
+  # link without carrier (net.ipv4.conf.*.ignore_routes_with_linkdown is 0
+  # by default), so only isis4r withdrawing it moves the traffic.
+  def frr2_isis4r_link_down
+    sh "ip -n #{@frr2_ns} link set veth1 down"
   end
 
   def stop
@@ -425,6 +441,14 @@ class FrrLab
   # those. +family+ is "-4" or "-6".
   def isis4r_kernel_routes(family = "-4")
     `ip -n #{@isis_ns} #{family} route show proto 187`
+  end
+
+  # The kernel's route to +prefix+ in isis4r's namespace, as `ip route`
+  # prints it: its line and any nexthop lines under it, whitespace
+  # squeezed.
+  def isis4r_kernel_route(prefix, family = "-4")
+    out = `ip -n #{@isis_ns} #{family} route show #{prefix} proto 187`
+    out.lines.map { |l| l.strip.squeeze(" ") }.reject(&:empty?)
   end
 
   # True when the host behind isis4r reaches +address+, by ping.

@@ -75,7 +75,7 @@ jobs:
           working-directory: isis
           bundler-cache: true
       - name: Install FRR and iproute2
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq frr iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq frr iproute2 iputils-ping
       - name: FRR version
         run: /usr/lib/frr/isisd --version | head -1
       - name: Interop tests against FRR
