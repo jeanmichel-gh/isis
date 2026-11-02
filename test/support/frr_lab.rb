@@ -485,8 +485,9 @@ class FrrLab
   end
 
   # With +sim+, a topology Hash without its simulator section, isis4r runs
-  # as the simulator: the simulator's own system is isis4r's usual one on
-  # veth0, and the simulated area is +sim+ behind it.
+  # as exe/isis4r-sim: the simulator's own system is isis4r's usual one on
+  # veth0, the simulated area is +sim+ behind it, and #isisd reaches its
+  # API, sim.* methods included.
   def start_sim(config)
     iface = { "name" => config[:interface], "ip_addresses" => config[:ip_addresses],
               "hello_interval" => config[:hello_interval], "hello_multiplier" => config[:hello_multiplier] }
@@ -494,8 +495,9 @@ class FrrLab
                   "level" => config[:level], "minimum_lsp_interval" => 1, "interfaces" => [iface],
                   "prefixes" => JSON.parse(JSON.generate(config[:prefixes])) }
     File.write(sim_config, { "simulator" => simulator }.merge(JSON.parse(JSON.generate(@sim))).to_yaml)
-    @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby, "#{ROOT}/test/support/sim_runner.rb",
-                              sim_config, %i[out err] => File.join(@dir, "isis4r.log"))
+    @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby, "#{ROOT}/exe/isis4r-sim",
+                              "-c", sim_config, "-s", isisd_socket, "-l", "-", "-d",
+                              %i[out err] => File.join(@dir, "isis4r.log"))
   end
 
   def sim_config = File.join(@dir, "sim.yml")

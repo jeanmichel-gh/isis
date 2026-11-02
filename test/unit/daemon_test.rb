@@ -110,6 +110,59 @@ class TestDaemon < Minitest::Test
     d&.shutdown
   end
 
+  SIM = <<~YAML
+    simulator:
+      system_id: 0000.0000.0009
+      hostname: s1
+      interfaces: [eth1]
+    grid: { rows: 1, columns: 2, loopbacks: 10.200.0.0/24 }
+    routers:
+      - { name: lost, system_id: 0000.0000.0100 }
+    links:
+      - { from: s1, to: r1c1 }
+  YAML
+
+  def sim_daemon
+    path = File.join(@dir, "sim.yml")
+    File.write(path, SIM)
+    ISIS::Daemon.new(nil, topology: ISIS::Sim::Topology.load(path), log: @log, clock: @clock,
+                          host: SimHost.new(@wires, { "eth1" => "00:00:00:00:00:09" }), socket: File.join(@dir, "sim.sock"))
+  end
+
+  # isis4r-sim: the simulator's Router, the sim.* methods, and the
+  # topology's warnings in the log.
+  def test_a_simulator
+    d = sim_daemon.start
+    messages = @log.events.map(&:message)
+    assert_includes messages, "isis4r-sim #{ISIS::VERSION} started as 0000.0000.0009 (s1), level 1, on eth1, simulating 3 systems"
+    assert_includes messages, "simulator: 1 system no link joins to s1: lost"
+    assert_same d.simulator.router, d.router
+    assert d.simulator.generating?
+    assert_equal 4, d.router.databases[1].entries.count { !_1.placeholder? }, "s1, r1c1, r1c2 and lost"
+    assert_includes d.api.method_names, "sim.flush"
+    d.shutdown
+    assert_includes @log.events.map(&:message), "isis4r-sim stopping"
+  end
+
+  # isis-cli sim ACTION KEY=VALUE, values as JSON where they read as JSON.
+  def test_isis_cli_sim
+    d = sim_daemon.start
+    stop = false
+    t = Thread.new { d.step(wait: 0) until stop }
+    cli = ->(*args) { Open3.capture3(RbConfig.ruby, File.join(ROOT, "exe/isis-cli"), "-s", d.api.path, *args) }
+    out, err, status = cli.call("--json", "sim", "link.metric", "link=s1--r1c1", "metric=25")
+    assert status.success?, err
+    assert_equal "link.metric", JSON.parse(out)["action"]
+    assert_equal 25, d.simulator.link("s1--r1c1").metric
+    _, err, status = cli.call("sim", "link.down", "s1--r1c1")
+    refute status.success?
+    assert_includes err, "a sim parameter is KEY=VALUE"
+  ensure
+    stop = true
+    t&.join
+    d&.shutdown
+  end
+
   def test_isis_cli_without_a_daemon
     _, err, status = Open3.capture3(RbConfig.ruby, File.join(ROOT, "exe/isis-cli"), "-s", File.join(@dir, "none"),
                                     "show", "overview")
