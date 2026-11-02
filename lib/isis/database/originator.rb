@@ -40,7 +40,10 @@ module ISIS
   # Level 1 by RFC 5302 section 2.2, with I/E set when +external+ says the
   # metric is of the external type. In the wide style they go in TLV 135
   # with the others, since RFC 5305's TLV 135 has no metric type, and
-  # +external+ is not sent.
+  # +external+ is not sent. An IPv6 one goes in TLV 236 with X, the
+  # "external original bit", set, RFC 5308 section 2: "If the prefix was
+  # distributed into IS-IS from another routing protocol, the external bit
+  # SHALL be set to 1."
   #
   # +leaked_prefixes+ are Level 2 routes a system at both levels puts in
   # its Level 1 LSP, set by Spf::Leak: { prefix:, metric:, external: },
@@ -104,8 +107,8 @@ module ISIS
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
-                  :ipv6_addresses, :ipv6_prefixes, :external_prefixes
-    attr_reader :leaked_prefixes, :area_prefixes
+                  :ipv6_addresses, :ipv6_prefixes
+    attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
     attr_reader :overload, :attached
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
@@ -318,6 +321,14 @@ module ISIS
     # room. A change is a change of content (7.3.6).
     # The Level 2 routes to put in this Level 1 LSP, as Spf::Leak chooses
     # them. A change is a change of content (7.3.6).
+    # The prefixes this system takes from outside IS-IS, as Redistribution
+    # chooses them or a test sets them. A change is a change of content
+    # (7.3.6).
+    def external_prefixes=(list)
+      @external_prefixes = list
+      changed("external prefixes changed") if @generated_at
+    end
+
     def leaked_prefixes=(list)
       @leaked_prefixes = list
       changed("leaked prefixes changed (RFC 5302 section 2)") if @generated_at
@@ -419,6 +430,7 @@ module ISIS
       list = []
       leaked6, leaked4 = leaked.partition { |p| p.fetch(:prefix).include?(":") }
       area6, area4 = area.partition { |p| p.fetch(:prefix).include?(":") }
+      externals6, externals = externals.partition { |p| p.fetch(:prefix).include?(":") }
       capped = ->(p) { p.slice(:prefix, :metric).merge(metric: [p.fetch(:metric), Tlv::NarrowMetrics::VALUE].min) }
       down = ->(p) { p.slice(:prefix, :metric).merge(up_down: true) }
       narrow_down = ->(p) { capped.call(p).merge(up_down: true) }
@@ -449,7 +461,8 @@ module ISIS
         end
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
-      reach6 = (@ipv6_prefixes + leaked6.map(&down) + area6.map { |p| p.slice(:prefix, :metric) }).map do |p|
+      reach6 = (@ipv6_prefixes + externals6.map { |p| p.slice(:prefix, :metric).merge(external: true) } +
+                leaked6.map(&down) + area6.map { |p| p.slice(:prefix, :metric) }).map do |p|
         Tlv::Ipv6Reachability.new(p).entries.first
       end
       list.concat(pack(Tlv::Ipv6Reachability, reach6))

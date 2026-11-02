@@ -313,6 +313,19 @@ class TestOriginator < Minitest::Test
     assert_equal ["10.0.12.0/24"], own(@orig_a).tlvs.find { |t| t.type == 135 }.entries.map(&:prefix)
   end
 
+  # An IPv6 external prefix goes in TLV 236 with X, 0x40, set (RFC 5308
+  # section 2); setting the list after start generates again.
+  #   ec 0e 00000005 40 40 20010db800070000   2001:db8:7::/64 at 5, X set
+  def test_an_ipv6_external_prefix_sets_x
+    start_both
+    run_for(10)
+    first = own(@orig_a).sequence
+    @orig_a.external_prefixes = [{ prefix: "2001:db8:7::/64", metric: 5 }]
+    run_for(10)
+    assert_equal first + 1, own(@orig_a).sequence
+    assert_equal "ec0e" "00000005" "40" "40" "20010db800070000", own(@orig_a).tlvs.find { |t| t.type == 236 }.to_shex
+  end
+
   # A metric the six bits cannot hold cannot go out narrow.
   def test_a_wide_only_metric_cannot_go_narrow
     @orig_a.metric_style = :narrow

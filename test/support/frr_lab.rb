@@ -445,6 +445,12 @@ class FrrLab
     true
   end
 
+  # Run `ip ARGS` in isis4r's namespace, such as "route add blackhole
+  # 198.18.7.0/24".
+  def isis4r_ip(args)
+    sh "ip -n #{@isis_ns} #{args}"
+  end
+
   # Change isis4r's policy while it runs: +control+ is what the runner reads
   # from its control file, such as { leak: ["198.51.100.0/24"] }.
   def isis4r_control(control)

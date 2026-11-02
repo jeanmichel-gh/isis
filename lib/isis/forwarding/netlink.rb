@@ -56,9 +56,13 @@ module ISIS
       RTA_MULTIPATH = 9
       RTA_TABLE = 15
 
+      RTPROT_KERNEL = 2
+      RTPROT_BOOT = 3
+      RTPROT_STATIC = 4
       RTPROT_ISIS = 187
       RT_TABLE_MAIN = 254
       RT_SCOPE_UNIVERSE = 0
+      RT_SCOPE_LINK = 253
       RT_SCOPE_NOWHERE = 255
       RTN_UNICAST = 1
 
@@ -107,6 +111,12 @@ module ISIS
         mine.count do |r|
           request(delete_message(r[:family], r[:prefix]), "flush #{r[:prefix]}")
         end
+      end
+
+      # Every route in the kernel, as { family:, prefix:, table:, protocol:,
+      # scope:, type:, priority: }, for Redistribution to choose from.
+      def routes
+        dump
       end
 
       def close
@@ -238,21 +248,21 @@ module ISIS
       end
 
       def parse_route(body)
-        family, dst_len, _, _, table, protocol = body.unpack("C6")
+        family, dst_len, _, _, table, protocol, scope, type = body.unpack("C8")
         attrs = {}
         rest = body.byteslice(12..)
         while rest.bytesize >= 4
-          len, type = rest.unpack("SS")
+          len, kind = rest.unpack("SS")
           break if len < 4
 
-          attrs[type] = rest.byteslice(4, len - 4)
+          attrs[kind] = rest.byteslice(4, len - 4)
           rest = rest.byteslice((len + 3) & ~3..) || "".b
         end
         table = attrs[RTA_TABLE].unpack1("L") if attrs[RTA_TABLE]
         fam = family == Socket::AF_INET6 ? :ipv6 : :ipv4
         dst = attrs[RTA_DST] || ("\0".b * (fam == :ipv6 ? 16 : 4))
         { family: fam, prefix: "#{IPAddr.new_ntoh(dst)}/#{dst_len}", table: table, protocol: protocol,
-          priority: attrs[RTA_PRIORITY]&.unpack1("L") }
+          scope: scope, type: type, priority: attrs[RTA_PRIORITY]&.unpack1("L") }
       end
     end
   end

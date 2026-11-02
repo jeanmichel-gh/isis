@@ -2006,15 +2006,16 @@ on in the FRRs' namespaces when there is a host; and the lab needs
 `ping`, from iputils-ping. **Pass-through equivalence runs in the
 suite**: `test/scenario/pass_through_test.rb` runs one scenario, A and B
 on a point to point link at both levels and B, C and D on a LAN at Level
-1, both putting the area into Level 2, A with a summary, and B leaking
-its Level 2 routes into Level 1, through an overload, a
+1, both putting the area into Level 2, A with a summary, B leaking
+its Level 2 routes into Level 1, and C redistributing host routes that
+change, through an overload, a
 cut and restored link and a silenced DIS, four ways: plain, with every
 control installed, with logging at debug, and with both. A control is a
 method replaced on the object that runs a mechanism, so
 `test/support/pass_through.rb` replaces every method of every mechanism
 object, the scheduler, transports, circuits, point to point levels,
 databases, originators, pseudonodes, decision processes, leaks,
-summaries, the forwarding adapter and the log, with one that calls the original. The four runs
+summaries, redistributions, the forwarding adapter and the log, with one that calls the original. The four runs
 must give the same packets per circuit, sent and received in order, the
 same adjacencies, databases with their SRM and SSN flags, and routes at
 each half second, and the same route operations; the test also shows
@@ -2051,7 +2052,22 @@ config and its control file. Measured 2026-11-02 against FRR 8.4.4: the
 Level 2 FRR in 49.0002 reaches the Level 1 FRR's loopback only through
 isis4r's Level 2 LSP, at 30; a summary of 198.51.100.0/24 at 15 replaces
 it at 25 and the /32 is withdrawn; taken away, the /32 comes back and
-the /24 goes. Still owed by gate 1: redistribution through adapters. Not yet in
+the /24 goes. **Redistribution through adapters**:
+`lib/isis/database/redistribution.rb` is a mechanism object that reads
+the host's routes from a source, `Forwarding::Netlink#routes` on Linux,
+at start, every interval on the scheduler and at once when its kinds
+change, and makes those of the kinds it takes, `:connected` (protocol
+kernel, not IPv6 link-local) and `:static` (protocol boot or static),
+from the main table, unicast or blackhole, the originator's external
+prefixes, which `external_prefixes=` now generates again; an IPv6 one
+goes in TLV 236 with X set (RFC 5308 section 2). Nothing is taken by
+default. The runner reads `redistribute:` from its config and its
+control file. Measured 2026-11-02 against FRR 8.4.4: a blackhole route
+added in isis4r's namespace reaches FRR at its metric plus 10; deleted,
+FRR withdraws it; added again and then no longer redistributed by a
+policy change, FRR withdraws it again. **Phase 3 gate 1 is met against
+FRR 8.4.4**: a change of leak, summary or redistribution policy each
+withdraws the obsolete advertisement and route at FRR. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been

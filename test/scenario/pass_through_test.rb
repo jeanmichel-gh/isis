@@ -22,11 +22,22 @@ require_relative "../support/pass_through"
 # The topology: A and B on a point to point link, and B, C and D on a LAN,
 # each advertising a /32. A and B run Level 2 too on their link; each puts
 # the Level 1 area's prefixes in its Level 2 LSP, A summarizing them as
-# 192.0.2.0/24, and B leaks its Level 2 routes into Level 1. The script brings it up, overloads C, cuts the
+# 192.0.2.0/24, and B leaks its Level 2 routes into Level 1. C
+# redistributes its host's static routes, which change when D goes. The script brings it up, overloads C, cuts the
 # point to point link and restores it, and silences D, the DIS.
 class TestPassThroughEquivalence < Minitest::Test
   IDS = { a: "0000.0000.000a", b: "0000.0000.000b", c: "0000.0000.000c", d: "0000.0000.000d" }.freeze
   STEP = 0.5
+
+  # C's host routes for its Redistribution, which the script changes as
+  # the harness, not as a control.
+  HostRoutes = Struct.new(:rows) do
+    def routes = rows
+
+    def self.static(prefix)
+      { family: :ipv4, prefix: prefix, table: 254, protocol: 3, scope: 0, type: 1 }
+    end
+  end
 
   # One run of the scenario. Returns what the harness observed: packets per
   # circuit, a state snapshot per step, and route operations, each in order.
@@ -47,6 +58,7 @@ class TestPassThroughEquivalence < Minitest::Test
       @mechanisms << @scheduler
       @ab = ISIS::Link::SimulatedWire.new
       @lan = ISIS::Link::SimulatedWire.new
+      @host_routes = HostRoutes.new([HostRoutes.static("198.18.7.0/24")])
       @systems = IDS.keys.to_h { |w| [w, system(w)] }
       @a_transport = @systems[:a][:circuits].first.transport
       install_controls if controls
@@ -89,7 +101,14 @@ class TestPassThroughEquivalence < Minitest::Test
       end
       @mechanisms.push(log, db, orig, recorder, decision, *circuits)
       @mechanisms.push(*l2.values) if l2
-      { log: log, db: db, orig: orig, decision: decision, circuits: circuits, recorder: recorder, l2: l2 }
+      redistribution = nil
+      if who == :c
+        redistribution = ISIS::Redistribution.new(originator: orig, scheduler: @scheduler, log: log, source: @host_routes,
+                                                  kinds: [:static], metric: 3, interval: 2)
+        @mechanisms << redistribution
+      end
+      { log: log, db: db, orig: orig, decision: decision, circuits: circuits, recorder: recorder, l2: l2,
+        redistribution: redistribution }
     end
 
     # A and B also run Level 2 on their point to point link, each with a
@@ -149,8 +168,8 @@ class TestPassThroughEquivalence < Minitest::Test
 
     def run
       @systems.each_value do |s|
-        [s[:orig], s[:l2] && s[:l2][:orig], *s[:circuits], s[:decision], s[:l2] && s[:l2][:decision]]
-          .compact.each(&:start)
+        [s[:orig], s[:l2] && s[:l2][:orig], *s[:circuits], s[:decision], s[:l2] && s[:l2][:decision],
+         s[:redistribution]].compact.each(&:start)
       end
       run_for(40)
       @systems[:c][:orig].overload = true
@@ -161,6 +180,7 @@ class TestPassThroughEquivalence < Minitest::Test
       run_for(20)
       @systems[:d][:circuits].each(&:stop)
       @d_stopped = true
+      @host_routes.rows = [HostRoutes.static("198.18.8.0/24")]
       run_for(20)
       @operations = @systems.transform_values do |s|
         [s[:recorder], s[:l2] && s[:l2][:recorder]].compact.map { |r| r.operations.map(&:to_s) }
@@ -231,6 +251,10 @@ class TestPassThroughEquivalence < Minitest::Test
     assert(ops[:a].any? { |o| o.start_with?("withdraw 192.0.2.4/32") }, ops[:a].inspect)
     # C reaches A's Level 2 prefix only through B's leak.
     assert(ops[:c].any? { |o| o.start_with?("install 198.51.100.1/32") }, ops[:c].inspect)
+    # A installs C's redistributed route, and withdraws it when C's host
+    # routes change.
+    assert(ops[:a].any? { |o| o.start_with?("install 198.18.7.0/24") }, ops[:a].inspect)
+    assert(ops[:a].any? { |o| o.start_with?("withdraw 198.18.7.0/24") }, ops[:a].inspect)
     # B reaches A's summary of the area at Level 2.
     l2 = @plain.operations[:b].last
     assert(l2.any? { |o| o.start_with?("install 192.0.2.0/24") }, l2.inspect)
@@ -243,7 +267,7 @@ class TestPassThroughEquivalence < Minitest::Test
   MECHANISMS = [ISIS::Runtime::Scheduler, ISIS::Link::SimulatedTransport, ISIS::P2pCircuit, ISIS::P2pCircuit::Level,
                 ISIS::LanCircuit, ISIS::Database, ISIS::Originator, ISIS::Pseudonode, ISIS::Spf::Decision,
                 ISIS::Forwarding::Recorder, ISIS::Runtime::Log, ISIS::Spf::Leak,
-                ISIS::Spf::Summary].freeze
+                ISIS::Spf::Summary, ISIS::Redistribution].freeze
 
   def test_every_control_passing_through_changes_nothing
     controlled = run_with(controls: true, logging: false)
