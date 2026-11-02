@@ -310,9 +310,9 @@ host, or drive a richer forwarding environment.
 
 **"Pure Ruby" means the protocol core.** Everything under `lib/isis/`
 except `forwarding/` runs on plain Ruby with no native extension. Adapters
-are declared per platform, each stating its dependencies. Whether an
-adapter may use a native dependency is an open decision, recorded under
-Decisions. Until it is made, none does.
+are declared per platform, each stating its dependencies. No adapter uses
+a native dependency: the Linux adapter speaks rtnetlink over an
+AF_NETLINK socket, with the messages packed in Ruby. See Decisions.
 
 ## Nine PDU types, five layouts
 
@@ -2189,13 +2189,25 @@ later decision may change one.
   relicense every contribution. Decide on a contributor agreement before
   accepting outside code.
 
-**Open. May a forwarding adapter use a native dependency?**
+**2026-11-01. Forwarding adapters: no native dependency; netlink in pure
+Ruby.**
 
-* Against: "pure Ruby" is part of what the library is, and a native
-  extension changes how it installs and where it runs.
-* For: route programming is netlink on Linux and a routing socket on BSD.
-  Both are possible in pure Ruby, and both are large.
-* Until decided, no adapter uses one, and the protocol core never does.
+* Before: open. Against a native dependency: "pure Ruby" is part of what
+  the library is, and a native extension changes how it installs and
+  where it runs. For one: route programming is netlink on Linux and a
+  routing socket on BSD, both possible in pure Ruby and both large.
+* Now, decided by the owner: the Linux adapter, for Phase 2 gate 4,
+  opens an AF_NETLINK socket through Ruby's `Socket` and packs the
+  rtnetlink messages (RTM_NEWROUTE, RTM_DELROUTE) in Ruby. No adapter
+  uses a native extension, FFI or an external binary. An iproute2
+  adapter was chosen first and dropped the same day, before any code,
+  in favour of going straight to netlink.
+* Premise: netlink in pure Ruby keeps the whole library native-free and
+  needs no `ip` binary or process per operation. It is larger than
+  shelling out, but it is the lasting answer, so it is written once.
+* Consequence: the adapter takes route operations (install, replace,
+  withdraw) and nothing netlink specific, so a BSD routing socket
+  adapter can sit behind the same interface later.
 
 ## Corrections
 
