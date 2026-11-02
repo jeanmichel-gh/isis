@@ -146,6 +146,43 @@ class TestFrrP2p < Minitest::Test
   end
 
 
+  # External routes (RFC 1195 section 5.3.5, RFC 5302 section 2.2): isis4r
+  # sends two external prefixes in TLV 130 at Level 1, both narrow.
+  # 198.18.5.0/24 is of the internal metric type at 5, and FRR installs it
+  # at 5 + 10 through isis4r. 198.18.6.0/24 is of the external type at 7,
+  # I/E set, 0x47. Measured on FRR 8.4.4: FRR reads that octet's value as
+  # 71, its low seven bits, where RFC 1195 gives the value six and bit 7
+  # the metric type, so it installs the route at 81. The test asks only
+  # that FRR installs it through isis4r.
+  #
+  # Measured on the way: FRR 8.4.4 never sends TLV 130. Redistributed
+  # connected routes with metric-style narrow go in TLV 128, at either
+  # level, so no FRR LSP here exercises isis4r's reading of TLV 130; the
+  # unit tests do, against our own arithmetic.
+  def test_frr_installs_isis4rs_external_prefixes
+    externals = [{ prefix: "198.18.5.0/24", metric: 5 }, { prefix: "198.18.6.0/24", metric: 7, external: true }]
+    @lab.start(isis4r: { metric_style: "narrow", external_prefixes: externals }, frr_router: ["metric-style narrow"])
+    assert_eventually("FRR did not install 198.18.5.0/24 at 15 through isis4r", 60) do
+      @lab.frr_isis_routes["198.18.5.0/24"] == { "metric" => 15, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+    assert_eventually("FRR did not install 198.18.6.0/24 through isis4r", 30) do
+      @lab.frr_isis_routes.dig("198.18.6.0/24", "next_hop") == "10.0.12.1"
+    end
+  end
+
+  # FRR's redistributed connected route, 198.18.5.0/24 on a link that is
+  # not in IS-IS, arrives in TLV 128 at FRR's metric 0, and isis4r reaches
+  # it at its link's 10 through FRR.
+  def test_isis4r_routes_to_frrs_redistributed_prefix
+    @lab.start(isis4r: { metric_style: "narrow" }, frr_connected: "198.18.5.1/24",
+               frr_router: ["metric-style narrow", "redistribute ipv4 connected level-1"])
+    assert_eventually("isis4r does not reach 198.18.5.0/24 through FRR", 60) do
+      @lab.isis4r_routes["198.18.5.0/24"] ==
+        { "prefix" => "198.18.5.0/24", "metric" => 10,
+          "next_hops" => [{ "address" => "10.0.12.2", "circuit" => "veth0" }] }
+    end
+  end
+
   # Gate 3, authentication. FRR's "isis password md5" keys the hellos and
   # "area-password md5 ... authenticate snp validate" keys and checks the
   # Level 1 LSPs and SNPs, RFC 5304 HMAC-MD5 both.

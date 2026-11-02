@@ -23,7 +23,9 @@ class TestSpf < Minitest::Test
 
   # Store the LSP of +node+, a letter or [letter, pseudonode], with +links+
   # to other nodes and +prefixes+, wide unless +narrow+.
-  def lsp(node, links: {}, prefixes: {}, number: 0, overload: false, narrow: false, lifetime: 1200, attached: [])
+  def lsp(node, links: {}, prefixes: {}, number: 0, overload: false, narrow: false, lifetime: 1200, attached: [],
+          tlvs: [])
+    extra = tlvs
     letter, pseudonode = Array(node)
     lsp_id = id(letter, pseudonode || 0) + [number].pack("C")
     tlvs = []
@@ -44,6 +46,7 @@ class TestSpf < Minitest::Test
       list = prefixes.map { |p, m| { prefix: p, metric: m } }
       tlvs << (narrow ? ISIS::Tlv::IpInternalReachability.new(list) : ISIS::Tlv::ExtendedIpReachability.new(list))
     end
+    tlvs += extra
     pdu = ISIS::Pdu::Lsp.new(level: 1, lsp_id: ISIS::Octets.new(lsp_id), lifetime: lifetime, sequence: 1,
                              tlvs: tlvs, overload: overload, attached: attached)
     @db.entry(lsp_id).store(pdu)
@@ -259,6 +262,74 @@ class TestSpf < Minitest::Test
     lsp("c", prefixes: { "192.0.2.3/32" => 1 }, number: 1)
     calc = spf([[id("b"), 10, adj("b")]])
     assert_equal 21, calc.routes["192.0.2.3/32"].metric
+  end
+
+  # External routes and the order of preference. A reaches B at 10 and C
+  # at 20; each may advertise P, 198.18.5.0/24, in TLV 128, TLV 130 or TLV
+  # 135. +octets+ is a default metric octet given whole, for the up/down
+  # bit, 0x80 (RFC 5302 section 2).
+  P = "198.18.5.0/24"
+
+  def triangle(b, c)
+    lsp("a", links: { "b" => 10, "c" => 20 })
+    lsp("b", links: { "a" => 10 }, tlvs: b)
+    lsp("c", links: { "a" => 20 }, tlvs: c)
+    spf([[id("b"), 10, adj("b")], [id("c"), 20, adj("c")]])
+  end
+
+  def narrow(klass, metric, external: false, octets: nil)
+    entry = octets ? { prefix: P, metric_octets: octets } : { prefix: P, metric: metric, external: external }
+    [klass.new(entry)]
+  end
+
+  def internal(metric, **opts) = narrow(ISIS::Tlv::IpInternalReachability, metric, **opts)
+  def external(metric, **opts) = narrow(ISIS::Tlv::IpExternalReachability, metric, **opts)
+
+  # TLV 130 with the internal metric type is a route like TLV 128's: 10 +
+  # 5, and not external.
+  def test_tlv_130_of_the_internal_type
+    calc = triangle(external(5), [])
+    assert_equal "#{P} metric 15 via 10.0.0.11 via eth-b", route(calc, P)
+  end
+
+  # RFC 5302 section 2.1: external metric-type routes "MUST be given less
+  # preference". B's, external at 0, is 10; C's, internal at 20, is 40,
+  # and wins.
+  def test_internal_beats_external_whatever_the_distance
+    calc = triangle(external(0, external: true), internal(20))
+    assert_equal "#{P} metric 40 via 10.0.0.12 via eth-c", route(calc, P)
+  end
+
+  # RFC 1195 section 3.4: "the lowest value of the external metric is
+  # preferred regardless of the internal cost". B's external 10 is 20 in
+  # all, C's external 5 is 25, and C's wins.
+  def test_the_lowest_external_metric_regardless_of_the_internal_cost
+    calc = triangle(external(10, external: true), external(5, external: true))
+    assert_equal "#{P} metric 25 external via 10.0.0.12 via eth-c", route(calc, P)
+  end
+
+  # At one external metric, the distance decides: B's 15 before C's 25.
+  def test_an_equal_external_metric_goes_by_distance
+    calc = triangle(external(5, external: true), external(5, external: true))
+    assert_equal "#{P} metric 15 external via 10.0.0.11 via eth-b", route(calc, P)
+  end
+
+  # RFC 5302 section 3: an intra-area route before an "L2->L1 inter-area"
+  # one, up/down set. B's at 1 with the bit, 81, is 11; C's at 20, 40,
+  # wins. The same in TLV 135, whose up/down bit is its own.
+  def test_up_down_set_ranks_below_clear
+    calc = triangle(internal(nil, octets: "81808080"), internal(20))
+    assert_equal "#{P} metric 40 via 10.0.0.12 via eth-c", route(calc, P)
+    wide = ->(m, up) { [ISIS::Tlv::ExtendedIpReachability.new([{ prefix: P, metric: m, up_down: up }])] }
+    calc = triangle(wide.call(1, true), wide.call(20, false))
+    assert_equal "#{P} metric 40 via 10.0.0.12 via eth-c", route(calc, P)
+  end
+
+  # One system offering P twice, internal at 30 in TLV 128 and external at
+  # 1 in TLV 130: the internal one is its offer, 10 + 30.
+  def test_one_systems_internal_offer_beats_its_external_one
+    calc = triangle(internal(30) + external(1, external: true), [])
+    assert_equal "#{P} metric 40 via 10.0.0.11 via eth-b", route(calc, P)
   end
 
   # A LAN, B.01 the pseudonode, listing A, B and C at 0 (7.2.3). A's

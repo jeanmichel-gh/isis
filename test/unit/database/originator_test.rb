@@ -231,6 +231,35 @@ class TestOriginator < Minitest::Test
     assert_equal [1, 129, 132, 2, 128, 22, 135], own(@orig_a).tlvs.map(&:type)
   end
 
+  # External prefixes: narrow, TLV 130 after TLV 128, I/E set for the
+  # external metric type (RFC 1195 section 5.3.5, RFC 5302 section 2.2);
+  # wide, in TLV 135 after the internal ones, with no metric type.
+  #   82 18 05808080 c6120500 ffffff00   198.18.5.0/24 metric 5, internal type
+  #         47808080 c6120600 ffffff00   198.18.6.0/24 metric 7, I/E 0x40
+  #   87 10 0000000a 18 0a000c           10.0.12.0/24 metric 10
+  #         00000005 18 c61205           198.18.5.0/24 metric 5
+  EXTERNALS = [{ prefix: "198.18.5.0/24", metric: 5 }, { prefix: "198.18.6.0/24", metric: 7, external: true }].freeze
+
+  def test_external_prefixes_narrow_in_tlv_130
+    @orig_a.metric_style = :narrow
+    @orig_a.external_prefixes = EXTERNALS
+    start_both
+    run_for(10)
+    tlvs = own(@orig_a).tlvs
+    assert_equal [1, 129, 132, 2, 128, 130], tlvs.map(&:type)
+    assert_equal "8218" "05808080" "c6120500" "ffffff00" "47808080" "c6120600" "ffffff00",
+                 tlvs.find { |t| t.type == 130 }.to_shex
+  end
+
+  def test_external_prefixes_wide_in_tlv_135
+    @orig_a.external_prefixes = EXTERNALS.first(1)
+    start_both
+    run_for(10)
+    tlvs = own(@orig_a).tlvs
+    assert_equal [1, 129, 132, 22, 135], tlvs.map(&:type)
+    assert_equal "8710" "0000000a" "18" "0a000c" "00000005" "18" "c61205", tlvs.find { |t| t.type == 135 }.to_shex
+  end
+
   # A metric the six bits cannot hold cannot go out narrow.
   def test_a_wide_only_metric_cannot_go_narrow
     @orig_a.metric_style = :narrow

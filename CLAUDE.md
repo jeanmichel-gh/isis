@@ -1735,7 +1735,7 @@ ISO 8473 checksum),
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 2, 6, 8,
-9, 10, 22, 128, 129, 132, 135 and 240, with `lib/isis/tlv/narrow_metrics.rb`
+9, 10, 22, 128, 129, 130, 132, 135, 232, 236 and 240, with `lib/isis/tlv/narrow_metrics.rb`
 for the four original metric octets TLVs 2 and 128 share and lay out
 differently, with `lib/isis/subtlv/subtlv.rb` holding the
 sub-TLV framing, the per parent registry, `SubTlv::Unknown` and the list
@@ -1966,8 +1966,23 @@ no default route, its nearest Level 2 system being "Self". Measured
 2026-11-01 against FRR 8.4.4, isis4r at both levels in 49.0001 between a
 Level 1 FRR and a Level 2 FRR in 49.0002: FRR shows ATT 1/0/0 for
 isis4r's Level 1 LSP and installs a default route to it; when the link
-to 49.0002 goes, ATT clears and the default route goes. Still owed by
-gate 3: external routes and TLV 130. **Phase 2
+to 49.0002 goes, ATT clears and the default route goes. **External
+routes**: TLV 130 (RFC 1195 section 5.3.5) on the object contract as TLV
+128's layout under its own type, with the up/down bit of RFC 5302 read
+from bit 8 of the default octet in both; the calculation reads TLV 130 at
+either level (RFC 5302 section 2.2) and ranks each prefix by RFC 5302
+section 3's order, internal metric type before external and up/down
+clear before set, then for the external type the external metric before
+the internal cost (RFC 1195 section 3.4), then the distance; and the
+originator takes `external_prefixes:`, sent in TLV 130 in the narrow
+styles, I/E set for the external type, and in TLV 135 in the wide one.
+Measured 2026-11-01 against FRR 8.4.4: FRR installs isis4r's TLV 130
+prefixes through isis4r, the internal type at its metric plus 10, and
+isis4r reaches FRR's redistributed connected prefix. Measured on the
+way: FRR 8.4.4 never sends TLV 130, putting redistributed routes in TLV
+128 at either level, so the reading of TLV 130 is held only to our
+arithmetic; and it reads an external type metric of 7, 0x47, as 71, its
+low seven bits. **Phase 2 gate 3 is met against FRR 8.4.4.** **Phase 2
 gate 4 has begun**: `lib/isis/forwarding/forwarding.rb` turns each change
 in a Decision Process's routes into a route operation, install, replace
 or withdraw, a route this system advertises itself counting as absent,
@@ -2406,8 +2421,6 @@ Still unread:
   authentication section and has not been read here. The design only needs
   to know that the preparation is the algorithm's, which holds either way,
   but the second algorithm cannot be written without it.
-* **RFC 1195 section 5.3.5**, the metric octets in TLV 130. Section 5.3.4,
-  TLV 128, is read and quoted in the metrics section.
 * **The NLPID numbers** in `Tlv::ProtocolsSupported`. RFC 1195 section
   5.3.1 says only "as assigned by ISO/TR 9577". 0xcc and 0x81 are what
   Wireshark and FRR use, and 0x8e for IPv6 is RFC 5308's, not read here.
@@ -2461,6 +2474,20 @@ confidently said:
     numbering hazard recorded under Codepoints, arriving with a concrete
     example: never convert an RFC 1142 section number into an ISO 10589
     one.
+* **RFC 1195 section 5.3.5**, TLV 130: "CODE - 130", a multiple of 12,
+  entries laid out as TLV 128's, the default octet with bit 8 zero and
+  bit 7 I/E, the others with S and a reserved bit 7, then the address and
+  mask; "present in level 2 LSPs". Read through datatracker, 2026-11-01,
+  with section 3.4 on external metrics: "the lowest value of the external
+  metric is preferred regardless of the internal cost to reach the
+  appropriate exit point".
+* **RFC 5302** sections 2 to 4, read 2026-11-01: the high bit of the
+  default metric in TLVs 128 and 130 is the up/down bit, which "L1L2
+  routers MUST set ... for prefixes that are derived from L2 routing";
+  TLV 130 is allowed in Level 1 LSPs (2.2); "metrics of the external
+  metric-type should never be seen in TLV 128" (2.1); and section 3's
+  six step order of preference, internal metric type first and
+  L2->L1 inter-area after intra-area at each type.
 * **RFC 1195 section 5.3.1** for TLV 129, "one octet per protocol", and
   TLV 132, "four octets per address", with a hello carrying TLV 132 "once
   only" and "up to a maximum of 63 IP addresses". Read through the

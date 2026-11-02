@@ -61,6 +61,7 @@ levels.each do |level|
                          ipv6_addresses: config.fetch(:ipv6_addresses, []),
                          ipv6_prefixes: config.fetch(:ipv6_prefixes, []),
                          prefixes: config.fetch(:prefixes, []),
+                         external_prefixes: config.fetch(:external_prefixes, []),
                          metric_style: config.fetch(:metric_style, "wide").to_sym,
                          area_key: config[:area_key],
                          minimum_interval: config.fetch(:minimum_lsp_interval, 1), is_type: both ? 3 : nil,

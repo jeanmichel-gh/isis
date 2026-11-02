@@ -99,6 +99,10 @@ class FrrLab
   # well, at those metrics.
   # +ipv6+ runs IPv6 on the link as well, both sides, with
   # +frr_loopback6+, a prefix such as "2001:db8:ff::2/128", on FRR's lo.
+  # +frr_connected+, a prefix such as "198.18.5.1/24", goes on ext0, one
+  # end of a veth pair inside FRR's namespace that is not in IS-IS, for
+  # FRR to redistribute as connected. (A dummy interface would do, but not
+  # every kernel the lab runs on has the dummy type.)
   # +host+ puts a host behind isis4r: a namespace whose eth0, 203.0.113.2,
   # joins isis4r's host0, 203.0.113.1, with a default route through
   # isis4r, and with +ipv6+ 2001:db8:203::2 through 2001:db8:203::1.
@@ -110,7 +114,7 @@ class FrrLab
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
-            ipv6: false, frr_loopback6: nil, host: false)
+            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -122,6 +126,11 @@ class FrrLab
       sh "ip -n #{ns} link set veth0 up"
     end
     sh "ip -n #{@frr_ns} addr add #{frr_loopback} dev lo" if frr_loopback
+    if frr_connected
+      sh "ip -n #{@frr_ns} link add ext0 type veth peer name ext1"
+      sh "ip -n #{@frr_ns} addr add #{frr_connected} dev ext0"
+      %w[ext0 ext1].each { |l| sh "ip -n #{@frr_ns} link set #{l} up" }
+    end
     @ipv6 = ipv6
     @frr_loopback6 = frr_loopback6
     if ipv6

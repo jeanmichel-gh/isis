@@ -70,8 +70,9 @@ module ISIS
 
     # The route to +prefix+: its metric and the adjacencies it may use. A
     # route to a prefix this system advertises itself has none and is
-    # local.
-    Route = Struct.new(:prefix, :metric, :adjacencies) do
+    # local. +external+ is true for a route of the external metric type,
+    # from an entry with I/E set (RFC 5302 section 3).
+    Route = Struct.new(:prefix, :metric, :adjacencies, :external) do
       def local?
         adjacencies.empty?
       end
@@ -81,9 +82,25 @@ module ISIS
       end
 
       def to_s
-        return "#{prefix} metric #{metric} local" if local?
+        kind = external ? " external" : ""
+        return "#{prefix} metric #{metric}#{kind} local" if local?
 
-        "#{prefix} metric #{metric} via #{adjacencies.map { |a| a.to_s(family) }.join(', ')}"
+        "#{prefix} metric #{metric}#{kind} via #{adjacencies.map { |a| a.to_s(family) }.join(', ')}"
+      end
+    end
+
+    # One system's advertisement of a prefix: its metric, whether that is of
+    # the external metric type, and the up/down bit.
+    Offer = Struct.new(:metric, :external, :up_down) do
+      # RFC 5302 section 3's order of preference, within one level: routes
+      # "with internal metric" before those "with external metric", and at
+      # each, intra-area before "L2->L1 inter-area", which is up/down set.
+      # For the external metric type, RFC 1195 section 3.4: "the lowest
+      # value of the external metric is preferred regardless of the
+      # internal cost to reach the appropriate exit point". Then the
+      # distance. Lower is better.
+      def key(distance)
+        [external ? 1 : 0, up_down ? 1 : 0, external ? metric : 0, distance]
       end
     end
 
@@ -108,6 +125,7 @@ module ISIS
         @max_path_metric = max_path_metric
         @paths = {}
         @routes = {}
+        @keys = {}
         @nodes = {}
         # The nearest attached Level 2 system, as a Path: its distance and
         # the adjacencies toward it. Nil when none is reachable.
@@ -203,19 +221,21 @@ module ISIS
         adjacencies.uniq.sort_by(&:rank).first(@max_path_splits)
       end
 
-      # The prefixes P advertises, as leaves: the shortest to each wins, and
-      # an equal one adds its adjacencies. A prefix this system advertises
-      # stays local at an equal metric.
+      # The prefixes P advertises, as leaves: the most preferred to each
+      # wins, by Offer#key, and an equal one adds its adjacencies. A prefix
+      # this system advertises stays local at an equal key.
       def add_prefixes(node)
         path = @paths[node]
-        prefixes(node)&.each do |prefix, metric|
-          dist = path.distance + metric
+        prefixes(node)&.each do |prefix, offer|
+          dist = path.distance + offer.metric
           next if dist > @max_path_metric
 
+          key = offer.key(dist)
           held = @routes[prefix]
-          if held.nil? || dist < held.metric
-            @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies))
-          elsif dist == held.metric && !held.local?
+          if held.nil? || (key <=> @keys[prefix]).negative?
+            @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil)
+            @keys[prefix] = key
+          elsif key == @keys[prefix] && !held.local?
             held.adjacencies = path.adjacencies.empty? ? [] : prune(held.adjacencies | path.adjacencies)
           end
         end
@@ -298,18 +318,25 @@ module ISIS
       # this prefix MUST NOT be considered during the normal SPF
       # computation", which add_prefixes's limit on the path covers, since
       # the path to it is at least its metric.
+      # Each prefix the LSPs advertise, with its most preferred Offer. TLV
+      # 130 at either level (RFC 5302 section 2.2 allows it in Level 1
+      # LSPs), with the metric type its I/E bit gives; TLV 128's entries
+      # are of the internal type (RFC 5302 section 2.1: "metrics of the
+      # external metric-type should never be seen in TLV 128"), and so are
+      # the wide TLVs', which have no metric type.
       def read_prefixes(lsps)
         found = {}
         each_tlv(lsps) do |tlv|
           case tlv
-          when Tlv::ExtendedIpReachability
+          when Tlv::ExtendedIpReachability, Tlv::Ipv6Reachability
+            tlv.entries.each { |e| keep_best(found, e.prefix, Offer.new(e.metric, false, e.up_down)) if e.prefix }
+          when Tlv::IpExternalReachability
             tlv.entries.each do |e|
-              keep_lower(found, e.prefix, e.metric) if e.prefix
+              offer = Offer.new(e.metrics.default, e.metrics.external?, e.up_down?)
+              keep_best(found, e.prefix, offer) if e.prefix
             end
           when Tlv::IpInternalReachability
-            tlv.entries.each { |e| keep_lower(found, e.prefix, e.metrics.default) if e.prefix }
-          when Tlv::Ipv6Reachability
-            tlv.entries.each { |e| keep_lower(found, e.prefix, e.metric) if e.prefix }
+            tlv.entries.each { |e| keep_best(found, e.prefix, Offer.new(e.metrics.default, false, e.up_down?)) if e.prefix }
           end
         end
         found
@@ -321,6 +348,10 @@ module ISIS
 
       def keep_lower(hash, key, metric)
         hash[key] = metric if hash[key].nil? || metric < hash[key]
+      end
+
+      def keep_best(hash, prefix, offer)
+        hash[prefix] = offer if hash[prefix].nil? || (offer.key(offer.metric) <=> hash[prefix].key(hash[prefix].metric)).negative?
       end
     end
   end
