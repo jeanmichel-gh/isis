@@ -518,3 +518,57 @@ class TestOriginatorLspNumbers < Minitest::Test
   end
 end
 
+
+# The LSP Database Overload bit, RFC 1142 7.3.19.1, in LSP Number 0 only.
+# No circuits: a database and an originator on a manual clock. OL is 0x04
+# in the flags octet, the last of the 27 octet fixed header (RFC 1142 9.8,
+# asserted mask by mask in the LSP's own tests).
+class TestOriginatorOverload < Minitest::Test
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    TestLogs.heading(name)
+    @log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock))
+    @db = ISIS::Database.new(level: 1, clock: @clock)
+    prefixes = (1..60).map { |i| { prefix: "198.18.0.#{i}/32", metric: 1 } }
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 minimum_interval: 5, buffer_size: 300, prefixes: prefixes)
+  end
+
+  def flags(number)
+    @db[@orig.lsp_id(number)].lsp.encode.getbyte(26)
+  end
+
+  # Set from the start: LSP 0 carries OL, the others do not. IS type 1.
+  def test_overload_is_in_lsp_number_zero_only
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 buffer_size: 300, prefixes: (1..60).map { |i| { prefix: "198.18.0.#{i}/32", metric: 1 } },
+                                 overload: true)
+    @orig.start
+    assert_equal [0, 1, 2], @orig.numbers
+    assert_equal [0x05, 0x01, 0x01], @orig.numbers.map { |n| flags(n) }
+  end
+
+  # Set after start: LSP 0 is generated again with OL, no sooner than the
+  # minimum interval, and the other LSP Numbers are not (7.3.4), since
+  # their content did not change. Cleared, it goes again.
+  def test_setting_and_clearing_regenerates_lsp_zero
+    @orig.start
+    @scheduler.advance(10)
+    @orig.overload = true
+    @scheduler.advance(6)
+    assert_equal [2, 1, 1], @orig.numbers.map { |n| @orig.sequence(n) }
+    assert_equal 0x05, flags(0)
+    @orig.overload = false
+    @scheduler.advance(6)
+    assert_equal [3, 1, 1], @orig.numbers.map { |n| @orig.sequence(n) }
+    assert_equal 0x01, flags(0)
+  end
+
+  # Before start, setting it generates nothing.
+  def test_setting_before_start_generates_nothing
+    @orig.overload = true
+    @scheduler.advance(10)
+    assert_nil @db[@orig.lsp_id]
+  end
+end

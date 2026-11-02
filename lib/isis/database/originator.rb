@@ -75,12 +75,13 @@ module ISIS
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type
+    attr_reader :overload
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
-                   buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil)
+                   buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -106,6 +107,7 @@ module ISIS
       @minimum_interval = minimum_interval
       @buffer_size = buffer_size
       @level1_database = level1_database
+      @overload = overload
       @circuits = []
       # Clause 7.3.16.1: "When a system initialises, it shall start with
       # sequence number 1". The first generation adds one to this, per LSP
@@ -229,7 +231,7 @@ module ISIS
       list = (tlvs || lsp_tlvs.fetch(number, [])).dup
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
       lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(lsp_id(number)), lifetime: Database::MAX_AGE,
-                         sequence: sequence, tlvs: list, is_type: @is_type)
+                         sequence: sequence, tlvs: list, is_type: @is_type, overload: @overload && number.zero?)
       lsp.key = @area_key
       lsp
     end
@@ -265,6 +267,19 @@ module ISIS
       raise Error, "#{groups.size} LSPs needed, and an LSP Number is one octet" if groups.size > 256
 
       groups
+    end
+
+    # The LSP Database Overload bit, in LSP Number 0. Clause 7.3.19.1: the
+    # system "shall generate and flood its own LSP with zero LSP number with
+    # the LSP Database Overload Bit set", which "prevents this Intermediate
+    # system from being considered as a forwarding path by other
+    # Intermediate Systems"; and clause 7.2.5 has a receiver take the bit
+    # from LSP Number 0 only. Setting it here is the operator's choice, not
+    # the clause's waiting state, which needs a database that can run out of
+    # room. A change is a change of content (7.3.6).
+    def overload=(on)
+      @overload = on
+      changed("LSP Database Overload bit #{on ? 'set' : 'cleared'} (RFC 1142 7.3.19.1)") if @generated_at
     end
 
     # Clause 7.3.6: an event "which would cause the information content to
@@ -367,7 +382,7 @@ module ISIS
       generated = numbers.filter_map do |n|
         held = @database[lsp_id(n)]
         if unless_unchanged && held&.lsp && !held.purged? &&
-           held.lsp.tlvs.to_shex == build(sequence: 0, number: n, tlvs: groups[n]).tlvs.to_shex
+           same_content?(held.lsp, build(sequence: 0, number: n, tlvs: groups[n]))
           next
         end
 
@@ -430,6 +445,11 @@ module ISIS
         size += n
       end
       groups.map { |g| klass.new(g) }
+    end
+
+    # The same TLVs and flags: what a regeneration would change.
+    def same_content?(held, fresh)
+      held.flags == fresh.flags && held.tlvs.to_shex == fresh.tlvs.to_shex
     end
 
     def seq(n)
