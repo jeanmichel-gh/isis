@@ -43,6 +43,8 @@ class TestTlvIpExternalReachability < Minitest::Test
     assert_equal 10, t.entries.first.metrics.default
     assert_equal hex, t.to_shex
     assert_equal hex, ISIS::Tlv::IpExternalReachability.new(t.to_hash).to_shex
+    assert_equal [{ prefix: "198.18.5.0/24", metric: 10, up_down: true }], t.to_hash
+    assert_equal hex, ISIS::Tlv::IpExternalReachability.new(prefix: "198.18.5.0/24", metric: 10, up_down: true).to_shex
   end
 
   def test_to_s_names_it

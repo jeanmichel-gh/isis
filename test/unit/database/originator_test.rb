@@ -260,6 +260,59 @@ class TestOriginator < Minitest::Test
     assert_equal "8710" "0000000a" "18" "0a000c" "00000005" "18" "c61205", tlvs.find { |t| t.type == 135 }.to_shex
   end
 
+  # Leaked Level 2 routes (RFC 5302 section 2), each with the up/down bit.
+  # Narrow, the default octet's bit 8, 0x80, in TLV 128, and in TLV 130 for
+  # the external type with I/E 0x40 as well; a metric past 63 goes at 63:
+  #   80 18 0a808080 0a000c00 ffffff00     10.0.12.0/24 at 10, our own
+  #         94808080 c6336403 ffffffff     198.51.100.3/32 at 20, 0x80 | 20
+  #   82 18 de808080 cb007100 ffffff00     203.0.113.0/24 at 30, 0x80 | 0x40 | 30
+  #         ff808080 cb007200 ffffff00     203.0.114.0/24 at 100, 0x80 | 0x40 | 63
+  LEAKED = [{ prefix: "198.51.100.3/32", metric: 20 }, { prefix: "203.0.113.0/24", metric: 30, external: true },
+            { prefix: "203.0.114.0/24", metric: 100, external: true }].freeze
+
+  def test_leaked_prefixes_narrow
+    @orig_a.metric_style = :narrow
+    start_both
+    run_for(10)
+    @orig_a.leaked_prefixes = LEAKED
+    run_for(10)
+    tlvs = own(@orig_a).tlvs
+    assert_equal [1, 129, 132, 2, 128, 130], tlvs.map(&:type)
+    assert_equal "8018" "0a808080" "0a000c00" "ffffff00" "94808080" "c6336403" "ffffffff",
+                 tlvs.find { |t| t.type == 128 }.to_shex
+    assert_equal "8218" "de808080" "cb007100" "ffffff00" "ff808080" "cb007200" "ffffff00",
+                 tlvs.find { |t| t.type == 130 }.to_shex
+  end
+
+  # Wide, the control octet's up/down bit, 0x80, in TLV 135, a /32 being
+  # 0xa0; IPv6, U, 0x80, in TLV 236 (RFC 5308 section 2):
+  #   87 11 0000000a 18 0a000c             10.0.12.0/24 at 10, our own
+  #         00000014 a0 c6336403           198.51.100.3/32 at 20, down
+  #   ec 0e 00000019 80 40 20010db800030000   2001:db8:3::/64 at 25, U set
+  def test_leaked_prefixes_wide_and_ipv6
+    start_both
+    run_for(10)
+    @orig_a.leaked_prefixes = [{ prefix: "198.51.100.3/32", metric: 20 }, { prefix: "2001:db8:3::/64", metric: 25 }]
+    run_for(10)
+    tlvs = own(@orig_a).tlvs
+    assert_equal "8711" "0000000a" "18" "0a000c" "00000014" "a0" "c6336403", tlvs.find { |t| t.type == 135 }.to_shex
+    assert_equal "ec0e" "00000019" "80" "40" "20010db800030000", tlvs.find { |t| t.type == 236 }.to_shex
+  end
+
+  # Set, the LSP is generated again; cleared, again without them.
+  def test_leaking_and_unleaking_regenerate
+    start_both
+    run_for(10)
+    first = own(@orig_a).sequence
+    @orig_a.leaked_prefixes = LEAKED.first(1)
+    run_for(10)
+    assert_equal first + 1, own(@orig_a).sequence
+    @orig_a.leaked_prefixes = []
+    run_for(10)
+    assert_equal first + 2, own(@orig_a).sequence
+    assert_equal ["10.0.12.0/24"], own(@orig_a).tlvs.find { |t| t.type == 135 }.entries.map(&:prefix)
+  end
+
   # A metric the six bits cannot hold cannot go out narrow.
   def test_a_wide_only_metric_cannot_go_narrow
     @orig_a.metric_style = :narrow

@@ -2005,14 +2005,15 @@ starts with forwarding off and zebra leaves it so, so the lab turns it
 on in the FRRs' namespaces when there is a host; and the lab needs
 `ping`, from iputils-ping. **Pass-through equivalence runs in the
 suite**: `test/scenario/pass_through_test.rb` runs one scenario, A and B
-on a point to point link and B, C and D on a LAN, through an overload, a
+on a point to point link at both levels and B, C and D on a LAN at Level
+1, B leaking its Level 2 routes into Level 1, through an overload, a
 cut and restored link and a silenced DIS, four ways: plain, with every
 control installed, with logging at debug, and with both. A control is a
 method replaced on the object that runs a mechanism, so
 `test/support/pass_through.rb` replaces every method of every mechanism
 object, the scheduler, transports, circuits, point to point levels,
-databases, originators, pseudonodes, decision processes, the forwarding
-adapter and the log, with one that calls the original. The four runs
+databases, originators, pseudonodes, decision processes, leaks, the
+forwarding adapter and the log, with one that calls the original. The four runs
 must give the same packets per circuit, sent and received in order, the
 same adjacencies, databases with their SRM and SSN flags, and routes at
 each half second, and the same route operations; the test also shows
@@ -2021,7 +2022,22 @@ debug line with a side effect, a control that sends one extra hello, one
 that shifts a timer by a millisecond, and one that withdraws and
 reinstalls routes that end the same each fail it. **Phase 2 gate 4 is
 met against FRR 8.4.4**, measured 2026-11-01, with IPv6 traffic shown in
-CI. Not yet in
+CI. **Phase 2 is complete.** **Phase 3 gate 1 has begun, with route
+leaking** (RFC 5302 section 2): `lib/isis/spf/leak.rb` is a mechanism
+object that, after each Level 2 run of a system at both levels, chooses
+the Level 2 routes its policy allows, none by default (section 4: "it is
+RECOMMENDED that L2 routes not be advertised into L1 by default"), and
+hands them to the Level 1 originator, which sends them with the up/down
+bit set: TLV 128, or 130 for the external type, at most 63, when narrow;
+TLV 135 when wide; TLV 236 for IPv6. A new policy chooses again at once
+from the last routes. The runner reads `leak:`, and a control file a
+test writes while it runs (`FrrLab#isis4r_control`). Measured 2026-11-02
+against FRR 8.4.4, isis4r at both levels between a Level 1 FRR and a
+Level 2 FRR in 49.0002: with the policy changed to leak 198.51.100.0/24,
+FRR holds the far loopback in isis4r's Level 1 LSP marked "Down" and
+installs it at 30 through isis4r; changed back to nothing, FRR drops both
+the advertisement and the route. Still owed by gate 1: summarization,
+and redistribution through adapters. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
@@ -2127,7 +2143,8 @@ they are made.
    by hand. **Built**: `test/support/frr_lab.rb` sets up the namespaces and
    FRR, and `test/support/isis_runner.rb` runs isis4r inside its
    namespace on the real clock, writing its state as JSON and its log at
-   debug with a PDU trace. A failing test prints both sides' logs.
+   debug with a PDU trace, and reading a control file a test writes to
+   change policy while it runs. A failing test prints both sides' logs.
    `sudo env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them. Newer sudo
    ignores `-E` with a warning, and `env` passes what the tests need.
 

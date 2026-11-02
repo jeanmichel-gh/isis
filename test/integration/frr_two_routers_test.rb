@@ -106,6 +106,36 @@ class TestFrrTwoRouters < Minitest::Test
     assert_eventually("FRR keeps a default route to isis4r", 30) { @lab.frr_isis_routes["0.0.0.0/0"].nil? }
   end
 
+  # Route leaking (Phase 3 gate 1), on the same topology: isis4r at both
+  # levels between a Level 1 FRR and the second FRR, Level 2 in 49.0002,
+  # with its loopback 198.51.100.3/32. isis4r starts leaking nothing (RFC
+  # 5302 section 4's default), so the Level 1 FRR has only its default
+  # route. A policy change through the control file leaks
+  # 198.51.100.0/24: isis4r's Level 1 LSP carries 198.51.100.3/32 at its
+  # Level 2 metric, 20, with the up/down bit, which FRR shows as "Down",
+  # and FRR installs it at 30 through isis4r. A second change leaks
+  # nothing again, and FRR withdraws both the advertisement and the
+  # route.
+  def test_a_leak_policy_change_installs_and_withdraws_at_frr
+    @lab.start(level: "1-2", frr_is_type: "level-1",
+               frr2: { is_type: "level-2-only", area: "49.0002", loopback: FRR2_LOOPBACK,
+                       isis4r_link: { frr_metric: 10, isis4r_metric: 10 } })
+    leaked = %r{Extended IP Reachability: 198\.51\.100\.3/32 \(Metric: 20\) Down}
+    lsp = -> { @lab.frr_database_detail(1)["#{FrrLab::ISIS4R_ID}.00-00"].to_s }
+    assert_eventually("FRR has no default route to isis4r", 60) { @lab.frr_isis_routes.key?("0.0.0.0/0") }
+    assert_nil @lab.frr_isis_routes[FRR2_LOOPBACK], @lab.report
+    refute_match leaked, lsp.call, @lab.report
+    @lab.isis4r_control(leak: ["198.51.100.0/24"])
+    assert_eventually("FRR does not hold isis4r's leaked prefix with up/down set", 30) { lsp.call.match?(leaked) }
+    assert_eventually("FRR did not install the leaked prefix at 30 through isis4r", 30) do
+      @lab.frr_isis_routes[FRR2_LOOPBACK] == { "metric" => 30, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+    @lab.isis4r_control(leak: [])
+    assert_eventually("FRR still holds the leaked prefix", 30) { !lsp.call.match?(leaked) }
+    assert_eventually("FRR kept the route to the leaked prefix", 30) { @lab.frr_isis_routes[FRR2_LOOPBACK].nil? }
+    assert_includes @lab.isis4r_log, "198.51.100.3/32 no longer leaked into Level 1", @lab.report
+  end
+
   # Gate 3, routes computed against an independent router's on the same
   # topology, all Level 1 in one area. Each prefix the first FRR reaches
   # through the second, isis4r reaches at the first FRR's metric plus its
