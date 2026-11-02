@@ -1956,12 +1956,18 @@ metric style; the calculation reads TLV 236 into the same tree, and an
 IPv6 route goes through the neighbour's link-local address. The interop
 test `test_ipv6_routes_both_ways` needs a kernel with IPv6, which the
 sandbox it was written in lacks, so it was first run in CI; there
-`ISIS_SKIP_IPV6=1` is not set and the test must pass. Still owed by gate
-3: setting the attached bit
-on isis4r's own Level 1 LSP when it is at both levels (7.2.9.2), which
-needs Level 2 routes to other areas; external routes and TLV 130. The
-attached bit goes with SPF in gate 3, where the phase list puts it, since
-clause 7.2.9.2 sets it "after computing the level 2 routes". **Phase 2
+`ISIS_SKIP_IPV6=1` is not set and the test must pass. **isis4r sets
+ATT itself** (7.2.9.2): at both levels, its Level 2 Decision Process
+sets the Level 1 originator's AttachedFlag after each run, true when it
+reaches a system whose LSP Number 0 lists no area address of its own
+Level 2 LSP's, and the originator puts the default metric's ATT bit,
+0x08, in Level 1 LSP Number 0 alone; at Level 1 an attached system adds
+no default route, its nearest Level 2 system being "Self". Measured
+2026-11-01 against FRR 8.4.4, isis4r at both levels in 49.0001 between a
+Level 1 FRR and a Level 2 FRR in 49.0002: FRR shows ATT 1/0/0 for
+isis4r's Level 1 LSP and installs a default route to it; when the link
+to 49.0002 goes, ATT clears and the default route goes. Still owed by
+gate 3: external routes and TLV 130. **Phase 2
 gate 4 has begun**: `lib/isis/forwarding/forwarding.rb` turns each change
 in a Decision Process's routes into a route operation, install, replace
 or withdraw, a route this system advertises itself counting as absent,

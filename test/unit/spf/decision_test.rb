@@ -329,3 +329,128 @@ class TestDecisionIpv6 < Minitest::Test
     assert_equal ["fe80::1"], @nodes[:b][:circuit].neighbor.ipv6_addresses
   end
 end
+
+# The AttachedFlag (RFC 1142 7.2.9.2). A, at both levels in 49.0001, runs
+# its Level 2 Decision Process with its Level 1 originator's flag, here a
+# stand-in, and B is its Level 2 neighbour. A is attached when it reaches a
+# system whose areas share none with its own.
+class TestDecisionAttachedFlag < Minitest::Test
+  Flag = Struct.new(:attached)
+  Circuit = TestDecisionDefaultRoute::Circuit
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @log = ISIS::Runtime::Log.new(clock: @clock)
+    @db = ISIS::Database.new(level: 2, clock: @clock)
+    @flag = Flag.new(false)
+    store("a", ["b"], ["49.0001"])
+    adj = ISIS::Spf::Adjacency.new(circuit: "eth-b", neighbor: ISIS::Pdu.dotted_octets("0000.0000.000b"),
+                                   circuit_id: 1, address: "10.0.0.11")
+    @decision = ISIS::Spf::Decision.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler,
+                                        log: @log, attached_flag: @flag)
+    @circuit = Circuit.new([[id("b"), 10, adj]])
+    @decision.attach(@circuit)
+  end
+
+  def id(letter) = (ISIS::Pdu.dotted_octets("0000.0000.000#{letter}") + "\x00".b).b
+
+  def store(letter, links, areas, level: 2, db: @db, attached: [])
+    tlvs = []
+    tlvs << ISIS::Tlv::AreaAddresses.new(areas) unless areas.empty?
+    tlvs << ISIS::Tlv::ExtendedIsReachability.new(links.map do |n|
+      ISIS::Tlv::ExtendedIsReachability::Entry.new(neighbor: id(n), metric: 10)
+    end)
+    lsp = ISIS::Pdu::Lsp.new(level: level, lsp_id: ISIS::Octets.new(id(letter) + "\x00".b), lifetime: 1200,
+                             sequence: 1, tlvs: tlvs, attached: attached)
+    db.entry(lsp.lsp_id).store(lsp)
+  end
+
+  def test_another_area_reached_sets_the_flag
+    store("b", ["a"], ["49.0002"])
+    @decision.run
+    @decision.run
+    assert @flag.attached
+    assert_equal 1, @log.events.count { |e| e.kind == :attached }, "a run that changes nothing logs nothing"
+    event = @log.events.find { |e| e.kind == :attached }
+    assert_match(/reach other area, AttachedFlag set .*RFC 1142 7\.2\.9\.2/, event.message)
+  end
+
+  def test_only_its_own_area_reached_clears_the_flag
+    @flag.attached = true
+    store("b", ["a"], ["49.0001"])
+    @decision.run
+    refute @flag.attached
+  end
+
+  # One area address in common is the same area: an area may have several
+  # (7.2.11).
+  def test_an_area_address_in_common_is_the_same_area
+    store("b", ["a"], %w[49.0001 49.0002])
+    @decision.run
+    refute @flag.attached
+  end
+
+  # A system in another area that is not reached, C, in the database with
+  # no link to anything, does not count.
+  def test_a_system_not_reached_does_not_count
+    store("b", ["a"], ["49.0001"])
+    store("c", [], ["49.0002"])
+    @decision.run
+    refute @flag.attached
+  end
+
+  # The flag follows the routes: the adjacency to B goes, and A cannot
+  # reach another area.
+  def test_the_flag_follows_the_routes
+    store("b", ["a"], ["49.0002"])
+    @decision.run
+    @circuit.adjacencies = []
+    @decision.run
+    refute @flag.attached
+    assert_equal [true, false], @log.events.select { |e| e.kind == :attached }.map { |e| e.data[:attached] }
+  end
+
+  # A pseudonode reached lists no areas and does not count. B reports a
+  # link to its pseudonode B.01, which reports one back, so B.01 is on
+  # PATHS.
+  def test_a_pseudonode_does_not_count
+    pseudo_id = ISIS::Octets.new(id("b").byteslice(0, 6) + "\x01".b)
+    entry = ->(n) { ISIS::Tlv::ExtendedIsReachability::Entry.new(neighbor: n, metric: 10) }
+    b = ISIS::Pdu::Lsp.new(level: 2, lsp_id: ISIS::Octets.new(id("b") + "\x00".b), lifetime: 1200, sequence: 1,
+                           tlvs: [ISIS::Tlv::AreaAddresses.new(["49.0001"]),
+                                  ISIS::Tlv::ExtendedIsReachability.new([entry.call(id("a")), entry.call(pseudo_id)])])
+    pseudo = ISIS::Pdu::Lsp.new(level: 2, lsp_id: ISIS::Octets.new(pseudo_id + "\x00".b), lifetime: 1200,
+                                sequence: 1, tlvs: [ISIS::Tlv::ExtendedIsReachability.new([entry.call(id("b"))])])
+    [b, pseudo].each { |l| @db.entry(l.lsp_id).store(l) }
+    @decision.run
+    assert @decision.paths.key?(pseudo_id.b), "the pseudonode is not on PATHS"
+    refute @flag.attached
+  end
+
+  # Areas are read from LSP Number 0 alone, as 7.2.11 reads them: B's LSP
+  # 0 lists 49.0002 and its LSP 1 a TLV 1 with 49.0001, which does not
+  # make B one of A's area.
+  def test_areas_come_from_lsp_number_zero
+    store("b", ["a"], ["49.0002"])
+    one = ISIS::Pdu::Lsp.new(level: 2, lsp_id: ISIS::Octets.new(id("b") + "\x01".b), lifetime: 1200, sequence: 1,
+                             tlvs: [ISIS::Tlv::AreaAddresses.new(["49.0001"])])
+    @db.entry(one.lsp_id).store(one)
+    @decision.run
+    assert @flag.attached
+  end
+
+  # At Level 1, a system whose own LSP Number 0 is attached adds no default
+  # route: its nearest Level 2 system is itself ("Self", 7.2.9.2), though B
+  # is attached too.
+  def test_an_attached_system_adds_no_default_route
+    db = ISIS::Database.new(level: 1, clock: @clock)
+    store("a", ["b"], ["49.0001"], level: 1, db: db, attached: [:default])
+    store("b", ["a"], ["49.0001"], level: 1, db: db, attached: [:default])
+    adj = ISIS::Spf::Adjacency.new(circuit: "eth-b", neighbor: ISIS::Pdu.dotted_octets("0000.0000.000b"),
+                                   circuit_id: 1, address: "10.0.0.11")
+    d = ISIS::Spf::Decision.new(system_id: "0000.0000.000a", database: db, scheduler: @scheduler, log: @log)
+    d.attach(Circuit.new([[id("b"), 10, adj]]))
+    assert_nil d.run["0.0.0.0/0"]
+  end
+end

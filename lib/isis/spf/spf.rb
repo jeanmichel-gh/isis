@@ -146,6 +146,30 @@ module ISIS
         self
       end
 
+      # True when a system reached is in another area: its LSP Number 0
+      # lists area addresses, none of them among those this system's own
+      # LSP Number 0 lists. Run on the Level 2 database, that is clause
+      # 7.2.9.2's question, whether this system "can reach at least one
+      # other area"; its own Level 2 LSP lists the area's addresses, the
+      # union of 7.2.11. A pseudonode lists no areas, and this system's
+      # own share its own, so neither counts.
+      def reaches_other_area?
+        own = node_info(@self_id)&.fetch(:areas) || []
+        @paths.each_key.any? do |node|
+          areas = node_info(node)&.fetch(:areas) || []
+          !areas.empty? && (areas & own).empty?
+        end
+      end
+
+      # True when this system's own LSP Number 0 sets the default metric's
+      # ATT bit. At Level 1 that is a system at both levels that is
+      # attached, whose nearest Level 2 system is itself (7.2.9.2: "set the
+      # level 1 forwarding database entry for metric k which corresponds to
+      # nearest level 2 Intermediate system to Self").
+      def self_attached?
+        node_info(@self_id)&.fetch(:attached) || false
+      end
+
       private
 
       # Step 1 for P, just placed on PATHS: each neighbour N its LSPs
@@ -231,7 +255,8 @@ module ISIS
         lsps = node_lsps(node)
         @nodes[node] = lsps && { links: read_links(lsps), prefixes: read_prefixes(lsps),
                                  overload: lsps.first.overload?,
-                                 attached: lsps.first.attached.include?(:default) }
+                                 attached: lsps.first.attached.include?(:default),
+                                 areas: read_areas(lsps.first) }
       end
 
       # The LSPs of +node+, LSP Number 0 first, or nil. Clause 7.2.5: "If the
@@ -246,6 +271,11 @@ module ISIS
         return nil unless entries.first&.lsp_id&.getbyte(-1)&.zero?
 
         entries.map(&:lsp)
+      end
+
+      # The area addresses LSP Number 0's TLV 1 lists, as octets.
+      def read_areas(lsp)
+        lsp.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map(&:areas).map(&:octets)
       end
 
       def read_links(lsps)
