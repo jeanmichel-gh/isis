@@ -31,6 +31,22 @@ Out, on purpose: SPF, the LSP database and flooding, SNP exchange,
 multi-level, authentication, and the designated IS election. Those come
 after the refactor.
 
+## Run it as a router
+
+`isisd` reads a YAML file and runs isis4r on real interfaces; `isis-cli`
+asks it what it knows. [docs/isisd.md](docs/isisd.md) has the file and
+the API.
+
+```sh
+sudo ruby -Ilib -I../datalink-socket/lib exe/isisd -c isisd.yml -l -
+sudo ruby exe/isis-cli show adjacencies
+```
+
+In a container, beside FRR, with containerlab:
+[examples/containerlab/isis4r-frr](examples/containerlab/isis4r-frr/isis4r-frr.clab.yml).
+`test/lab/isis4r-frr.sh netns` runs the same lab in network namespaces,
+with no Docker.
+
 ## Run the demo
 
 No privileges needed. It runs two instances on one in-memory wire.

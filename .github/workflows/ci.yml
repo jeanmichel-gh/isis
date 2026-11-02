@@ -82,18 +82,50 @@ jobs:
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
 
+  # The example lab, examples/containerlab/isis4r-frr: the isis4r image
+  # builds and the unit tests pass inside it, then containerlab runs it
+  # beside FRR and test/lab/isis4r-frr.sh checks the routing through it.
+  lab-containerlab:
+    name: lab (containerlab)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: isis
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jeanmichel-gh/datalink-socket
+          path: datalink-socket
+          persist-credentials: false
+      - name: The image, and the unit tests in it
+        working-directory: isis
+        run: |
+          docker build --target test --build-context datalink-socket=../datalink-socket .
+          docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+      - name: containerlab and FRR
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker pull -q quay.io/frrouting/frr:10.2.1
+      - name: The isis4r-frr lab
+        working-directory: isis
+        run: sudo test/lab/isis4r-frr.sh clab
+
   # The one check to require before merging. It passes only if every
-  # matrix job and the FRR interop job passed, so adding or removing a Ruby version never means
+  # matrix job, the FRR interop job and the lab job passed, so adding or removing a Ruby version never means
   # editing the branch rules. A skipped job counts as a failure here.
   ci:
     name: ci
     if: always()
-    needs: [test, interop-frr]
+    needs: [test, interop-frr, lab-containerlab]
     runs-on: ubuntu-latest
     steps:
       - name: All test jobs passed
         run: |
           echo "test: ${{ needs.test.result }}"
           echo "interop-frr: ${{ needs.interop-frr.result }}"
+          echo "lab-containerlab: ${{ needs.lab-containerlab.result }}"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.interop-frr.result }}" = "success"
+          test "${{ needs.lab-containerlab.result }}" = "success"

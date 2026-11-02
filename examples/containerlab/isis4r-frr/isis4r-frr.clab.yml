@@ -1,0 +1,62 @@
+# isis4r between two IS-IS areas, with FRR on each side.
+#
+#   f1 10.255.0.2 ---- r1 10.255.0.1 ---- f2 10.255.0.3
+#   FRR, level 1       isis4r, 1 and 2     FRR, level 2
+#   area 49.0001       area 49.0001        area 49.0002
+#        10.0.12.0/30            10.0.13.0/30
+#
+# Things to watch:
+# - r1 sets the attached bit in its Level 1 LSP, so f1 reaches f2 by a
+#   default route through r1 ("show ip route" on f1).
+# - r1 puts area 49.0001's prefixes into Level 2, so f2 reaches f1's
+#   loopback through r1 ("show isis route" on f2).
+# - r1 installs its routes in its container's kernel ("ip route" on r1,
+#   proto isis), and f1 pings f2's loopback through it.
+# - isis-cli on r1: show adjacencies, show database, show routes.
+#
+# Images: isis4r:latest, built in a checkout of isis4r beside
+# datalink-socket, and FRR:
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+#   docker pull quay.io/frrouting/frr:10.2.1
+# Then copy this folder into ~/labs and start it from routescope's lab
+# menu, or here:
+#   sudo containerlab deploy -t isis4r-frr.clab.yml
+name: isis4r-frr
+
+topology:
+  defaults:
+    labels: { routescope.protocols: isis }
+  nodes:
+    # isisd opens its interfaces when it starts, so it waits for
+    # containerlab to wire them, and has its addresses before it does.
+    r1:
+      kind: linux
+      image: isis4r:latest
+      binds: [r1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.1/30 dev eth1; ip addr add 10.0.13.1/30 dev eth2;
+        ip addr add 10.255.0.1/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    # frr.conf has the addresses too; FRR can miss them on links wired
+    # after it starts. They lose the default route Docker gives them, so
+    # theirs comes from IS-IS.
+    f1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      binds: [f1:/etc/frr]
+      exec:
+        - sh -c "ip route del default dev eth0 2>/dev/null || true"
+        - sh -c "ip addr add 10.0.12.2/30 dev eth1 2>/dev/null || true"
+    f2:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      binds: [f2:/etc/frr]
+      exec:
+        - sh -c "ip route del default dev eth0 2>/dev/null || true"
+        - sh -c "ip addr add 10.0.13.2/30 dev eth1 2>/dev/null || true"
+  links:
+    - endpoints: ["r1:eth1", "f1:eth1"]
+    - endpoints: ["r1:eth2", "f2:eth1"]
