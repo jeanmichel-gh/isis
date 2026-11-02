@@ -19,7 +19,7 @@ module ISIS
   #            with "an appended zero octet (indicating non-pseudonode)",
   #            and on a LAN with a DIS, the DIS's LAN ID, the pseudonode
   #            (7.3.7); at the circuit's metric
-  #   TLV 135  the configured prefixes
+  #   TLV 135  the configured prefixes, then the external prefixes
   #   TLV 232  the IPv6 interface addresses, non-link-local, when there are
   #            any (RFC 5308 section 3: in LSPs, "only the non-link-local
   #            IPv6 addresses assigned to the IS")
@@ -33,6 +33,14 @@ module ISIS
   # 128 in place of 22 and 135, with only the default metric supported,
   # and :transition sends all four, as a router moving between the two
   # does. A metric too large for the narrow six bits raises.
+  #
+  # +external_prefixes+ are prefixes this system takes from outside IS-IS,
+  # { prefix:, metric:, external: }. In the narrow styles they go in TLV
+  # 130, IP External Reachability (RFC 1195 section 5.3.5), allowed at
+  # Level 1 by RFC 5302 section 2.2, with I/E set when +external+ says the
+  # metric is of the external type. In the wide style they go in TLV 135
+  # with the others, since RFC 5305's TLV 135 has no metric type, and
+  # +external+ is not sent.
   #
   # Content that does not fit in one LSP of buffer_size octets goes on in
   # LSP Number 1, 2 and so on, clause 7.3.4's rules: "The Area Addresses
@@ -83,11 +91,11 @@ module ISIS
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
-                  :ipv6_addresses, :ipv6_prefixes
+                  :ipv6_addresses, :ipv6_prefixes, :external_prefixes
     attr_reader :overload, :attached
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
-                   ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
+                   ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
                    ipv6_addresses: [], ipv6_prefixes: [],
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
@@ -111,6 +119,7 @@ module ISIS
       @ipv6_addresses = ipv6_addresses
       @ipv6_prefixes = ipv6_prefixes
       @prefixes = prefixes
+      @external_prefixes = external_prefixes
       raise ArgumentError, "metric style is :wide, :narrow or :transition" unless METRIC_STYLES.include?(metric_style)
 
       @metric_style = metric_style
@@ -369,12 +378,12 @@ module ISIS
 
     # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
     def variable_tlvs
-      reachability(@circuits.filter_map(&:is_neighbor), @prefixes)
+      reachability(@circuits.filter_map(&:is_neighbor), @prefixes, @external_prefixes)
     end
 
     # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
-    # and +prefixes+, in the metric style.
-    def reachability(neighbors, prefixes)
+    # and +prefixes+, then +externals+, in the metric style.
+    def reachability(neighbors, prefixes, externals = [])
       list = []
       if @metric_style != :wide
         # The Virtual Flag takes the first octet of each TLV 2's value, and
@@ -387,11 +396,15 @@ module ISIS
         list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
         reach = prefixes.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
         list.concat(pack(Tlv::IpInternalReachability, reach))
+        reach = externals.map { |p| Tlv::IpExternalReachability.new(p).entries.first }
+        list.concat(pack(Tlv::IpExternalReachability, reach))
       end
       if @metric_style != :narrow
         wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
         list.concat(pack(Tlv::ExtendedIsReachability, wide))
-        reach = prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
+        reach = (prefixes + externals.map { |p| p.slice(:prefix, :metric) }).map do |p|
+          Tlv::ExtendedIpReachability.new(p).entries.first
+        end
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
       reach6 = @ipv6_prefixes.map { |p| Tlv::Ipv6Reachability.new(p).entries.first }

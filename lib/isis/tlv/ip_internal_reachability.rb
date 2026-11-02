@@ -50,6 +50,15 @@ module ISIS
           "#{IPAddr.new_ntoh(@address)}/#{n}"
         end
 
+        # The up/down bit, bit 8 of the default metric octet. RFC 5302
+        # section 2: "L1L2 routers MUST set this bit to one for prefixes
+        # that are derived from L2 routing and are advertised into L1
+        # LSPs." RFC 1195 has it reserved, so it is read here and kept, and
+        # building from field values leaves it clear.
+        def up_down?
+          @metrics.octets.getbyte(0) & NarrowMetrics::S != 0
+        end
+
         def encode
           @metrics.octets + @address + @mask
         end

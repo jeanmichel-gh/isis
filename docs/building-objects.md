@@ -73,6 +73,7 @@ them and fails if one is missing.
 - `ISIS::Tlv::AreaAddresses`
 - `ISIS::Tlv::Authentication`
 - `ISIS::Tlv::IpInternalReachability`
+- `ISIS::Tlv::IpExternalReachability`
 - `ISIS::Tlv::IpInterfaceAddresses`
 - `ISIS::Tlv::Ipv6InterfaceAddresses`
 - `ISIS::Tlv::Ipv6Reachability`
