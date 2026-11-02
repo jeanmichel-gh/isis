@@ -13,6 +13,7 @@ module ISIS
   #
   #   TLV 1    the manual area addresses
   #   TLV 129  the protocols supported
+  #   TLV 137  the hostname, when there is one (RFC 5301)
   #   TLV 132  the IP interface addresses, when there are any
   #   TLV 22   one entry per circuit's is_neighbor: on a point to point
   #            circuit with an adjacency Up, the neighbour's System ID
@@ -107,7 +108,7 @@ module ISIS
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
-                  :ipv6_addresses, :ipv6_prefixes
+                  :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
     attr_reader :overload, :attached
 
@@ -116,7 +117,8 @@ module ISIS
                    ipv6_addresses: [], ipv6_prefixes: [],
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
-                   buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false)
+                   buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
+                   hostname: nil)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -132,6 +134,7 @@ module ISIS
       @log = log
       @areas = areas
       @protocols = protocols
+      @hostname = hostname
       @ip_addresses = ip_addresses
       @ipv6_addresses = ipv6_addresses
       @ipv6_prefixes = ipv6_prefixes
@@ -408,10 +411,12 @@ module ISIS
     private
 
     # The TLVs that open LSP Number 0 and only it: TLV 1, which "shall occur
-    # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129, 132 and
-    # 232.
+    # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129, 137, 132
+    # and 232. RFC 5301 allows TLV 137 in any LSP Number; LSP 0 is our
+    # choice.
     def fixed_tlvs
       list = [Tlv::AreaAddresses.new(area_addresses.map(&:to_s)), Tlv::ProtocolsSupported.new(@protocols)]
+      list << Tlv::DynamicHostname.new(@hostname) if @hostname
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
       list
