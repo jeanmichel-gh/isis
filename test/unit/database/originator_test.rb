@@ -68,6 +68,17 @@ class TestOriginator < Minitest::Test
     assert lsp.checksum_ok?
   end
 
+  # With a hostname, TLV 137 follows TLV 129 in LSP 0 (RFC 5301):
+  #   89 02 7231             "r1"
+  def test_hostname_in_lsp_0
+    orig, = node("0000.0000.000c", "00:00:00:00:00:0c", @log_a, "c-eth1", hostname: "r1",
+                 buffer_size: 100, prefixes: (1..8).map { |i| { prefix: "10.0.#{i}.0/24", metric: 1 } })
+    orig.start
+    assert_equal [0, 1], orig.numbers
+    assert_equal "010403490001" "8101cc" "89027231", orig.database[orig.lsp_id].lsp.tlvs.to_a.first(3).map(&:to_shex).join
+    refute(orig.database[orig.lsp_id(1)].lsp.tlvs.any? { |t| t.is_a?(ISIS::Tlv::DynamicHostname) })
+  end
+
   # Once up, each LSP names the other in TLV 22 at the circuit's metric:
   # 16 0b, 0000000000 0b 00 the neighbour, 00000a metric 10, 00.
   def test_adjacency_up_puts_the_neighbor_in_tlv_22

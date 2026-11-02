@@ -170,9 +170,9 @@ class TestTlvListParsePolicy < Minitest::Test
   end
 
   def test_clamped_tlv_after_a_good_one
-    l = list("0800 89ff 41")
+    l = list("0800 c7ff 41")
     assert_equal [false, true], l.map(&:clamped?)
-    assert_equal "080089ff41", l.to_shex
+    assert_equal "0800c7ff41", l.to_shex
   end
 
   def test_list_from_fields_and_hash
@@ -195,8 +195,8 @@ class TestTlvListParsePolicy < Minitest::Test
   end
 
   def test_to_s_lists_every_tlv_and_the_tail
-    assert_equal "Padding, 0 octets\nTLV 137, 1 octets, declared 255\n",
-                 list("0800 89ff 41").to_s + "\n"
+    assert_equal "Padding, 0 octets\nTLV 199, 1 octets, declared 255\n",
+                 list("0800 c7ff 41").to_s + "\n"
     assert_equal "Padding, 0 octets\ntail, 1 octets", list("0800 ff").to_s
   end
 end

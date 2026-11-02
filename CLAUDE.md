@@ -1735,7 +1735,7 @@ ISO 8473 checksum),
 scheduler and the log, `lib/isis/link/` with the LLC helpers and the socket and
 simulated transports, `lib/isis/tlv/tlv.rb` with the TLV framing, the
 registry, `Tlv::Unknown` and the TLV list, the first TLV classes, 1, 2, 6, 8,
-9, 10, 22, 128, 129, 130, 132, 135, 232, 236 and 240, with `lib/isis/tlv/narrow_metrics.rb`
+9, 10, 22, 128, 129, 130, 132, 135, 137, 232, 236 and 240, with `lib/isis/tlv/narrow_metrics.rb`
 for the four original metric octets TLVs 2 and 128 share and lay out
 differently, with `lib/isis/subtlv/subtlv.rb` holding the
 sub-TLV framing, the per parent registry, `SubTlv::Unknown` and the list
@@ -2067,7 +2067,14 @@ added in isis4r's namespace reaches FRR at its metric plus 10; deleted,
 FRR withdraws it; added again and then no longer redistributed by a
 policy change, FRR withdraws it again. **Phase 3 gate 1 is met against
 FRR 8.4.4**: a change of leak, summary or redistribution policy each
-withdraws the obsolete advertisement and route at FRR. Not yet in
+withdraws the obsolete advertisement and route at FRR. **routescope
+integration has begun**, in the order below: first, the originator takes
+`hostname:` and sends it in TLV 137 in LSP 0 (RFC 5301 section 3), since
+routescope's map finds an IS-IS neighbour by its hostname. Measured
+2026-11-02 against FRR 8.4.4: FRR lists isis4r by that name in `show isis
+hostname` and `show isis neighbor`. Next: `ISIS::Router` built from one
+configuration, an `isisd` with a JSON API over a Unix socket as ospfd
+has, a container image, and an isis4r node kind in routescope. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been

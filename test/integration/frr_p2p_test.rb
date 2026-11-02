@@ -131,6 +131,20 @@ class TestFrrP2p < Minitest::Test
     assert_eventually("isis4r's LSP is still owed to FRR") { @lab.isis4r_database.dig(own, "srm")&.zero? }
   end
 
+  # RFC 5301: with a hostname, isis4r's LSP carries TLV 137, and FRR names
+  # isis4r by it in its hostname table and its neighbour list, which is
+  # how routescope's map finds an IS-IS neighbour.
+  def test_frr_learns_isis4rs_hostname
+    @lab.start(isis4r: { hostname: "isis4r-a" })
+    assert_eventually("adjacency did not come up") { both_up? }
+    assert_eventually("FRR's hostname table does not name isis4r", 30) do
+      @lab.vtysh("show isis hostname").lines.any? { |l| l.split.include?("isis4r-a") && l.include?(FrrLab::ISIS4R_ID) }
+    end
+    assert_eventually("FRR's neighbour list does not name isis4r") do
+      @lab.vtysh("show isis neighbor").lines.any? { |l| l.split.first == "isis4r-a" }
+    end
+  end
+
   # The same with narrow metrics on both sides: FRR's "metric-style
   # narrow" reads only TLVs 2 and 128, so the route can only come from
   # isis4r's narrow encoding. Its metric is the link's 10 plus the
