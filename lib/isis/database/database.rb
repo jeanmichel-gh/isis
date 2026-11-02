@@ -38,7 +38,7 @@ module ISIS
     # clause 7.3.15.2 b 4 asks for when an SNP reports an LSP this system
     # does not have: "create an entry with sequence number 0".
     class Entry
-      attr_reader :lsp_id, :lsp, :sequence, :checksum, :srm, :ssn
+      attr_reader :lsp_id, :lsp, :sequence, :checksum, :srm, :ssn, :hostname
       attr_accessor :timer
 
       def initialize(lsp_id, clock, database = nil)
@@ -51,6 +51,7 @@ module ISIS
         @lifetime = 0
         @stored_at = clock.now
         @lsp = nil
+        @hostname = nil
         @srm = Set.new
         @ssn = Set.new
       end
@@ -58,6 +59,7 @@ module ISIS
       # +retain+, for a purge, is how long its header is kept.
       def store(lsp, retain: nil)
         @lsp = lsp
+        @hostname = name_in(lsp) unless lsp.lifetime.zero?
         @sequence = lsp.sequence
         @checksum = lsp.checksum
         @lifetime = lsp.lifetime
@@ -87,6 +89,22 @@ module ISIS
       # The values an SNP reports for this LSP: clause 9.10's entry fields.
       def snp_entry
         Tlv::LspEntries::Entry.new(remaining_lifetime, @lsp_id, @sequence, @checksum)
+      end
+
+      private
+
+      # The name in TLV 137, from a non-pseudonode LSP (RFC 5301 section 3:
+      # in a pseudonode LSP it "SHOULD NOT be interpreted as the DNS
+      # hostname of the router"). A purge carries no TLVs, so +store+ keeps
+      # the name the LSP had until the header goes. RFC 5301 section 4 says
+      # only that a receiver may "install the symbolic name and system ID
+      # in its hostname mapping table"; how long it stays is our choice,
+      # and it is what FRR 8.4.4 shows, a purge listed by name.
+      def name_in(lsp)
+        return nil unless @lsp_id.getbyte(@lsp_id.bytesize - 2).zero?
+
+        tlv = lsp.tlvs.to_a.grep(Tlv::DynamicHostname).first
+        tlv&.name&.dup&.force_encoding("UTF-8")
       end
     end
 

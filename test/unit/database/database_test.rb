@@ -224,5 +224,35 @@ class TestDatabasePurge < Minitest::Test
     @scheduler.advance(3000)
     refute_nil @db[lsp.lsp_id]
   end
-end
 
+  def named(lsp_id: "0000.0000.00cc.00-00", sequence: 5, name: "cc")
+    tlvs = [ISIS::Tlv::AreaAddresses.new("49.0001")]
+    tlvs << ISIS::Tlv::DynamicHostname.new(name) if name
+    l = ISIS::Pdu::Lsp.new(level: 1, lsp_id: lsp_id, lifetime: 1200, sequence: sequence, tlvs: tlvs)
+    @db.entry(l.lsp_id).store(l)
+  end
+
+  # The name in TLV 137 stays with the entry through its purge, whose
+  # header carries no TLVs, and goes with the header.
+  def test_a_purge_keeps_the_hostname_until_the_header_goes
+    entry = named
+    assert_equal "cc", entry.hostname
+    @db.purge(entry, "test")
+    assert_equal 0, entry.lsp.tlvs.size
+    assert_equal "cc", entry.hostname
+    @scheduler.advance(ISIS::Database::ZERO_AGE_LIFETIME)
+    assert_nil @db[entry.lsp_id]
+  end
+
+  # A newer LSP with no TLV 137 means the system dropped its name.
+  def test_a_newer_lsp_without_a_name_drops_it
+    named
+    assert_nil named(sequence: 6, name: nil).hostname
+  end
+
+  # RFC 5301 section 3: in a pseudonode LSP the TLV "SHOULD NOT be
+  # interpreted as the DNS hostname of the router".
+  def test_a_pseudonode_lsp_names_nothing
+    assert_nil named(lsp_id: "0000.0000.00cc.01-00").hostname
+  end
+end

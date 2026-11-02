@@ -73,6 +73,19 @@ class TestDaemonViews < Minitest::Test
     assert_equal [], views.database(level: 2)
   end
 
+  # A purge carries no TLV 137, and is still listed by the name its LSP
+  # had, as FRR 8.4.4 lists one.
+  def test_database_names_a_purge
+    views, a, = p2p_pair
+    db = a.databases[1]
+    entry = db.entries.find { _1.lsp_id_s == "0000.0000.000b.00-00" }
+    db.purge(entry, "test")
+    row = views.database.find { _1[:lsp_id] == "0000.0000.000b.00-00" }
+    assert row[:purged]
+    assert_equal "b", row[:hostname]
+    assert_equal "b", views.hostnames["0000.0000.000b"]
+  end
+
   def test_routes
     views, = p2p_pair
     route = views.routes.find { _1[:prefix] == "192.0.2.11/32" }
