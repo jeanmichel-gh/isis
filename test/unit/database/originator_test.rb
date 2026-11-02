@@ -79,6 +79,14 @@ class TestOriginator < Minitest::Test
     refute(orig.database[orig.lsp_id(1)].lsp.tlvs.any? { |t| t.is_a?(ISIS::Tlv::DynamicHostname) })
   end
 
+  # A shorter Remaining Lifetime than MaxAge, for a simulator whose LSPs
+  # should run out within a test.
+  def test_lifetime
+    orig, = node("0000.0000.000c", "00:00:00:00:00:0c", @log_a, "c-eth1", lifetime: 120)
+    orig.start
+    assert_equal 120, orig.database[orig.lsp_id].lsp.lifetime
+  end
+
   # Once up, each LSP names the other in TLV 22 at the circuit's metric:
   # 16 0b, 0000000000 0b 00 the neighbour, 00000a metric 10, 00.
   def test_adjacency_up_puts_the_neighbor_in_tlv_22

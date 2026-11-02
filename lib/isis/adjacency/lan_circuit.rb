@@ -182,7 +182,7 @@ module ISIS
     # The originators whose LSPs this circuit may receive copies of: this
     # system's own and, while it is DIS, the pseudonode's.
     def generators
-      [@originator, @pseudonode].compact
+      [@originator, @pseudonode].compact + @database.generators
     end
 
     # What this circuit puts in its system's IS reachability: the

@@ -25,6 +25,12 @@ class TestDocsSimulator < Minitest::Test
   def test_prefixes = check("prefixes and externals", T::PREFIX_KEYS)
   def test_links = check("links", T::LINK_KEYS)
 
+  def test_actions
+    documented = DOC[/^## Actions\n(.*?)(?=\n## )/m, 1].scan(/^\| `([a-z.]+)` \|/).flatten
+    assert_equal ISIS::Sim::Simulator::ACTIONS.keys.sort, documented.sort
+    ISIS::Sim::Simulator::ACTIONS.each_value { |m| assert ISIS::Sim::Simulator.method_defined?(m), m }
+  end
+
   # The example in the guide loads.
   def test_the_example_loads
     yaml = DOC[/```yaml\n(.*?)```/m, 1]

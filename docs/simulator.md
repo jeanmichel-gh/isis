@@ -5,9 +5,32 @@ system with real adjacencies, whose databases also hold the LSPs of
 simulated systems. Its neighbours flood them and run SPF over them like
 any others. The design follows ospfv2's OSPF simulator.
 
-**Status.** The file and its loader exist (`ISIS::Sim::Topology`). The
-simulator that turns a topology into LSPs, the `isis4r-sim` program and
-its `sim.*` API methods come next.
+**Status.** The file and its loader (`ISIS::Sim::Topology`) and the
+simulator (`ISIS::Sim::Simulator`) exist. The `isis4r-sim` program and its
+`sim.*` API methods come next.
+
+## How it works
+
+The simulator's own system is an ordinary `ISIS::Router`, with real
+circuits. Each simulated system is an ordinary `ISIS::Originator` that
+writes into that Router's databases, one per level the system and the
+simulator share. So every simulated LSP is built like isis4r's own: right
+sequence numbers, checksums and lifetimes, refreshed in time, split over
+LSP Numbers as its buffer size needs.
+
+- A link is an entry in each end's IS reachability, while it is up. A
+  one way link leaves out the far end's.
+- The LSPs are flooded on the Router's circuits, so a neighbour learns
+  them over its adjacency with the simulator like any others.
+- Each database keeps the simulated originators as generators, so the
+  update process treats their LSPs as this system's own: a newer copy is
+  generated past (RFC 1142 7.3.16.1), and a neighbour's purge of one still
+  held is answered by generating it again (7.3.16.4 c).
+- After a flush, or with aging off, the simulator generates nothing, and
+  copies that arrive are held like any other system's.
+- `lsp_lifetime` is the Remaining Lifetime each simulated LSP starts
+  with, and each is refreshed at three quarters of it, or the usual 900 s
+  when that is sooner.
 
 ## The file
 
@@ -102,12 +125,36 @@ The first prefix names the group, which is how an action withdraws it.
 | `from` | a system |
 | `to` | another system |
 | `metric` | 10 by default |
-| `one_way` | only `from` lists `to`, so the two-way check fails on purpose |
+| `one_way` | only `from` lists `to`, so the two-way check (RFC 1142 7.2.8.2) fails on purpose; FRR 8.4.4 routes over it anyway, measured 2026-11-02 |
 | `state` | `up` (the default) or `down` |
 
 A link is named `from--to` and found either way round, or by its number
 from 1. It is carried at the levels both ends run, and at Level 1 only
 when they share an area. A link with no level left is refused.
+
+## Actions
+
+Each changes the topology and generates the LSPs it touches again, and
+logs what it did at info. A link is named `from--to`, either way round, or
+by its number from 1.
+
+| Action | Does |
+|---|---|
+| `link.down` | the link's two entries leave both ends' LSPs |
+| `link.up` | they come back |
+| `link.toggle` | down if up, up if down |
+| `link.flap` | down and up `count` times, `interval` seconds each way |
+| `link.metric` | a new metric, within the metric style |
+| `router.overload` | the OL bit in that system's LSP Number 0, `on` true or false |
+| `router.attached` | the default metric ATT bit in its Level 1 LSP Number 0 |
+| `prefixes.withdraw` | a prefix group, named by its first prefix, leaves its LSPs |
+| `prefixes.advertise` | the group comes back |
+| `refresh` | every simulated LSP generated again, at the next sequence |
+| `flush` | every simulated LSP purged (RFC 1142 7.3.16.4) |
+| `restore` | after a flush, every one generated again past its purge |
+| `aging` | `on` false stops refreshes, so the LSPs run out; true generates them at once |
+| `neighbor.stop` | the simulator's hellos stop, on one `circuit` or all |
+| `neighbor.start` | they start again |
 
 ## What it refuses, and what it keeps
 
