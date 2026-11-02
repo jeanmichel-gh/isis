@@ -1,0 +1,92 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# isis-cli: asks a running isisd over its API socket and prints the answer.
+#
+#   isis-cli show adjacencies
+#   isis-cli show database 2
+#   isis-cli show routes --json
+#   isis-cli events                 follow the event stream
+#   isis-cli call show.log '{"count": 20}'
+#
+# Without --json, a list prints as a table and anything else as JSON.
+
+require "json"
+require "optparse"
+require "socket"
+
+SOCKET = "/run/isis4r/isisd.sock"
+options = { socket: SOCKET, json: false }
+parser = OptionParser.new do |o|
+  o.banner = "usage: isis-cli [options] show WHAT [LEVEL] | events | call METHOD [PARAMS]\n" \
+             "  WHAT: overview interfaces adjacencies database routes hostnames log configuration"
+  o.on("-s", "--socket PATH", "the API socket (#{SOCKET})") { options[:socket] = _1 }
+  o.on("-j", "--json", "print the answer as JSON") { options[:json] = true }
+end
+parser.parse!
+
+def connect(path)
+  UNIXSocket.new(path)
+rescue SystemCallError => e
+  abort "isis-cli: cannot reach isisd at #{path}: #{e.message}"
+end
+
+def call(path, method, params = {})
+  s = connect(path)
+  s.write(JSON.generate(id: 1, method: method, params: params) + "\n")
+  r = JSON.parse(s.gets || abort("isis-cli: isisd closed the connection"))
+  abort "isis-cli: #{r['error']}" if r["error"]
+  r["result"]
+end
+
+def cell(value)
+  case value
+  when Array then value.map { _1.is_a?(Hash) ? _1.values.compact.join(" ") : _1.to_s }.join(", ")
+  when Hash then value.map { |k, v| "#{k}=#{v}" }.join(" ")
+  when nil then "-"
+  else value.to_s
+  end
+end
+
+def table(rows)
+  return puts("(none)") if rows.empty?
+
+  keys = rows.flat_map(&:keys).uniq
+  cells = rows.map { |r| keys.map { |k| cell(r[k]) } }
+  widths = keys.each_index.map { |i| ([keys[i]] + cells.map { _1[i] }).map(&:size).max }
+  puts keys.each_with_index.map { |k, i| k.ljust(widths[i]) }.join("  ").rstrip
+  cells.each { |c| puts c.each_with_index.map { |v, i| v.ljust(widths[i]) }.join("  ").rstrip }
+end
+
+def print_result(result, json)
+  if json || !(result.is_a?(Array) && result.all?(Hash))
+    puts JSON.pretty_generate(result)
+  else
+    table(result)
+  end
+end
+
+command = ARGV.shift
+case command
+when "show"
+  what = ARGV.shift or abort parser.banner
+  params = {}
+  params["level"] = Integer(ARGV.shift) if %w[database routes].include?(what) && ARGV.first
+  params["count"] = Integer(ARGV.shift) if what == "log" && ARGV.first
+  print_result(call(options[:socket], "show.#{what}", params), options[:json])
+when "call"
+  method = ARGV.shift or abort parser.banner
+  print_result(call(options[:socket], method, ARGV.first ? JSON.parse(ARGV.first) : {}), options[:json])
+when "events"
+  s = connect(options[:socket])
+  s.write(JSON.generate(id: 1, method: "events.subscribe", params: {}) + "\n")
+  $stdout.sync = true
+  while (line = s.gets)
+    m = JSON.parse(line)
+    next unless (e = m["event"])
+
+    puts options[:json] ? line : [e["time"], e["level"].ljust(5), e["circuit"], e["message"]].compact.join(" ")
+  end
+else
+  abort parser.banner
+end

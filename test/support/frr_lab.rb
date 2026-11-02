@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "json"
+require "socket"
+require "yaml"
 require "fileutils"
 require "tmpdir"
 require "open3"
@@ -114,8 +116,9 @@ class FrrLab
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
-            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil)
+            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false)
     cleanup
+    @daemon = daemon
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
     sh "ip link add veth0 netns #{@isis_ns} type veth peer name veth0 netns #{@frr_ns}"
@@ -480,6 +483,45 @@ class FrrLab
     system("ip netns exec #{@host_ns} ping -c 1 -W 1 #{address} >/dev/null 2>&1")
   end
 
+  # With +daemon+, isis4r runs as exe/isisd, from a YAML file made from
+  # the runner's configuration, and answers on its API socket; there is
+  # no state file.
+  def start_isisd(config)
+    lan = config[:network] == "broadcast"
+    iface = { "name" => config[:interface], "network" => lan ? "broadcast" : "point-to-point",
+              "ip_addresses" => config[:ip_addresses], "hello_interval" => config[:hello_interval],
+              "hello_multiplier" => config[:hello_multiplier] }
+    yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier)
+                 .merge(interfaces: [iface], minimum_lsp_interval: config.fetch(:minimum_lsp_interval, 1))
+    File.write(isisd_config, JSON.parse(JSON.generate(yaml)).to_yaml)
+    @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby, "#{ROOT}/exe/isisd",
+                              "-c", isisd_config, "-s", isisd_socket, "-l", "-", "-d",
+                              %i[out err] => File.join(@dir, "isis4r.log"))
+  end
+
+  def isisd_config = File.join(@dir, "isisd.yml")
+  def isisd_socket = File.join(@dir, "isisd.sock")
+
+  # One isisd API call: its result, or raises with its error.
+  def isisd(method, params = {})
+    s = UNIXSocket.new(isisd_socket)
+    s.write(JSON.generate(id: 1, method: method, params: params) + "\n")
+    r = JSON.parse(s.gets)
+    raise r["error"] if r["error"]
+
+    r["result"]
+  ensure
+    s&.close
+  end
+
+  # isis-cli's answer, as text.
+  def isis_cli(*args)
+    out, err, status = Open3.capture3(RbConfig.ruby, "#{ROOT}/exe/isis-cli", "-s", isisd_socket, *args)
+    raise "isis-cli #{args.join(' ')}: #{err}" unless status.success?
+
+    out
+  end
+
   private
 
   def state_file = File.join(@dir, "state.json")
@@ -606,6 +648,8 @@ class FrrLab
   end
 
   def start_isis4r(config)
+    return start_isisd(config) if @daemon
+
     File.write(File.join(@dir, "isis4r.json"), JSON.generate(config))
     @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby,
                               "#{ROOT}/test/support/isis_runner.rb", File.join(@dir, "isis4r.json"), state_file,

@@ -123,6 +123,8 @@ lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
 lib/isis/router.rb         a whole system from one configuration;
                            router/host.rb, the Linux host it runs on
+lib/isis/daemon.rb         isisd: a Router on the real clock, with its
+                           management API in daemon/
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/docs/                 the tests that hold each guide in docs/ to the code
@@ -2080,9 +2082,20 @@ databases, originators and Decision Processes per level, a circuit per
 interface, a LAN circuit per level on a broadcast one, and the leak and
 summary at both levels; `Router::Host` gives it the Linux links, netlink
 and the route source. The interop runner now runs through it, and the
-interop suite passes unchanged. Next: an `isisd` with a JSON API over a
-Unix socket as ospfd has, a container image, and an isis4r node kind in
-routescope. Not yet in
+interop suite passes unchanged. Then `exe/isisd`, `lib/isis/daemon.rb`:
+a Router from a YAML file on the real clock, with `-l` and `-d`, and its
+management API (`lib/isis/daemon/api.rb`), JSON lines over a Unix socket
+in ospfd's shape, served from the router's own loop and thread, so a
+request is answered between two turns of the protocol: what it shows
+(`daemon/views.rb`), policy changes, and an event stream. `exe/isis-cli`
+asks it. `docs/isisd.md` lists every method, held to the API by
+`test/docs/isisd_test.rb`. Measured 2026-11-02 against FRR 8.4.4
+(`test/integration/frr_isisd_test.rb`): isisd from its file brings the
+adjacency up, names FRR by its hostname, and shows FRR's LSP at FRR's
+sequence and the route to FRR's loopback. Measured on the way: YAML
+reads an area 49.0010 as the number 49.001, so isisd reads the areas as
+the file wrote them. routescope reads isisd through this API. Next: a
+container image, and a lab with isis4r and FRR that routescope shows. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
