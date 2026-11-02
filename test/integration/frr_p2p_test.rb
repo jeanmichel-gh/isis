@@ -183,6 +183,28 @@ class TestFrrP2p < Minitest::Test
     end
   end
 
+  # Redistribution through the netlink adapter (Phase 3 gate 1): isis4r
+  # takes its kernel's static routes at 5. A blackhole route added in its
+  # namespace, protocol boot as `ip route add` gives it, reaches FRR at 5
+  # + 10 through isis4r; deleted, FRR withdraws it. Added again, it comes
+  # back; then a policy change through the control file, redistributing
+  # nothing, withdraws it with the route still in isis4r's kernel.
+  def test_redistributed_static_routes_follow_the_kernel_and_the_policy
+    @lab.start(isis4r: { redistribute: { kinds: ["static"], metric: 5 } })
+    route = -> { @lab.frr_isis_routes["198.18.7.0/24"] }
+    via = { "metric" => 15, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    assert_eventually("adjacency did not come up") { both_up? }
+    @lab.isis4r_ip("route add blackhole 198.18.7.0/24")
+    assert_eventually("FRR did not install the redistributed route at 15", 60) { route.call == via }
+    @lab.isis4r_ip("route del blackhole 198.18.7.0/24")
+    assert_eventually("FRR kept the route deleted from isis4r's kernel", 30) { route.call.nil? }
+    @lab.isis4r_ip("route add blackhole 198.18.7.0/24")
+    assert_eventually("FRR did not install the route added again", 30) { route.call == via }
+    @lab.isis4r_control(redistribute: [])
+    assert_eventually("FRR kept the route no longer redistributed", 30) { route.call.nil? }
+    assert_includes @lab.isis4r_log, "198.18.7.0/24 no longer redistributed", @lab.report
+  end
+
   # Gate 3, authentication. FRR's "isis password md5" keys the hellos and
   # "area-password md5 ... authenticate snp validate" keys and checks the
   # Level 1 LSPs and SNPs, RFC 5304 HMAC-MD5 both.

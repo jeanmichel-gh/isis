@@ -139,6 +139,19 @@ leak = both ? ISIS::Spf::Leak.new(originator: originators[1], log: log, policy: 
 # metric: }, in place of what each covers.
 summary = both ? ISIS::Spf::Summary.new(originator: originators[2], log: log, summaries: config.fetch(:summaries, [])) : nil
 
+# With :redistribute, { kinds:, metric:, external:, interval: }, a
+# Redistribution per level takes the kernel's connected or static routes
+# as external prefixes, read through a netlink adapter of its own.
+redistributions = []
+if (r = config[:redistribute])
+  source = ISIS::Forwarding::Netlink.new(log: log)
+  redistributions = levels.map do |l|
+    ISIS::Redistribution.new(originator: originators[l], scheduler: scheduler, log: log, source: source,
+                             kinds: r.fetch(:kinds, []), metric: r.fetch(:metric, 0),
+                             external: r.fetch(:external, false), interval: r.fetch(:interval, 1))
+  end
+end
+
 # A Decision Process per level, with the circuit, or the point to point
 # circuit's level, as its first hops. At both levels the Level 2 one sets
 # the Level 1 originator's AttachedFlag (RFC 1142 7.2.9.2).
@@ -196,9 +209,11 @@ originators.each_value(&:start)
 circuits.values.uniq.each(&:start)
 extras.each { |c, _| c.start }
 decisions.each_value(&:start)
+redistributions.each(&:start)
 # A test changes policy while isis4r runs by writing STATE.json.control,
 # JSON with any of: leak, a new list of covering prefixes; summaries, a
-# new list of { prefix:, metric: }. Read when its modification time moves.
+# new list of { prefix:, metric: }; redistribute, a new list of kinds.
+# Read when its modification time moves.
 control_file = "#{state_file}.control"
 control_seen = nil
 apply_control = lambda do
@@ -210,6 +225,10 @@ apply_control = lambda do
   if control.key?(:leak) && leak
     log.info("control: leak #{control[:leak].inspect}")
     leak.policy = leak_policy.call(control[:leak])
+  end
+  if control.key?(:redistribute)
+    log.info("control: redistribute #{control[:redistribute].inspect}")
+    redistributions.each { |red| red.kinds = control[:redistribute] }
   end
   if control.key?(:summaries) && summary
     log.info("control: summaries #{control[:summaries].inspect}")

@@ -141,9 +141,9 @@ class TestForwardingNetlink < Minitest::Test
   end
 
   # A dumped route: nlmsghdr type RTM_NEWROUTE, an rtmsg, then attributes.
-  def dumped(sequence, prefix, len, protocol, priority)
+  def dumped(sequence, prefix, len, protocol, priority, scope: 0, type: 1)
     addr = IPAddr.new(prefix).hton
-    body = [2, len, 0, 0, 254, protocol, 0, 1, 0].pack("C8L") +
+    body = [2, len, 0, 0, 254, protocol, scope, type, 0].pack("C8L") +
            [8, 1].pack("SS") + addr + [8, 6, priority].pack("SSL")
     [16 + body.bytesize, 24, 2, sequence, 0].pack("LSSLL") + body
   end
@@ -160,5 +160,16 @@ class TestForwardingNetlink < Minitest::Test
     assert_equal 2, @socket.sent.size
     assert_equal hex(ISIS::Forwarding::Netlink.new(log: @log, socket: nil).tap { |n| n.instance_variable_set(:@sequence, 1) }
                         .delete_message(:ipv4, "192.0.2.2/32")), hex(@socket.sent.last)
+  end
+
+  # The kernel's routes for Redistribution, scope and type included: here a
+  # connected subnet, protocol kernel 2, scope link 253.
+  def test_routes_reads_the_table
+    done = [20, 3, 2, 1, 0].pack("LSSLL") + [0].pack("l")
+    @socket.queue(dumped(1, "10.0.12.0", 24, 2, 0, scope: 253), dumped(1, "198.18.7.0", 24, 3, 0, type: 6))
+    @socket.queue(done)
+    assert_equal [{ family: :ipv4, prefix: "10.0.12.0/24", table: 254, protocol: 2, scope: 253, type: 1, priority: 0 },
+                  { family: :ipv4, prefix: "198.18.7.0/24", table: 254, protocol: 3, scope: 0, type: 6, priority: 0 }],
+                 @nl.routes
   end
 end
