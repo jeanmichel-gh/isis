@@ -124,6 +124,8 @@ lib/isis/forwarding/       forwarding adapters, one per platform, each
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/docs/                 the tests that hold each guide in docs/ to the code
+test/scenario/             router scenarios on simulated time, run with and
+                           without controls: pass-through equivalence
 test/fixtures/             PDUs captured from real routers, as hex, named
                            for the router and version that sent them
 test/functional/           tests that put PDUs on a real interface
@@ -243,6 +245,11 @@ through unchanged. The two runs must produce:
 **Final routes alone are not enough.** A hook that causes one transient
 withdrawal or one extra flood ends in the same routes and is still a
 defect.
+
+It runs in the suite as `test/scenario/pass_through_test.rb`, with the
+pass-through control in `test/support/pass_through.rb`. A new mechanism
+object joins the list the test controls, and its class joins the list
+the test asserts ran through a control.
 
 ### Logging and events
 
@@ -1975,8 +1982,25 @@ path left, the host still reaches the loopback, and no route of
 isis4r's is left on that link. Measured on the way: a new namespace
 starts with forwarding off and zebra leaves it so, so the lab turns it
 on in the FRRs' namespaces when there is a host; and the lab needs
-`ping`, from iputils-ping. Still owed by gate 4: pass-through
-equivalence. Not yet in
+`ping`, from iputils-ping. **Pass-through equivalence runs in the
+suite**: `test/scenario/pass_through_test.rb` runs one scenario, A and B
+on a point to point link and B, C and D on a LAN, through an overload, a
+cut and restored link and a silenced DIS, four ways: plain, with every
+control installed, with logging at debug, and with both. A control is a
+method replaced on the object that runs a mechanism, so
+`test/support/pass_through.rb` replaces every method of every mechanism
+object, the scheduler, transports, circuits, point to point levels,
+databases, originators, pseudonodes, decision processes, the forwarding
+adapter and the log, with one that calls the original. The four runs
+must give the same packets per circuit, sent and received in order, the
+same adjacencies, databases with their SRM and SSN flags, and routes at
+each half second, and the same route operations; the test also shows
+every kind of mechanism ran through its control. Shown by sabotage: a
+debug line with a side effect, a control that sends one extra hello, one
+that shifts a timer by a millisecond, and one that withdraws and
+reinstalls routes that end the same each fail it. **Phase 2 gate 4 is
+met against FRR 8.4.4**, measured 2026-11-01, with IPv6 traffic shown in
+CI. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
