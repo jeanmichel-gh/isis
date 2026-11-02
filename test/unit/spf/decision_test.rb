@@ -71,6 +71,21 @@ class TestDecisionP2p < Minitest::Test
     assert_equal ["192.0.2.2/32"], removed.map { |e| e.data[:prefix] }
   end
 
+  # Each change goes to the forwarding adapter as a route operation: an
+  # install when B's prefix appears, a withdrawal when the adjacency goes.
+  # A's own prefix is local and is never an operation.
+  def test_changes_go_to_the_forwarding_adapter
+    recorder = ISIS::Forwarding::Recorder.new
+    @nodes[:a][:decision].forwarding = recorder
+    start(:a, :b)
+    run_for(10)
+    assert_equal ["install 192.0.2.2/32 metric 11 via 10.0.12.2 via a-eth1"], recorder.operations.map(&:to_s)
+    assert_equal [1], recorder.operations.map(&:level)
+    @nodes[:a][:orig].define_singleton_method(:changed) { |_reason| nil }
+    run_for(4, only: [:a])
+    assert_equal ["withdraw 192.0.2.2/32"], recorder.operations.drop(1).map(&:to_s)
+  end
+
   # A route added is logged at info, as an event a test can read.
   def test_a_new_route_is_an_event
     start(:a, :b)

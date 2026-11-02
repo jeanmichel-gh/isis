@@ -114,11 +114,24 @@ extras = config.fetch(:extra_interfaces, []).each_with_index.map do |x, i|
   [circuit, xtransport]
 end
 
+# With :forwarding, a netlink adapter per level installs the routes in
+# this namespace's kernel, Level 1 at priority 21 and Level 2 at 22, so a
+# prefix both reach goes by Level 1 (RFC 1142 7.2.12). Each starts by
+# flushing what an earlier run left, and flushes again on stop.
+adapters = {}
+if config.fetch(:forwarding, false)
+  names = lan && both ? levels.to_h { |l| ["#{iface}-l#{l}", iface] } : {}
+  levels.each do |l|
+    adapters[l] = ISIS::Forwarding::Netlink.new(log: log, priority: 20 + l, interfaces: names)
+    adapters[l].flush
+  end
+end
+
 # A Decision Process per level, with the circuit, or the point to point
 # circuit's level, as its first hops.
 decisions = levels.to_h do |l|
   decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
-                                     scheduler: scheduler, log: log)
+                                     scheduler: scheduler, log: log, forwarding: adapters[l])
   decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
   extras.each { |c, _| decision.attach(c.levels.fetch(l)) }
   [l, decision]
@@ -191,5 +204,6 @@ end
 circuits.values.uniq.each(&:stop)
 extras.each { |c, _| c.stop }
 originators.each_value(&:stop)
+adapters.each_value { |a| a.flush; a.close }
 write_state.call
 socket.close

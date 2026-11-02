@@ -4,8 +4,9 @@ module ISIS
   module Spf
     # The Decision Process for one level (RFC 1142 7.2): it runs the
     # calculation when its input changes and keeps the routes it found. It
-    # computes routes and installs none; route installation is a later
-    # mechanism.
+    # computes routes and hands each change to +forwarding+, an adapter
+    # (lib/isis/forwarding/), as a route operation: install, replace or
+    # withdraw. With no adapter it installs nothing.
     #
     # Its input is clause 7.2.1's: the link state database, and "a signal
     # from the Update Process that a change to a link has occurred". So it
@@ -29,10 +30,10 @@ module ISIS
     # reason that started the run, and each run at debug.
     class Decision
       attr_reader :system_id, :database, :circuits, :routes, :paths, :runs
-      attr_accessor :max_path_splits, :max_path_metric, :delay
+      attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
-                     max_path_metric: MAX_PATH_METRIC, delay: 0)
+                     max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil)
         @system_id = system_id
         @database = database
         @scheduler = scheduler
@@ -40,6 +41,7 @@ module ISIS
         @max_path_splits = max_path_splits
         @max_path_metric = max_path_metric
         @delay = delay
+        @forwarding = forwarding
         @circuits = []
         @routes = {}
         @paths = {}
@@ -108,6 +110,7 @@ module ISIS
         @log.debug("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
                    "after #{why} (RFC 1142 7.2, Annex C.2)")
         report(before, @routes, why)
+        install(before, @routes)
         @routes
       end
 
@@ -130,6 +133,13 @@ module ISIS
         return if held && held.metric <= attached.distance
 
         @routes[DEFAULT] = Route.new(DEFAULT, attached.distance, attached.adjacencies)
+      end
+
+      # Each route operation, in prefix order, to the adapter.
+      def install(before, after)
+        return unless @forwarding
+
+        Forwarding.operations(before, after, level: level).each { |op| @forwarding.apply(op) }
       end
 
       def report(before, after, why)
