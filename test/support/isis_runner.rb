@@ -49,7 +49,8 @@ levels.each do |level|
                          area_key: config[:area_key],
                          minimum_interval: config.fetch(:minimum_lsp_interval, 1), is_type: both ? 3 : nil,
                          buffer_size: config.fetch(:lsp_buffer_size, ISIS::Originator::LSP_BUFFER_SIZE),
-                         level1_database: level == 2 ? databases[1] : nil)
+                         level1_database: level == 2 ? databases[1] : nil,
+                         overload: config.fetch(:overload, false))
   next unless lan
 
   circuits[level] =

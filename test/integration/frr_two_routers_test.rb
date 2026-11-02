@@ -138,4 +138,55 @@ class TestFrrTwoRouters < Minitest::Test
     end
     assert_equal through_first, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric"), @lab.report
   end
+
+  # Overload (RFC 1142 7.2.8.1 and 7.3.19.1) in a triangle where isis4r is
+  # the cheap way between the two FRRs: its links at 10, the FRRs' own link
+  # at 50. So the first FRR reaches the far loopback through isis4r, at
+  # 10 + 10 + 10. Measured on FRR 8.4.4: an "isis metric" over 63 in its
+  # startup file is dropped, missing from its running configuration, so
+  # the expensive links here stay under it.
+  def triangle(**isis4r)
+    @lab.start(isis4r: isis4r, frr2: { is_type: "level-1", loopback: FRR2_LOOPBACK, link_metric: 50,
+                                       isis4r_link: { frr_metric: 10, isis4r_metric: 10 } })
+  end
+
+  def test_without_overload_frr_goes_through_isis4r
+    triangle
+    assert_eventually("the first FRR does not reach the far loopback through isis4r at 30", 60) do
+      @lab.frr_isis_routes[FRR2_LOOPBACK] == { "metric" => 30, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+  end
+
+  # With isis4r overloaded, FRR takes the expensive link, 50 + 10, and
+  # still reaches isis4r's own prefix, which 7.2.8.1 lets it use. FRR shows
+  # the bit as the OL column of isis4r's LSP.
+  def test_frr_does_not_route_through_an_overloaded_isis4r
+    triangle(overload: true)
+    assert_eventually("the first FRR does not take its own link to the far loopback", 60) do
+      @lab.frr_isis_routes[FRR2_LOOPBACK] == { "metric" => 60, "interface" => "veth1", "next_hop" => "10.0.23.3" }
+    end
+    assert_match(/^#{Regexp.escape(own(FrrLab::ISIS4R_ID))}\s+\d+\s+0x\h+\s+0x\h+\s+\d+\s+0\/0\/1/,
+                 @lab.vtysh("show isis database"), @lab.report)
+    assert_eventually("the first FRR does not reach isis4r's own prefix", 30) do
+      @lab.frr_isis_routes.dig("192.0.2.1/32", "next_hop") == "10.0.12.1"
+    end
+  end
+
+  # The other way: the first FRR overloaded with set-overload-bit, and
+  # isis4r's direct link to the far FRR at 50, so isis4r would go through
+  # the first FRR, 10 + 10 + 10, and must not: it goes direct, 50 + 10.
+  # The first FRR's own prefixes stay reachable through it.
+  def test_isis4r_does_not_route_through_an_overloaded_frr
+    @lab.start(frr_router: ["set-overload-bit"],
+               frr2: { is_type: "level-1", loopback: FRR2_LOOPBACK,
+                       isis4r_link: { frr_metric: 50, isis4r_metric: 50 } })
+    assert_eventually("isis4r does not go direct to the far loopback at 60", 60) do
+      @lab.isis4r_routes[FRR2_LOOPBACK] ==
+        { "prefix" => FRR2_LOOPBACK, "metric" => 60,
+          "next_hops" => [{ "address" => "10.0.13.3", "circuit" => "veth1" }] }
+    end
+    assert_eventually("isis4r does not reach the first FRR's 10.0.23.0/24 through it", 30) do
+      @lab.isis4r_routes.dig("10.0.23.0/24", "next_hops")&.include?({ "address" => "10.0.12.2", "circuit" => "veth0" })
+    end
+  end
 end

@@ -83,7 +83,9 @@ class FrrLab
   # the lab's level.
   # +frr2+ adds a second FRR behind the first, on a point to point link:
   # { is_type: "level-2-only", area: "49.0002", loopback: "198.51.100.3/32",
-  # interface: [lines], isis4r_link: { frr_metric:, isis4r_metric: } }. The
+  # interface: [lines], link_metric:, isis4r_link: { frr_metric:,
+  # isis4r_metric: } }. link_metric is the metric of the link between the
+  # two FRRs, on both its ends, FRR's default 10 without it. The
   # link runs the levels is_type names, on both its ends. With isis4r_link,
   # isis4r's veth1, 10.0.13.1, joins the second FRR's veth1, 10.0.13.3, as
   # well, at those metrics.
@@ -403,7 +405,7 @@ class FrrLab
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
       #{@frr_loopback ? "interface lo\n ip router isis LAB\n isis passive" : ''}
-      #{@frr2 ? frr2_link_stanza("veth1", hello_interval, hello_multiplier, []) : ''}
+      #{@frr2 ? frr2_link_stanza("veth1", hello_interval, hello_multiplier, frr2_metric_lines) : ''}
       router isis LAB
        net 49.0001.#{FRR_ID}.00
        is-type #{@frr_is_type || frr_level}
@@ -443,13 +445,17 @@ class FrrLab
       " isis hello-multiplier #{hello_multiplier}"] + lines.map { |l| " #{l}" }).join("\n")
   end
 
+  def frr2_metric_lines
+    @frr2[:link_metric] ? ["isis metric #{@frr2[:link_metric]}"] : []
+  end
+
   def start_frr2(hello_interval, hello_multiplier)
     FileUtils.mkdir_p([@run2, @etc2])
     conf = File.join(@etc2, "frr.conf")
     File.write(conf, <<~CONF)
       hostname #{@name2}
       log file #{File.join(@dir, 'isisd2.log')} debugging
-      #{frr2_link_stanza('veth0', hello_interval, hello_multiplier, @frr2.fetch(:interface, []))}
+      #{frr2_link_stanza('veth0', hello_interval, hello_multiplier, frr2_metric_lines + @frr2.fetch(:interface, []))}
       #{@frr2[:loopback] ? "interface lo\n ip router isis LAB\n isis passive" : ''}
       #{if (link = @frr2[:isis4r_link])
           frr2_link_stanza('veth1', hello_interval, hello_multiplier, ["isis metric #{link.fetch(:frr_metric, 10)}"])
@@ -498,6 +504,9 @@ class FrrLab
     end
     sleep 0.3
     [@frr_ns, @frr2_ns, @isis_ns].each { |ns| system("ip netns del #{ns} 2>/dev/null") }
+    # The configuration and run directories, so runs do not pile up under
+    # /etc/frr and /var/run/frr.
+    FileUtils.rm_rf([@run, @etc, @run2, @etc2])
   end
 
   def sh(cmd)

@@ -1928,9 +1928,16 @@ middle FRR's table and the far FRR's LSP both give, the far FRR reaches
 isis4r's prefix over both paths, and when isis4r's link goes down the
 route keeps the other. Fixed on the way: an interface going down made the
 socket raise ENETDOWN and stopped isis4r; `SocketTransport` now answers as
-a silent link, and counts what it absorbed. Still owed by gate 3: IPv6 (TLVs
-232 and 236); the nearest Level 2 system (7.2.9.1) and the attached bit;
-overload against FRR; external routes and TLV 130. The
+a silent link, and counts what it absorbed. **Overload against FRR**:
+the originator takes `overload:`, and an `overload=` that generates LSP
+Number 0 again, the only one carrying the bit (RFC 1142 7.3.19.1, 7.2.5).
+In a triangle where the cheap path runs through one system, FRR routes
+around an overloaded isis4r and still reaches its prefix, and isis4r
+routes around an FRR with `set-overload-bit`, measured 2026-11-01 on FRR
+8.4.4. Measured on the way: FRR 8.4.4 drops an `isis metric` over 63
+from its startup file. Still owed by gate 3: IPv6 (TLVs 232 and 236); the
+nearest Level 2 system (7.2.9.1) and the attached bit; external routes
+and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
 clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
