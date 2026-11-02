@@ -1,0 +1,145 @@
+# frozen_string_literal: true
+
+require "time"
+
+module ISIS
+  class Daemon
+    # What the API answers, read from a Router: plain Hashes of strings and
+    # numbers, ready for JSON. Reading changes nothing.
+    class Views
+      def initialize(router)
+        @router = router
+      end
+
+      def overview
+        r = @router
+        {
+          system_id: r.system_id_s, hostname: r.config[:hostname], levels: r.levels,
+          areas: r.config.fetch(:areas, ["49.0001"]), version: VERSION,
+          interfaces: r.interfaces.size,
+          adjacencies_up: adjacencies.count { _1[:state] == "up" },
+          lsps: r.levels.to_h { |l| [l, r.databases[l].entries.count { !_1.placeholder? }] },
+          routes: r.levels.to_h { |l| [l, r.decisions[l].routes.size] },
+          spf_runs: r.levels.to_h { |l| [l, r.decisions[l].runs] },
+          overload: r.originators.values.first&.overload || false
+        }
+      end
+
+      def interfaces
+        @router.interfaces.flat_map do |i|
+          i.circuits.map do |level, c|
+            row = { name: i.name, network: i.network, level: level, metric: c.metric }
+            if i.broadcast?
+              row.merge(priority: c.priority, lan_id: c.lan_id_s, dis: dis(c), state: c.up_neighbors.empty? ? "down" : "up")
+            else
+              row.merge(local_circuit_id: c.local_circuit_id, state: c.three_way_state.to_s)
+            end
+          end
+        end
+      end
+
+      # One row per neighbour per level: on a point to point circuit the one
+      # neighbour at each level it serves, on a LAN each neighbour of that
+      # level's circuit.
+      def adjacencies
+        names = hostnames
+        @router.interfaces.flat_map do |i|
+          i.circuits.flat_map do |level, c|
+            neighbors = i.broadcast? ? c.neighbors.values : [c.neighbor].compact
+            neighbors.filter_map do |n|
+              next if !i.broadcast? && n.state == :up && !Array(n.usage).include?(level)
+
+              row = { interface: i.name, level: level, network: i.network, system_id: n.system_id_s,
+                      hostname: names[n.system_id_s], state: n.state.to_s, snpa: n.snpa.to_s,
+                      address: Array(n.ip_addresses).first, address6: Array(n.ipv6_addresses).first,
+                      areas: Array(n.areas).map(&:to_s), holding_time: n.holding_time, hold: hold(n.expiry) }
+              row[:priority] = n.priority if i.broadcast?
+              row
+            end
+          end
+        end
+      end
+
+      def database(level: nil)
+        names = hostnames
+        mine = @router.system_id_s
+        @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
+          @router.databases[l].entries.reject(&:placeholder?).map do |e|
+            lsp = e.lsp
+            id = e.lsp_id_s
+            system = id[0, 14]
+            { level: l, lsp_id: id, hostname: names[system], sequence: e.sequence,
+              checksum: format("0x%04x", e.checksum), lifetime: e.remaining_lifetime,
+              length: lsp.encode.bytesize, att: !lsp.attached.empty?, p: lsp.partition?, ol: lsp.overload?,
+              purged: e.purged?, self: system == mine }
+          end
+        end
+      end
+
+      def routes(level: nil)
+        @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
+          @router.decisions[l].routes.values.map do |r|
+            { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
+              up_down: r.up_down ? true : false,
+              next_hops: r.adjacencies.map { |a| { address: a.next_hop(r.family), interface: interface_of(a.circuit) } } }
+          end
+        end
+      end
+
+      # The last +count+ events, oldest first.
+      def log(count = 100)
+        @router.log.events.last(count).map { |e| Views.event(e) }
+      end
+
+      def self.event(e)
+        { time: e.time.utc.iso8601(3), level: e.level.to_s, circuit: e.circuit, kind: e.kind.to_s,
+          message: plain(e.message), data: plain(e.data) }
+      end
+
+      # Event data as JSON can carry it: strings as valid UTF-8, symbols and
+      # anything else as text.
+      def self.plain(value)
+        case value
+        when Hash then value.to_h { |k, v| [k.to_s, plain(v)] }
+        when Array then value.map { plain(_1) }
+        when String then value.dup.force_encoding("UTF-8").scrub
+        when Numeric, true, false, nil then value
+        else value.to_s
+        end
+      end
+
+      # System ID to hostname, from TLV 137 in each non-pseudonode LSP
+      # (RFC 5301 section 4), and this system's own.
+      def hostnames
+        names = {}
+        @router.databases.each_value do |db|
+          db.entries.each do |e|
+            next if e.placeholder? || e.lsp_id_s[15, 2] != "00"
+
+            tlv = e.lsp.tlvs.to_a.grep(Tlv::DynamicHostname).first
+            names[e.lsp_id_s[0, 14]] = tlv.name.dup.force_encoding("UTF-8") if tlv
+          end
+        end
+        names[@router.system_id_s] = @router.config[:hostname] if @router.config[:hostname]
+        names
+      end
+
+      private
+
+      def dis(circuit)
+        d = circuit.dis
+        d == :self ? "self" : d&.system_id_s
+      end
+
+      def hold(timer)
+        timer && [timer.due - @router.clock.now, 0].max.round(1)
+      end
+
+      # A circuit's name is the interface's, with -l1 or -l2 on a LAN at
+      # both levels.
+      def interface_of(name)
+        @router.interfaces.find { |i| i.circuits.values.any? { _1.name == name } }&.name || name
+      end
+    end
+  end
+end
