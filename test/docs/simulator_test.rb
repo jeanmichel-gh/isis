@@ -31,6 +31,16 @@ class TestDocsSimulator < Minitest::Test
     ISIS::Sim::Simulator::ACTIONS.each_value { |m| assert ISIS::Sim::Simulator.method_defined?(m), m }
   end
 
+  # The API table: every sim.* method with the parameters it takes, and
+  # nothing the API lacks.
+  def test_api
+    rows = DOC[/^## API\n(.*?)(?=\n## )/m, 1].scan(/^\| `(sim\.[a-z.]+)` \|([^|]*)\|/)
+    documented = rows.to_h { |m, params| [m, params.scan(/`([a-z]+)`/).flatten] }
+    api = ISIS::Daemon::Api
+    assert_equal api::SIM_METHODS.keys.sort, documented.keys.sort
+    api::SIM_PARAMS.each { |action, keys| assert_equal keys, documented["sim.#{action}"], "sim.#{action}" }
+  end
+
   # The example in the guide loads.
   def test_the_example_loads
     yaml = DOC[/```yaml\n(.*?)```/m, 1]

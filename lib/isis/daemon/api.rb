@@ -65,19 +65,64 @@ module ISIS
           { overload: on }
         end,
         "api.info" => lambda do |a, _|
-          { version: ISIS::VERSION, api: VERSION, methods: (METHODS.keys + STREAM_METHODS).sort, event_seq: a.seq }
+          { version: ISIS::VERSION, api: VERSION, methods: a.method_names, event_seq: a.seq,
+            simulator: a.simulator ? true : false }
         end
       }.freeze
+
+      # The simulator's methods, answered when the daemon runs one
+      # (isis4r-sim): its state, its graph, and each action of
+      # Sim::Simulator::ACTIONS as sim.ACTION, with the parameters it takes.
+      SIM_PARAMS = {
+        "link.down" => %w[link], "link.up" => %w[link], "link.toggle" => %w[link],
+        "link.flap" => %w[link count interval], "link.metric" => %w[link metric],
+        "router.overload" => %w[router on], "router.attached" => %w[router on],
+        "prefixes.withdraw" => %w[router prefix], "prefixes.advertise" => %w[router prefix],
+        "refresh" => [], "flush" => [], "restore" => [], "aging" => %w[on],
+        "neighbor.stop" => %w[circuit], "neighbor.start" => %w[circuit]
+      }.freeze
+
+      SIM_METHODS = {
+        "sim.state" => ->(sim, _) { sim.state },
+        "sim.graph" => ->(sim, _) { sim.graph }
+      }.merge(SIM_PARAMS.to_h do |action, keys|
+        ["sim.#{action}", lambda do |sim, p|
+          unknown = p.keys - keys
+          raise ArgumentError, "sim.#{action} takes #{keys.empty? ? 'no parameters' : keys.join(', ')}, not #{unknown.join(', ')}" unless unknown.empty?
+
+          Api.sim_action(sim, action, p)
+        end]
+      end).freeze
+
+      # Calls the simulator's method for +action+ with +p+, and answers the
+      # simulator's state after it.
+      def self.sim_action(sim, action, p)
+        method = Sim::Simulator::ACTIONS.fetch(action)
+        need = ->(k) { p.fetch(k) { raise ArgumentError, "sim.#{action} needs #{k}" } }
+        case action
+        when /\Alink\.(down|up|toggle)\z/ then sim.public_send(method, need.call("link"))
+        when "link.flap"
+          sim.link_flap(need.call("link"), **{ count: p["count"], interval: p["interval"] }.compact.transform_keys(&:to_sym))
+        when "link.metric" then sim.link_metric(need.call("link"), need.call("metric"))
+        when /\Arouter\./ then sim.public_send(method, need.call("router"), need.call("on") == true)
+        when /\Aprefixes\./ then sim.public_send(method, need.call("router"), need.call("prefix"))
+        when "aging" then sim.aging = need.call("on") == true
+        when /\Aneighbor\./ then sim.public_send(method, circuit: p["circuit"])
+        else sim.public_send(method)
+        end
+        { action: action, state: sim.state.slice(:generating, :aging) }
+      end
 
       # Keys whose values the API never shows.
       SECRETS = %i[area_key hello_key].freeze
 
       Client = Struct.new(:io, :input, :output, :subscribed, :last_write)
 
-      attr_reader :path, :router, :views, :seq
+      attr_reader :path, :router, :views, :seq, :simulator
 
-      def initialize(router, path:, group: nil, keepalive: KEEPALIVE)
+      def initialize(router, path:, group: nil, keepalive: KEEPALIVE, simulator: nil)
         @router = router
+        @simulator = simulator
         @views = Views.new(router)
         @path = path
         @group = group
@@ -122,9 +167,14 @@ module ISIS
       def handle(req)
         id = req["id"]
         name = req["method"].to_s
-        fn = METHODS[name] or return { id: id, error: "unknown method #{name}" }
         params = req["params"].is_a?(Hash) ? req["params"] : {}
-        { id: id, result: fn.call(self, params) }
+        if (fn = METHODS[name])
+          { id: id, result: fn.call(self, params) }
+        elsif @simulator && (fn = SIM_METHODS[name])
+          { id: id, result: fn.call(@simulator, params) }
+        else
+          { id: id, error: "unknown method #{name}" }
+        end
       rescue ArgumentError, KeyError => e
         { id: id, error: e.message }
       rescue StandardError => e
@@ -141,6 +191,11 @@ module ISIS
         keepalives
         @clients.each { |c| flush(c) }
         @clients.reject! { |c| c.io.closed? }
+      end
+
+      # Every method this API answers.
+      def method_names
+        (METHODS.keys + STREAM_METHODS + (@simulator ? SIM_METHODS.keys : [])).sort
       end
 
       # The configuration as loaded, keys masked.

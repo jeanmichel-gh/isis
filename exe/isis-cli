@@ -8,7 +8,12 @@
 #   isis-cli show routes --json
 #   isis-cli events                 follow the event stream
 #   isis-cli call show.log '{"count": 20}'
+#   isis-cli sim state                     isis4r-sim only
+#   isis-cli sim link.down link=r1c1--r1c2
+#   isis-cli sim router.overload router=r1c1 on=true
 #
+# A sim parameter's value reads as JSON when it can (true, 10) and as text
+# when it cannot (r1c1--r1c2).
 # Without --json, a list prints as a table and anything else as JSON.
 
 require "json"
@@ -18,7 +23,7 @@ require "socket"
 SOCKET = "/run/isis4r/isisd.sock"
 options = { socket: SOCKET, json: false }
 parser = OptionParser.new do |o|
-  o.banner = "usage: isis-cli [options] show WHAT [LEVEL] | events | call METHOD [PARAMS]\n" \
+  o.banner = "usage: isis-cli [options] show WHAT [LEVEL] | events | call METHOD [PARAMS] | sim ACTION [KEY=VALUE ...]\n" \
              "  WHAT: overview interfaces adjacencies database routes hostnames log configuration"
   o.on("-s", "--socket PATH", "the API socket (#{SOCKET})") { options[:socket] = _1 }
   o.on("-j", "--json", "print the answer as JSON") { options[:json] = true }
@@ -77,6 +82,19 @@ when "show"
 when "call"
   method = ARGV.shift or abort parser.banner
   print_result(call(options[:socket], method, ARGV.first ? JSON.parse(ARGV.first) : {}), options[:json])
+when "sim"
+  action = ARGV.shift or abort parser.banner
+  params = ARGV.to_h do |kv|
+    k, v = kv.split("=", 2)
+    abort "isis-cli: a sim parameter is KEY=VALUE, not #{kv}" unless v
+
+    [k, begin
+      JSON.parse(v)
+    rescue JSON::ParserError
+      v
+    end]
+  end
+  print_result(call(options[:socket], "sim.#{action}", params), options[:json])
 when "events"
   s = connect(options[:socket])
   s.write(JSON.generate(id: 1, method: "events.subscribe", params: {}) + "\n")

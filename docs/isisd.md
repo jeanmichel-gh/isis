@@ -77,5 +77,8 @@ Every method:
 | `events.subscribe` | `since` | turns the connection into a stream of events |
 | `events.unsubscribe` | | ends the stream |
 
+isis4r-sim, the simulator, answers every one of these and its own
+`sim.*` methods, listed in `docs/simulator.md`.
+
 The API runs in the router's own loop: a request is answered between two
 turns of the protocol, never during one.

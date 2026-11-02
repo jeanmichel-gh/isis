@@ -5,9 +5,25 @@ system with real adjacencies, whose databases also hold the LSPs of
 simulated systems. Its neighbours flood them and run SPF over them like
 any others. The design follows ospfv2's OSPF simulator.
 
-**Status.** The file and its loader (`ISIS::Sim::Topology`) and the
-simulator (`ISIS::Sim::Simulator`) exist. The `isis4r-sim` program and its
-`sim.*` API methods come next.
+**Status.** The file and its loader (`ISIS::Sim::Topology`), the
+simulator (`ISIS::Sim::Simulator`), and the `isis4r-sim` program with its
+`sim.*` API methods exist.
+
+## Running it
+
+```sh
+sudo isis4r-sim -c /lab/sim.yml -l -
+isis-cli sim state
+isis-cli sim link.down link=r1c1--r1c2
+isis-cli sim router.overload router=r1c1 on=true
+```
+
+isis4r-sim takes isisd's options (`docs/isisd.md`), with `-c` naming the
+simulated area's file, `/lab/sim.yml` by default. It answers isisd's API
+on the same socket, the simulator's own system answering every `show.*`,
+and the `sim.*` methods below as well. Its log says what it started as
+and how many systems it simulates, and warns of any system no link
+reaches.
 
 ## How it works
 
@@ -155,6 +171,36 @@ by its number from 1.
 | `aging` | `on` false stops refreshes, so the LSPs run out; true generates them at once |
 | `neighbor.stop` | the simulator's hellos stop, on one `circuit` or all |
 | `neighbor.start` | they start again |
+
+## API
+
+isis4r-sim answers these besides isisd's methods; isisd answers none of
+them. Each action answers `{ action, state: { generating, aging } }`, or an
+error naming the parameter or value at fault.
+
+| Method | Params |
+|---|---|
+| `sim.state` | |
+| `sim.graph` | |
+| `sim.link.down` | `link` |
+| `sim.link.up` | `link` |
+| `sim.link.toggle` | `link` |
+| `sim.link.flap` | `link`, `count`, `interval` |
+| `sim.link.metric` | `link`, `metric` |
+| `sim.router.overload` | `router`, `on` |
+| `sim.router.attached` | `router`, `on` |
+| `sim.prefixes.withdraw` | `router`, `prefix` |
+| `sim.prefixes.advertise` | `router`, `prefix` |
+| `sim.refresh` | |
+| `sim.flush` | |
+| `sim.restore` | |
+| `sim.aging` | `on` |
+| `sim.neighbor.stop` | `circuit` |
+| `sim.neighbor.start` | `circuit` |
+
+`sim.state` gives the counts, every system with its levels, flags, prefix
+counts, withdrawn groups and LSP Numbers, and every link with its state,
+metric and levels. `sim.graph` gives nodes and links for a map.
 
 ## What it refuses, and what it keeps
 

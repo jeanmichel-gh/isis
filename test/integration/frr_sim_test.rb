@@ -14,6 +14,9 @@ require_relative "../support/frr_lab"
 #
 # Every metric 10, so FRR reaches r2c3's loopback, 10.200.0.6, at 50.
 #
+# isis4r runs as exe/isis4r-sim, and the tests drive it through its API,
+# as routescope's scenarios do.
+#
 # Runs only as root with FRR installed and ISIS_FRR=1.
 class TestFrrSim < Minitest::Test
   SIM = { "grid" => { "rows" => 2, "columns" => 3, "metric" => 10, "loopbacks" => "10.200.0.0/24" },
@@ -50,5 +53,51 @@ class TestFrrSim < Minitest::Test
     assert_eventually("FRR has no route to r2c3's prefixes") do
       (r = @lab.frr_route("30.0.2.0/24")) && r["protocol"] == "isis" && r["metric"] == 60
     end
+  end
+
+  def frr_metric(prefix)
+    r = @lab.frr_route(prefix)
+    r && r["protocol"] == "isis" ? r["metric"] : nil
+  end
+
+  def sim(action, params = {})
+    @lab.isisd("sim.#{action}", params)
+  end
+
+  # Each action through the API reaches FRR's routes: a metric, a link
+  # down, an overload, a withdrawn group, then a flush and a restore.
+  def test_frr_follows_the_actions
+    @lab.start(sim: SIM)
+    assert_eventually("FRR has no route to r2c3", 60) { frr_metric("10.200.0.6/32") == 50 }
+
+    sim("link.metric", "link" => "s1--r1c1", "metric" => 40)
+    assert_eventually("FRR did not follow the metric to 80") { frr_metric("10.200.0.6/32") == 80 }
+    sim("link.metric", "link" => "s1--r1c1", "metric" => 10)
+
+    # Every way from r1c1 into the rest of the grid goes down.
+    sim("link.down", "link" => "r1c1--r1c2")
+    sim("link.down", "link" => "r1c1--r2c1")
+    assert_eventually("FRR still reaches r2c3 with r1c1 cut off") { frr_metric("10.200.0.6/32").nil? }
+    assert_equal 20, frr_metric("10.200.0.1/32")
+    sim("link.up", "link" => "r1c1--r1c2")
+    sim("link.up", "link" => "r1c1--r2c1")
+    assert_eventually("FRR did not come back to 50") { frr_metric("10.200.0.6/32") == 50 }
+
+    # Overloaded, r1c1 carries no transit: FRR loses the grid behind it.
+    sim("router.overload", "router" => "r1c1", "on" => true)
+    assert_eventually("FRR still routes through an overloaded r1c1") { frr_metric("10.200.0.6/32").nil? }
+    sim("router.overload", "router" => "r1c1", "on" => false)
+    assert_eventually("FRR did not route through r1c1 again") { frr_metric("10.200.0.6/32") == 50 }
+
+    sim("prefixes.withdraw", "router" => "r2c3", "prefix" => "30.0.0.0/24")
+    assert_eventually("FRR kept a withdrawn group") { frr_metric("30.0.2.0/24").nil? }
+    sim("prefixes.advertise", "router" => "r2c3", "prefix" => "30.0.0.0/24")
+    assert_eventually("FRR did not learn the group again") { frr_metric("30.0.2.0/24") == 60 }
+
+    # Flushed, FRR holds purges and no routes; restored, both come back.
+    sim("flush")
+    assert_eventually("FRR still routes to a flushed grid") { frr_metric("10.200.0.6/32").nil? }
+    sim("restore")
+    assert_eventually("FRR did not learn the grid again after a restore", 60) { frr_metric("10.200.0.6/32") == 50 }
   end
 end

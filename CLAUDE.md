@@ -2133,8 +2133,15 @@ against a Router. Measured 2026-11-02 against FRR 8.4.4
 simulator, FRR holds all eight LSPs of a 2x3 grid, names each system by
 its hostname, and reaches the far corner at 50. Measured on the way: FRR
 8.4.4 routes over a link only one end lists, so it does not apply the
-two-way check of 7.2.8.2 there, which isis4r's SPF does. Next:
-`isis4r-sim` and its API. Not yet in
+two-way check of 7.2.8.2 there, which isis4r's SPF does. `exe/isis4r-sim`
+runs a topology file as a daemon: `ISIS::Daemon` given a topology builds
+the simulator, whose Router answers isisd's API, and the API answers the
+`sim.*` methods too, one per action (`docs/simulator.md`), which
+`isis-cli sim ACTION KEY=VALUE` calls. Measured 2026-11-02 against FRR
+8.4.4 (`test_frr_follows_the_actions`): through the API, a metric change,
+two links down, an overload, a withdrawn group, a flush and a restore
+each reach FRR's routes. Next: routescope's IS-IS scenario conditions
+and its sim actions for isis4r-sim. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
