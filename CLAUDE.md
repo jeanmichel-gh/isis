@@ -125,6 +125,9 @@ lib/isis/router.rb         a whole system from one configuration;
                            router/host.rb, the Linux host it runs on
 lib/isis/daemon.rb         isisd: a Router on the real clock, with its
                            management API in daemon/
+lib/isis/sim/              the simulator: the simulated area's topology,
+                           and the LSPs it originates
+lib/isis/config_file.rb    the YAML files, with areas as written
 exe/                       command line tools shipped with the gem
 test/unit/                 mirrors lib/isis/, one test file per source file
 test/docs/                 the tests that hold each guide in docs/ to the code
@@ -2107,7 +2110,15 @@ route through isis4r, f2's route to f1's loopback through it, and f1
 pinging f2's loopback. The image is built only in CI, since this
 sandbox reaches no container registry; there, measured 2026-11-02, it
 builds, 760 tests pass in it, and the lab passes every check under
-containerlab with FRR 10.2.1. Not yet in
+containerlab with FRR 10.2.1. **The simulator has begun**, after
+ospfv2's (`docs/simulator.md`): `lib/isis/sim/topology.rb` reads the
+simulated area's file, the simulator's own isisd settings, a grid, more
+systems, prefix groups expanded by count, and links carried at the levels
+both ends run, and reports every problem in it at once, with where it is.
+It refuses what cannot go in an LSP and keeps what is odd but sendable.
+`lib/isis/config_file.rb` reads every YAML file, isisd's included, with
+each list under `areas` as written. Next: the simulator itself, turning a
+topology into LSPs, then `isis4r-sim` and its API. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
