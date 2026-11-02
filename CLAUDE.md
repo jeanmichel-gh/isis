@@ -1921,8 +1921,14 @@ the FRR in the middle: each prefix it reaches through the far FRR, isis4r
 reaches at its metric plus 10 through it, and each it reaches through
 isis4r, the far FRR reaches at its metric plus 10. Measured on the way:
 FRR 8.4.4 lists a prefix it advertises itself through a neighbour, so
-those are left out of the comparison. Still owed by gate 3: equal cost
-paths against FRR, which needs a second link from isis4r; IPv6 (TLVs
+those are left out of the comparison. **Equal cost paths against FRR**:
+with a second link from isis4r straight to the far FRR, at 20 on both
+ends, isis4r reaches the far loopback through both FRRs at the metric the
+middle FRR's table and the far FRR's LSP both give, the far FRR reaches
+isis4r's prefix over both paths, and when isis4r's link goes down the
+route keeps the other. Fixed on the way: an interface going down made the
+socket raise ENETDOWN and stopped isis4r; `SocketTransport` now answers as
+a silent link, and counts what it absorbed. Still owed by gate 3: IPv6 (TLVs
 232 and 236); the nearest Level 2 system (7.2.9.1) and the attached bit;
 overload against FRR; external routes and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
