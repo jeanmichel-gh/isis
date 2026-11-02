@@ -14,9 +14,16 @@ module ISIS
   # system neighbours" of Annex C.2.4 step 1: leaves, which an overloaded
   # node still reaches (7.2.8.1).
   #
+  # It also finds the nearest attached Level 2 system, clause 7.2.9.1's
+  # set R: "the set, R, of attached level 2 Intermediate system(s) for
+  # metric k such that the total cost to R for metric k is minimal", where
+  # attached is the default metric's ATT bit in the system's LSP Number 0
+  # (7.2.5). RFC 1195 section 1.2: Level 1 routers send traffic for
+  # outside their area only to "level 2 routers ... which indicate in
+  # their level 1 LSPs that they are "attached"".
+  #
   # Not here yet: the delay, expense and error metrics (7.2.2 makes them
-  # optional), external routes and TLV 130, IPv6, and the nearest Level 2
-  # system of 7.2.9.1.
+  # optional), external routes and TLV 130, and IPv6.
   module Spf
     # RFC 1142 annex: "MaxPathMetric 1023. Maximum total metric value for a
     # complete path". For narrow metrics.
@@ -69,7 +76,7 @@ module ISIS
     # Adjacency to the DIS] for each broadcast circuit with a DIS other
     # than this system (step 0 i).
     class Calculation
-      attr_reader :paths, :routes
+      attr_reader :paths, :routes, :attached
 
       def initialize(database:, system_id:, adjacencies:, broadcast: [], max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC)
@@ -82,6 +89,9 @@ module ISIS
         @paths = {}
         @routes = {}
         @nodes = {}
+        # The nearest attached Level 2 system, as a Path: its distance and
+        # the adjacencies toward it. Nil when none is reachable.
+        @attached = nil
       end
 
       def run
@@ -111,6 +121,7 @@ module ISIS
           @paths[node] = path
           extend_from(tent, node, path)
           add_prefixes(node)
+          add_attached(node, path)
         end
         self
       end
@@ -168,6 +179,20 @@ module ISIS
 
       # Not asked of this system: its own links are its adjacencies (step
       # 0), so step 1 never runs for it.
+      # A system placed on PATHS whose LSP Number 0 sets the default
+      # metric's ATT bit joins R if it is as near as the nearest so far.
+      # Systems go on PATHS in distance order, so the first one found is at
+      # the least cost, and later ones join only at that cost.
+      def add_attached(node, path)
+        return unless node_info(node)&.fetch(:attached)
+
+        if @attached.nil?
+          @attached = Path.new(path.distance, prune(path.adjacencies))
+        elsif path.distance == @attached.distance
+          @attached.adjacencies = prune(@attached.adjacencies | path.adjacencies)
+        end
+      end
+
       def overloaded?(node)
         node_info(node)&.fetch(:overload)
       end
@@ -185,7 +210,8 @@ module ISIS
 
         lsps = node_lsps(node)
         @nodes[node] = lsps && { links: read_links(lsps), prefixes: read_prefixes(lsps),
-                                 overload: lsps.first.overload? }
+                                 overload: lsps.first.overload?,
+                                 attached: lsps.first.attached.include?(:default) }
       end
 
       # The LSPs of +node+, LSP Number 0 first, or nil. Clause 7.2.5: "If the

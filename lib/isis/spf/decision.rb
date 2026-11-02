@@ -15,6 +15,13 @@ module ISIS
     # one run. Zero, the default, still waits for the current callback to
     # finish, so the LSPs of one flood are counted once.
     #
+    # At Level 1 it adds a default route, 0.0.0.0/0, toward the nearest
+    # attached Level 2 system (RFC 1142 7.2.9.1; RFC 1195 section 1.3,
+    # traffic outside the area "will be forwarded to the nearest level 2
+    # router"), unless a prefix of that name is already as near. Not when
+    # this system is attached itself, which 7.2.9.2 decides after the Level
+    # 2 routes and which is not here yet: so far no isis4r system sets ATT.
+    #
     # Each step is a method a test can replace on one object: changed
     # decides when to run, and compute does the calculation.
     #
@@ -95,6 +102,7 @@ module ISIS
         before = @routes
         @paths = calc.paths
         @routes = calc.routes
+        add_default(calc.attached) if level == 1
         why = reasons.uniq.first(3).join("; ")
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         @log.debug("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
@@ -112,6 +120,17 @@ module ISIS
       end
 
       private
+
+      DEFAULT = "0.0.0.0/0"
+
+      def add_default(attached)
+        return if attached.nil?
+
+        held = @routes[DEFAULT]
+        return if held && held.metric <= attached.distance
+
+        @routes[DEFAULT] = Route.new(DEFAULT, attached.distance, attached.adjacencies)
+      end
 
       def report(before, after, why)
         (before.keys | after.keys).sort.each do |prefix|

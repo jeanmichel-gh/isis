@@ -205,3 +205,67 @@ class TestDecisionLan < Minitest::Test
     assert_nil @nodes[:c][:circuit].spf_broadcast
   end
 end
+
+# The default route toward the nearest attached Level 2 system. One fake
+# circuit with an adjacency Up to B at 10, and LSPs stored straight into
+# the database; B sets ATT for the default metric.
+class TestDecisionDefaultRoute < Minitest::Test
+  Circuit = Struct.new(:adjacencies) do
+    def spf_adjacencies = adjacencies
+    def spf_broadcast = nil
+  end
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @log = ISIS::Runtime::Log.new(clock: @clock)
+  end
+
+  def id(letter) = (ISIS::Pdu.dotted_octets("0000.0000.000#{letter}") + "\x00".b).b
+
+  def decision(level)
+    db = ISIS::Database.new(level: level, clock: @clock)
+    store = lambda do |letter, links, prefixes: [], attached: []|
+      tlvs = [ISIS::Tlv::ExtendedIsReachability.new(links.map do |n|
+        ISIS::Tlv::ExtendedIsReachability::Entry.new(neighbor: id(n), metric: 10)
+      end)]
+      tlvs << ISIS::Tlv::ExtendedIpReachability.new(prefixes) unless prefixes.empty?
+      lsp = ISIS::Pdu::Lsp.new(level: level, lsp_id: ISIS::Octets.new(id(letter) + "\x00".b), lifetime: 1200,
+                               sequence: 1, tlvs: tlvs, attached: attached)
+      db.entry(lsp.lsp_id).store(lsp)
+    end
+    store.call("a", ["b"])
+    adj = ISIS::Spf::Adjacency.new(circuit: "eth-b", neighbor: ISIS::Pdu.dotted_octets("0000.0000.000b"),
+                                   circuit_id: 1, address: "10.0.0.11")
+    d = ISIS::Spf::Decision.new(system_id: "0000.0000.000a", database: db, scheduler: @scheduler, log: @log)
+    d.attach(Circuit.new([[id("b"), 10, adj]]))
+    [d, store]
+  end
+
+  # At Level 1, 0.0.0.0/0 at the distance to B, through B.
+  def test_a_default_route_toward_the_attached_system
+    d, store = decision(1)
+    store.call("b", ["a"], attached: [:default])
+    assert_equal "0.0.0.0/0 metric 10 via 10.0.0.11 via eth-b", d.run["0.0.0.0/0"].to_s
+  end
+
+  # None without an attached system, and none at Level 2.
+  def test_no_default_route_without_one_or_at_level_2
+    d, store = decision(1)
+    store.call("b", ["a"])
+    assert_nil d.run["0.0.0.0/0"]
+    d, store = decision(2)
+    store.call("b", ["a"], attached: [:default])
+    assert_nil d.run["0.0.0.0/0"]
+  end
+
+  # An advertised 0.0.0.0/0 that is farther loses to the attached route:
+  # B's at 5 is 15, B itself 10. RFC 1195 section 1.3: "Default routes are
+  # not permitted at level 1", so one arriving there is not trusted over
+  # the area's exit.
+  def test_a_farther_advertised_default_loses
+    d, store = decision(1)
+    store.call("b", ["a"], prefixes: [{ prefix: "0.0.0.0/0", metric: 5 }], attached: [:default])
+    assert_equal 10, d.run["0.0.0.0/0"].metric
+  end
+end
