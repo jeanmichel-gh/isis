@@ -325,6 +325,14 @@ class TestSpf < Minitest::Test
     assert_equal "#{P} metric 40 via 10.0.0.12 via eth-c", route(calc, P)
   end
 
+  # A route keeps its entry's up/down bit, which Spf::Summary reads to
+  # keep it out of Level 2 (RFC 5302 section 4).
+  def test_a_route_keeps_the_up_down_bit
+    calc = triangle(internal(nil, octets: "81808080"), [])
+    assert calc.routes[P].up_down
+    refute triangle(internal(1), []).routes[P].up_down
+  end
+
   # One system offering P twice, internal at 30 in TLV 128 and external at
   # 1 in TLV 130: the internal one is its offer, 10 + 30.
   def test_one_systems_internal_offer_beats_its_external_one

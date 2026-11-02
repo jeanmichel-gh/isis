@@ -134,6 +134,11 @@ end
 leak_policy = ->(list) { list.empty? ? ISIS::Spf::Leak::NONE : ISIS::Spf::Leak.prefixes(list) }
 leak = both ? ISIS::Spf::Leak.new(originator: originators[1], log: log, policy: leak_policy.call(config.fetch(:leak, []))) : nil
 
+# At both levels, an Spf::Summary puts the Level 1 area's prefixes in the
+# Level 2 LSP (RFC 1195 section 3.2), with :summaries, a list of { prefix:,
+# metric: }, in place of what each covers.
+summary = both ? ISIS::Spf::Summary.new(originator: originators[2], log: log, summaries: config.fetch(:summaries, [])) : nil
+
 # A Decision Process per level, with the circuit, or the point to point
 # circuit's level, as its first hops. At both levels the Level 2 one sets
 # the Level 1 originator's AttachedFlag (RFC 1142 7.2.9.2).
@@ -141,7 +146,7 @@ decisions = levels.to_h do |l|
   decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
                                      scheduler: scheduler, log: log, forwarding: adapters[l],
                                      attached_flag: both && l == 2 ? originators[1] : nil,
-                                     leak: l == 2 ? leak : nil)
+                                     leak: l == 2 ? leak : nil, summary: l == 1 ? summary : nil)
   decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
   extras.each { |c, _| decision.attach(c.levels.fetch(l)) }
   [l, decision]
@@ -192,8 +197,8 @@ circuits.values.uniq.each(&:start)
 extras.each { |c, _| c.start }
 decisions.each_value(&:start)
 # A test changes policy while isis4r runs by writing STATE.json.control,
-# JSON with any of: leak, a new list of covering prefixes. Read when its
-# modification time moves.
+# JSON with any of: leak, a new list of covering prefixes; summaries, a
+# new list of { prefix:, metric: }. Read when its modification time moves.
 control_file = "#{state_file}.control"
 control_seen = nil
 apply_control = lambda do
@@ -205,6 +210,10 @@ apply_control = lambda do
   if control.key?(:leak) && leak
     log.info("control: leak #{control[:leak].inspect}")
     leak.policy = leak_policy.call(control[:leak])
+  end
+  if control.key?(:summaries) && summary
+    log.info("control: summaries #{control[:summaries].inspect}")
+    summary.summaries = control[:summaries]
   end
 end
 

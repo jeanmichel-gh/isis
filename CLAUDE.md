@@ -2006,14 +2006,15 @@ on in the FRRs' namespaces when there is a host; and the lab needs
 `ping`, from iputils-ping. **Pass-through equivalence runs in the
 suite**: `test/scenario/pass_through_test.rb` runs one scenario, A and B
 on a point to point link at both levels and B, C and D on a LAN at Level
-1, B leaking its Level 2 routes into Level 1, through an overload, a
+1, both putting the area into Level 2, A with a summary, and B leaking
+its Level 2 routes into Level 1, through an overload, a
 cut and restored link and a silenced DIS, four ways: plain, with every
 control installed, with logging at debug, and with both. A control is a
 method replaced on the object that runs a mechanism, so
 `test/support/pass_through.rb` replaces every method of every mechanism
 object, the scheduler, transports, circuits, point to point levels,
-databases, originators, pseudonodes, decision processes, leaks, the
-forwarding adapter and the log, with one that calls the original. The four runs
+databases, originators, pseudonodes, decision processes, leaks,
+summaries, the forwarding adapter and the log, with one that calls the original. The four runs
 must give the same packets per circuit, sent and received in order, the
 same adjacencies, databases with their SRM and SSN flags, and routes at
 each half second, and the same route operations; the test also shows
@@ -2036,8 +2037,21 @@ against FRR 8.4.4, isis4r at both levels between a Level 1 FRR and a
 Level 2 FRR in 49.0002: with the policy changed to leak 198.51.100.0/24,
 FRR holds the far loopback in isis4r's Level 1 LSP marked "Down" and
 installs it at 30 through isis4r; changed back to nothing, FRR drops both
-the advertisement and the route. Still owed by gate 1: summarization,
-and redistribution through adapters. Not yet in
+the advertisement and the route. **The area into Level 2, and
+summarization** (RFC 1195 section 3.2): `lib/isis/spf/summary.rb`, after
+each Level 1 run at both levels, hands the Level 2 originator the
+area's prefixes at their Level 1 route metrics, 63 at most when narrow,
+the external type in TLV 130, leaving out routes with the up/down bit
+(RFC 5302 section 4), this system's own and the default route; each
+configured summary, { prefix:, metric: }, goes in place of what it
+covers when it covers at least one reachable address, at its configured
+metric or, with none, the lowest it covers, which is our choice. New
+summaries choose again at once. The runner reads `summaries:` from its
+config and its control file. Measured 2026-11-02 against FRR 8.4.4: the
+Level 2 FRR in 49.0002 reaches the Level 1 FRR's loopback only through
+isis4r's Level 2 LSP, at 30; a summary of 198.51.100.0/24 at 15 replaces
+it at 25 and the /32 is withdrawn; taken away, the /32 comes back and
+the /24 goes. Still owed by gate 1: redistribution through adapters. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
@@ -2498,6 +2512,17 @@ confidently said:
   with section 3.4 on external metrics: "the lowest value of the external
   metric is preferred regardless of the internal cost to reach the
   appropriate exit point".
+* **RFC 1195 section 3.2**, "Hierarchical Abbreviation of IP
+  Reachability", read 2026-11-02 through datatracker: a Level 2 system
+  announces "Any address obtained from a level 1 LSP which is not
+  superceded by the manually configured information", at the sum of its
+  metric and "the distance from the level 2 router to the appropriate
+  level 1 router", the minimum over the routers announcing it, and 63
+  when the sum is "greater than 63"; a summary is announced "if they
+  correspond to at least one address which is reachable in the area",
+  with a manually configured metric, and "metric values are not
+  considered when determining if a given configured address supercedes"
+  one.
 * **RFC 5302** sections 2 to 4, read 2026-11-01: the high bit of the
   default metric in TLVs 128 and 130 is the up/down bit, which "L1L2
   routers MUST set ... for prefixes that are derived from L2 routing";
