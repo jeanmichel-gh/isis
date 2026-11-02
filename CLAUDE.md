@@ -2117,8 +2117,24 @@ systems, prefix groups expanded by count, and links carried at the levels
 both ends run, and reports every problem in it at once, with where it is.
 It refuses what cannot go in an LSP and keeps what is odd but sendable.
 `lib/isis/config_file.rb` reads every YAML file, isisd's included, with
-each list under `areas` as written. Next: the simulator itself, turning a
-topology into LSPs, then `isis4r-sim` and its API. Not yet in
+each list under `areas` as written. `lib/isis/sim/simulator.rb` runs a
+topology: the simulator's own system is an ordinary Router, and each
+simulated system an ordinary Originator writing into its databases, with
+a link as an entry in each end's IS reachability. A database now keeps
+generators besides its circuits' own, so the update process treats a
+simulated LSP as this system's: a newer copy generated past (7.3.16.1), a
+neighbour's purge answered (7.3.16.4 c), except after a flush or with
+aging off. The originator takes `lifetime:` for the simulator's short
+lifetimes. The actions, link down, up, flap and metric, overload,
+attached, prefix groups withdrawn and advertised, refresh, flush,
+restore, aging and the simulator's hellos, are tested on simulated time
+against a Router. Measured 2026-11-02 against FRR 8.4.4
+(`test/integration/frr_sim_test.rb`): through one adjacency with the
+simulator, FRR holds all eight LSPs of a 2x3 grid, names each system by
+its hostname, and reaches the far corner at 50. Measured on the way: FRR
+8.4.4 routes over a link only one end lists, so it does not apply the
+two-way check of 7.2.8.2 there, which isis4r's SPF does. Next:
+`isis4r-sim` and its API. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been

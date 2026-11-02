@@ -116,9 +116,10 @@ class FrrLab
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
-            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false)
+            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil)
     cleanup
     @daemon = daemon
+    @sim = sim
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
     sh "ip link add veth0 netns #{@isis_ns} type veth peer name veth0 netns #{@frr_ns}"
@@ -483,6 +484,22 @@ class FrrLab
     system("ip netns exec #{@host_ns} ping -c 1 -W 1 #{address} >/dev/null 2>&1")
   end
 
+  # With +sim+, a topology Hash without its simulator section, isis4r runs
+  # as the simulator: the simulator's own system is isis4r's usual one on
+  # veth0, and the simulated area is +sim+ behind it.
+  def start_sim(config)
+    iface = { "name" => config[:interface], "ip_addresses" => config[:ip_addresses],
+              "hello_interval" => config[:hello_interval], "hello_multiplier" => config[:hello_multiplier] }
+    simulator = { "system_id" => config[:system_id], "hostname" => "s1", "areas" => config[:areas],
+                  "level" => config[:level], "minimum_lsp_interval" => 1, "interfaces" => [iface],
+                  "prefixes" => JSON.parse(JSON.generate(config[:prefixes])) }
+    File.write(sim_config, { "simulator" => simulator }.merge(JSON.parse(JSON.generate(@sim))).to_yaml)
+    @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby, "#{ROOT}/test/support/sim_runner.rb",
+                              sim_config, %i[out err] => File.join(@dir, "isis4r.log"))
+  end
+
+  def sim_config = File.join(@dir, "sim.yml")
+
   # With +daemon+, isis4r runs as exe/isisd, from a YAML file made from
   # the runner's configuration, and answers on its API socket; there is
   # no state file.
@@ -649,6 +666,7 @@ class FrrLab
 
   def start_isis4r(config)
     return start_isisd(config) if @daemon
+    return start_sim(config) if @sim
 
     File.write(File.join(@dir, "isis4r.json"), JSON.generate(config))
     @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby,

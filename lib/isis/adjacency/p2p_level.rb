@@ -49,7 +49,7 @@ module ISIS
       end
 
       def generators
-        [@originator].compact
+        [@originator].compact + @database.generators
       end
 
       def transmit(pdu)

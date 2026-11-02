@@ -100,6 +100,19 @@ module ISIS
       @entries = {}
       @circuits = []
       @listeners = []
+      @generators = []
+    end
+
+    # Originators of LSPs in this database other than a circuit's own: a
+    # simulator's simulated systems. Each answers generates?(lsp_id) and
+    # receive_own(result, lsp), and the update process treats the LSPs it
+    # generates as this system's own (RFC 1142 7.3.15.1 c and d, 7.3.16.1,
+    # 7.3.16.4 c).
+    attr_reader :generators
+
+    def add_generator(generator)
+      @generators << generator unless @generators.include?(generator)
+      self
     end
 
     # A circuit that floods from this database. It answers flood(entry),

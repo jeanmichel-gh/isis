@@ -48,8 +48,9 @@ module ISIS
         return refuse_pdu(:checksum, "LSP #{id}: checksum #{format('0x%04x', lsp.checksum)} is wrong; " \
                                      "dropped, and not purged as RFC 1142 7.3.14 e asks")
       end
-      # Clause 7.3.15.1 c and d: an LSP with this system's ID.
-      return receive_own_lsp(lsp) if lsp.lsp_id.byteslice(0, @system_id.bytesize) == @system_id
+      # Clause 7.3.15.1 c and d: an LSP with this system's ID, or one a
+      # generator here generates, such as a simulated system's.
+      return receive_own_lsp(lsp) if own_id?(lsp.lsp_id) || generator_of(lsp.lsp_id)
 
       entry = @database.entry(lsp.lsp_id)
       result = entry.placeholder? ? :new : Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime,
@@ -100,8 +101,7 @@ module ISIS
       end
 
       held = @database[lsp.lsp_id]
-      own = lsp.lsp_id.byteslice(0, @system_id.bytesize) == @system_id
-      generator = own && generators.find { |g| g.generates?(lsp.lsp_id) }
+      generator = generator_of(lsp.lsp_id)
       # c: this system's own LSP, unexpired: not overwritten, generated
       # again past the purge's sequence.
       if generator && held && !held.placeholder? && !held.remaining_lifetime.zero?
@@ -275,7 +275,7 @@ module ISIS
     # 7.3.16.2).
     def receive_own_lsp(lsp)
       id = lsp.lsp_id_s
-      generator = generators.find { |g| g.generates?(lsp.lsp_id) }
+      generator = generator_of(lsp.lsp_id)
       unless generator
         # Clause 7.3.15.1 c: one this system does not generate, from a
         # previous incarnation or a pseudonode it no longer runs, is purged
@@ -304,6 +304,15 @@ module ISIS
         generator.receive_own(result, lsp)
       end
       result
+    end
+
+    def own_id?(lsp_id)
+      lsp_id.byteslice(0, @system_id.bytesize) == @system_id
+    end
+
+    # The generator here of +lsp_id+, nil when none generates it.
+    def generator_of(lsp_id)
+      generators.find { |g| g.generates?(lsp_id) }
     end
 
     def snp_entries(snp)

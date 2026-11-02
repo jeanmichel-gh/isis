@@ -104,7 +104,8 @@ module ISIS
     # verify".
     MAXIMUM_AREA_ADDRESSES = 3
 
-    attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers
+    attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers,
+                :lifetime
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
@@ -118,7 +119,7 @@ module ISIS
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
-                   hostname: nil)
+                   hostname: nil, lifetime: Database::MAX_AGE)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -147,6 +148,9 @@ module ISIS
       @metric_style = metric_style
       @area_key = area_key
       @refresh_interval = refresh_interval
+      # The Remaining Lifetime each LSP starts with: MaxAge (7.3.16.3), or
+      # less for a simulator that wants its LSPs to age out within a test.
+      @lifetime = lifetime
       @minimum_interval = minimum_interval
       @buffer_size = buffer_size
       @level1_database = level1_database
@@ -274,7 +278,7 @@ module ISIS
     def build(sequence: self.sequence, number: 0, tlvs: nil)
       list = (tlvs || lsp_tlvs.fetch(number, [])).dup
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
-      lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(lsp_id(number)), lifetime: Database::MAX_AGE,
+      lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(lsp_id(number)), lifetime: @lifetime,
                          sequence: sequence, tlvs: list, is_type: @is_type, overload: @overload && number.zero?,
                          attached: @attached && number.zero? ? [:default] : [])
       lsp.key = @area_key
