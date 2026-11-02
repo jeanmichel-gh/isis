@@ -50,6 +50,11 @@ module ISIS
   # for TLVs 135 and 236): narrow, in TLV 128, or TLV 130 for the external
   # type, at most the six bits' 63; wide, in TLV 135; IPv6, in TLV 236.
   #
+  # +area_prefixes+ are the Level 1 area's prefixes a system at both levels
+  # puts in its Level 2 LSP, set by Spf::Summary, in the same form and in
+  # the same TLVs, without the up/down bit. RFC 1195 section 3.2: a sum
+  # "greater than 63" goes as 63 when narrow.
+  #
   # Content that does not fit in one LSP of buffer_size octets goes on in
   # LSP Number 1, 2 and so on, clause 7.3.4's rules: "The Area Addresses
   # option field shall occur only in the LSP with LSP Number zero", and IS
@@ -100,7 +105,7 @@ module ISIS
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes, :external_prefixes
-    attr_reader :leaked_prefixes
+    attr_reader :leaked_prefixes, :area_prefixes
     attr_reader :overload, :attached
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
@@ -130,6 +135,7 @@ module ISIS
       @prefixes = prefixes
       @external_prefixes = external_prefixes
       @leaked_prefixes = []
+      @area_prefixes = []
       raise ArgumentError, "metric style is :wide, :narrow or :transition" unless METRIC_STYLES.include?(metric_style)
 
       @metric_style = metric_style
@@ -317,6 +323,13 @@ module ISIS
       changed("leaked prefixes changed (RFC 5302 section 2)") if @generated_at
     end
 
+    # The Level 1 area's prefixes to put in this Level 2 LSP, as
+    # Spf::Summary chooses them. A change is a change of content (7.3.6).
+    def area_prefixes=(list)
+      @area_prefixes = list
+      changed("area prefixes changed (RFC 1195 section 3.2)") if @generated_at
+    end
+
     def overload=(on)
       @overload = on
       changed("LSP Database Overload bit #{on ? 'set' : 'cleared'} (RFC 1142 7.3.19.1)") if @generated_at
@@ -395,16 +408,20 @@ module ISIS
 
     # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
     def variable_tlvs
-      reachability(@circuits.filter_map(&:is_neighbor), @prefixes, @external_prefixes, @leaked_prefixes)
+      reachability(@circuits.filter_map(&:is_neighbor), @prefixes, @external_prefixes, @leaked_prefixes,
+                   @area_prefixes)
     end
 
     # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
-    # and +prefixes+, then +externals+, then +leaked+, in the metric style.
-    def reachability(neighbors, prefixes, externals = [], leaked = [])
+    # and +prefixes+, then +externals+, then +leaked+, then +area+, in the
+    # metric style.
+    def reachability(neighbors, prefixes, externals = [], leaked = [], area = [])
       list = []
       leaked6, leaked4 = leaked.partition { |p| p.fetch(:prefix).include?(":") }
+      area6, area4 = area.partition { |p| p.fetch(:prefix).include?(":") }
+      capped = ->(p) { p.slice(:prefix, :metric).merge(metric: [p.fetch(:metric), Tlv::NarrowMetrics::VALUE].min) }
       down = ->(p) { p.slice(:prefix, :metric).merge(up_down: true) }
-      narrow_down = ->(p) { down.call(p).merge(metric: [p.fetch(:metric), Tlv::NarrowMetrics::VALUE].min) }
+      narrow_down = ->(p) { capped.call(p).merge(up_down: true) }
       if @metric_style != :wide
         # The Virtual Flag takes the first octet of each TLV 2's value, and
         # this system writes 0 at either level, since it does not repair
@@ -414,22 +431,27 @@ module ISIS
           Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)
         end
         list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
-        internal = prefixes + leaked4.reject { |p| p[:external] }.map(&narrow_down)
+        internal = prefixes + leaked4.reject { |p| p[:external] }.map(&narrow_down) +
+                   area4.reject { |p| p[:external] }.map(&capped)
         reach = internal.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
         list.concat(pack(Tlv::IpInternalReachability, reach))
-        external = externals + leaked4.select { |p| p[:external] }.map { |p| narrow_down.call(p).merge(external: true) }
+        external = externals + leaked4.select { |p| p[:external] }.map { |p| narrow_down.call(p).merge(external: true) } +
+                   area4.select { |p| p[:external] }.map { |p| capped.call(p).merge(external: true) }
         reach = external.map { |p| Tlv::IpExternalReachability.new(p).entries.first }
         list.concat(pack(Tlv::IpExternalReachability, reach))
       end
       if @metric_style != :narrow
         wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
         list.concat(pack(Tlv::ExtendedIsReachability, wide))
-        reach = (prefixes + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down)).map do |p|
+        reach = (prefixes + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down) +
+                 area4.map { |p| p.slice(:prefix, :metric) }).map do |p|
           Tlv::ExtendedIpReachability.new(p).entries.first
         end
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
-      reach6 = (@ipv6_prefixes + leaked6.map(&down)).map { |p| Tlv::Ipv6Reachability.new(p).entries.first }
+      reach6 = (@ipv6_prefixes + leaked6.map(&down) + area6.map { |p| p.slice(:prefix, :metric) }).map do |p|
+        Tlv::Ipv6Reachability.new(p).entries.first
+      end
       list.concat(pack(Tlv::Ipv6Reachability, reach6))
       list
     end

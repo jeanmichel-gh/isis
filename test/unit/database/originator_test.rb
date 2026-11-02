@@ -704,3 +704,45 @@ class TestOriginatorIpv6 < Minitest::Test
   end
 end
 
+
+# The Level 1 area's prefixes in a Level 2 LSP (RFC 1195 section 3.2),
+# without the up/down bit. Our own arithmetic:
+#   80 18 14808080 c6336401 ffffffff   198.51.100.1/32 at 20
+#         3f808080 c6336400 ffffff00   198.51.100.0/24 at 100, as 63
+#   82 0c 5e808080 c6120500 ffffff00   198.18.5.0/24 at 30, I/E 0x40
+#   87 09 00000014 20 c6336401          198.51.100.1/32 at 20, wide
+#   ec 0e 00000019 00 40 20010db800010000   2001:db8:1::/64 at 25, U clear
+class TestOriginatorAreaPrefixes < Minitest::Test
+  AREA = [{ prefix: "198.18.5.0/24", metric: 30, external: true }, { prefix: "198.51.100.1/32", metric: 20 },
+          { prefix: "198.51.100.0/24", metric: 100 }].freeze
+
+  def originator(metric_style)
+    clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(clock)
+    @db = ISIS::Database.new(level: 2, clock: clock)
+    ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler,
+                         log: ISIS::Runtime::Log.new(clock: clock), is_type: 3, metric_style: metric_style,
+                         minimum_interval: 1)
+  end
+
+  def tlv(orig, type) = @db[orig.lsp_id].lsp.tlvs.find { |t| t.type == type }&.to_shex
+
+  def test_narrow
+    orig = originator(:narrow)
+    orig.start
+    orig.area_prefixes = AREA
+    @scheduler.advance(2)
+    assert_equal 2, orig.sequence
+    assert_equal "8018" "14808080" "c6336401" "ffffffff" "3f808080" "c6336400" "ffffff00", tlv(orig, 128)
+    assert_equal "820c" "5e808080" "c6120500" "ffffff00", tlv(orig, 130)
+  end
+
+  def test_wide_and_ipv6
+    orig = originator(:wide)
+    orig.start
+    orig.area_prefixes = [{ prefix: "198.51.100.1/32", metric: 20 }, { prefix: "2001:db8:1::/64", metric: 25 }]
+    @scheduler.advance(2)
+    assert_equal "8709" "00000014" "20" "c6336401", tlv(orig, 135)
+    assert_equal "ec0e" "00000019" "00" "40" "20010db800010000", tlv(orig, 236)
+  end
+end

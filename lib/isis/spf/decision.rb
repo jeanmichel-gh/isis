@@ -28,7 +28,9 @@ module ISIS
     # run: true when the routes reach at least one other area, false when
     # they reach none (RFC 1142 7.2.9.2). A change is logged at info. With
     # +leak+, an Spf::Leak, it hands the Level 2 routes to it after each
-    # run, for the Level 1 LSP (RFC 5302 section 2).
+    # run, for the Level 1 LSP (RFC 5302 section 2). At Level 1, with
+    # +summary+, an Spf::Summary, it hands it the Level 1 routes after each
+    # run, for the Level 2 LSP (RFC 1195 section 3.2).
     #
     # Each step is a method a test can replace on one object: changed
     # decides when to run, and compute does the calculation.
@@ -37,11 +39,11 @@ module ISIS
     # reason that started the run, and each run at debug.
     class Decision
       attr_reader :system_id, :database, :circuits, :routes, :paths, :runs
-      attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding, :attached_flag, :leak
+      attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding, :attached_flag, :leak, :summary
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
-                     attached_flag: nil, leak: nil)
+                     attached_flag: nil, leak: nil, summary: nil)
         @system_id = system_id
         @database = database
         @scheduler = scheduler
@@ -52,6 +54,7 @@ module ISIS
         @forwarding = forwarding
         @attached_flag = attached_flag
         @leak = leak
+        @summary = summary
         @circuits = []
         @routes = {}
         @paths = {}
@@ -119,6 +122,7 @@ module ISIS
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
         @leak.update(@routes) if level == 2 && @leak
+        @summary.update(@routes) if level == 1 && @summary
         @log.debug("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
                    "after #{why} (RFC 1142 7.2, Annex C.2)")
         report(before, @routes, why)

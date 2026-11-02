@@ -465,6 +465,35 @@ class TestDecisionAttachedFlag < Minitest::Test
     assert_equal 0, o1.sets
   end
 
+  SummaryTarget = Struct.new(:area_prefixes, :sets) do
+    def area_prefixes=(list)
+      self.sets += 1
+      self[:area_prefixes] = list
+    end
+  end
+
+  # With a Summary, each Level 1 run hands it the routes: B's
+  # 198.51.100.3/32 at 10 + 5 reaches the Level 2 originator, a stand-in.
+  # A Level 2 decision hands it nothing.
+  def test_a_level_1_run_hands_its_routes_to_the_summary
+    db = ISIS::Database.new(level: 1, clock: @clock)
+    store("a", ["b"], ["49.0001"], level: 1, db: db)
+    store("b", ["a"], ["49.0001"], level: 1, db: db, prefixes: [{ prefix: "198.51.100.3/32", metric: 5 }])
+    adj = ISIS::Spf::Adjacency.new(circuit: "eth-b", neighbor: ISIS::Pdu.dotted_octets("0000.0000.000b"),
+                                   circuit_id: 1, address: "10.0.0.11")
+    orig = SummaryTarget.new([], 0)
+    d = ISIS::Spf::Decision.new(system_id: "0000.0000.000a", database: db, scheduler: @scheduler, log: @log,
+                                summary: ISIS::Spf::Summary.new(originator: orig, log: @log))
+    d.attach(Circuit.new([[id("b"), 10, adj]]))
+    d.run
+    assert_equal [{ prefix: "198.51.100.3/32", metric: 15 }], orig.area_prefixes
+    o2 = SummaryTarget.new([], 0)
+    @decision.summary = ISIS::Spf::Summary.new(originator: o2, log: @log)
+    store("b", ["a"], ["49.0002"], prefixes: [{ prefix: "198.51.100.3/32", metric: 5 }])
+    @decision.run
+    assert_equal 0, o2.sets
+  end
+
   # At Level 1, a system whose own LSP Number 0 is attached adds no default
   # route: its nearest Level 2 system is itself ("Self", 7.2.9.2), though B
   # is attached too.

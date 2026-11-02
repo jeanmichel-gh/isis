@@ -20,8 +20,9 @@ require_relative "../support/pass_through"
 # being there would show as a difference.
 #
 # The topology: A and B on a point to point link, and B, C and D on a LAN,
-# each advertising a /32. A and B run Level 2 too on their link, and B
-# leaks its Level 2 routes into Level 1. The script brings it up, overloads C, cuts the
+# each advertising a /32. A and B run Level 2 too on their link; each puts
+# the Level 1 area's prefixes in its Level 2 LSP, A summarizing them as
+# 192.0.2.0/24, and B leaks its Level 2 routes into Level 1. The script brings it up, overloads C, cuts the
 # point to point link and restores it, and silences D, the DIS.
 class TestPassThroughEquivalence < Minitest::Test
   IDS = { a: "0000.0000.000a", b: "0000.0000.000b", c: "0000.0000.000c", d: "0000.0000.000d" }.freeze
@@ -63,6 +64,7 @@ class TestPassThroughEquivalence < Minitest::Test
       decision = ISIS::Spf::Decision.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                          forwarding: recorder)
       l2 = both ? level2(who, n, log, orig) : nil
+      decision.summary = l2[:summary] if l2
       circuits = []
       if both
         levels = { 1 => { database: db, originator: orig }, 2 => { database: l2[:db], originator: l2[:orig] } }
@@ -105,7 +107,9 @@ class TestPassThroughEquivalence < Minitest::Test
       recorder = ISIS::Forwarding::Recorder.new
       decision = ISIS::Spf::Decision.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                          forwarding: recorder, attached_flag: level1_orig, leak: leak)
-      { db: db, orig: orig, leak: leak, recorder: recorder, decision: decision }
+      summary = ISIS::Spf::Summary.new(originator: orig, log: log,
+                                       summaries: who == :a ? [{ prefix: "192.0.2.0/24", metric: 2 }] : [])
+      { db: db, orig: orig, leak: leak, summary: summary, recorder: recorder, decision: decision }
     end
 
     # A transport the harness taps: every frame sent and received, in order,
@@ -187,7 +191,8 @@ class TestPassThroughEquivalence < Minitest::Test
 
     def level2_state(l2)
       { database: l2[:db].entries.map { |e| [e.lsp_id_s, e.sequence, e.checksum, e.purged?, e.srm.to_a.sort, e.ssn.to_a.sort] },
-        routes: l2[:decision].routes.values.map(&:to_s), leaked: l2[:leak].leaked }
+        routes: l2[:decision].routes.values.map(&:to_s), leaked: l2[:leak].leaked,
+        announced: l2[:summary].announced }
     end
 
     def circuit_state(circuit)
@@ -226,6 +231,9 @@ class TestPassThroughEquivalence < Minitest::Test
     assert(ops[:a].any? { |o| o.start_with?("withdraw 192.0.2.4/32") }, ops[:a].inspect)
     # C reaches A's Level 2 prefix only through B's leak.
     assert(ops[:c].any? { |o| o.start_with?("install 198.51.100.1/32") }, ops[:c].inspect)
+    # B reaches A's summary of the area at Level 2.
+    l2 = @plain.operations[:b].last
+    assert(l2.any? { |o| o.start_with?("install 192.0.2.0/24") }, l2.inspect)
     assert(@plain.packets.values.sum(&:size) > 500, "few packets")
     assert_operator @plain.states.uniq.size, :>, 20
   end
@@ -234,7 +242,8 @@ class TestPassThroughEquivalence < Minitest::Test
   # not between two runs that happen to have no controls in them.
   MECHANISMS = [ISIS::Runtime::Scheduler, ISIS::Link::SimulatedTransport, ISIS::P2pCircuit, ISIS::P2pCircuit::Level,
                 ISIS::LanCircuit, ISIS::Database, ISIS::Originator, ISIS::Pseudonode, ISIS::Spf::Decision,
-                ISIS::Forwarding::Recorder, ISIS::Runtime::Log, ISIS::Spf::Leak].freeze
+                ISIS::Forwarding::Recorder, ISIS::Runtime::Log, ISIS::Spf::Leak,
+                ISIS::Spf::Summary].freeze
 
   def test_every_control_passing_through_changes_nothing
     controlled = run_with(controls: true, logging: false)

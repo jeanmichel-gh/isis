@@ -71,8 +71,9 @@ module ISIS
     # The route to +prefix+: its metric and the adjacencies it may use. A
     # route to a prefix this system advertises itself has none and is
     # local. +external+ is true for a route of the external metric type,
-    # from an entry with I/E set (RFC 5302 section 3).
-    Route = Struct.new(:prefix, :metric, :adjacencies, :external) do
+    # from an entry with I/E set (RFC 5302 section 3), and +up_down+ for one
+    # whose entry had the up/down bit, an "L2->L1 inter-area" route.
+    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down) do
       def local?
         adjacencies.empty?
       end
@@ -233,7 +234,8 @@ module ISIS
           key = offer.key(dist)
           held = @routes[prefix]
           if held.nil? || (key <=> @keys[prefix]).negative?
-            @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil)
+            @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil,
+                                        offer.up_down || nil)
             @keys[prefix] = key
           elsif key == @keys[prefix] && !held.local?
             held.adjacencies = path.adjacencies.empty? ? [] : prune(held.adjacencies | path.adjacencies)

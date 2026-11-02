@@ -136,6 +136,32 @@ class TestFrrTwoRouters < Minitest::Test
     assert_includes @lab.isis4r_log, "198.51.100.3/32 no longer leaked into Level 1", @lab.report
   end
 
+  # The area into Level 2, and summarization (RFC 1195 section 3.2), on
+  # the same topology with the first FRR's loopback, 198.51.100.2/32, in
+  # the Level 1 area. The second FRR, Level 2 only in 49.0002, learns it
+  # only from isis4r's Level 2 LSP: at isis4r's Level 1 route's 20, plus
+  # 10. A summary of 198.51.100.0/24 at 15 set through the control file
+  # takes its place, at 25 at the second FRR, and the /32 is withdrawn;
+  # with the summary taken away, the /32 comes back and the /24 goes.
+  def test_a_summary_change_replaces_and_restores_at_frr
+    @lab.start(level: "1-2", frr_is_type: "level-1", frr_loopback: "198.51.100.2/32",
+               frr2: { is_type: "level-2-only", area: "49.0002", loopback: FRR2_LOOPBACK,
+                       isis4r_link: { frr_metric: 10, isis4r_metric: 10 } })
+    far = -> { @lab.frr_isis_routes(2, router: @lab.frr2_name) }
+    via = ->(metric) { { "metric" => metric, "interface" => "veth1", "next_hop" => "10.0.13.1" } }
+    assert_eventually("the second FRR does not reach the area's 198.51.100.2/32 through isis4r", 60) do
+      far.call["198.51.100.2/32"] == via.call(30)
+    end
+    @lab.isis4r_control(summaries: [{ prefix: "198.51.100.0/24", metric: 15 }])
+    assert_eventually("the second FRR does not reach the summary at 25 through isis4r", 30) do
+      far.call["198.51.100.0/24"] == via.call(25)
+    end
+    assert_eventually("the second FRR keeps the summarized /32", 30) { far.call["198.51.100.2/32"].nil? }
+    @lab.isis4r_control(summaries: [])
+    assert_eventually("the second FRR did not get the /32 back", 30) { far.call["198.51.100.2/32"] == via.call(30) }
+    assert_eventually("the second FRR keeps the withdrawn summary", 30) { far.call["198.51.100.0/24"].nil? }
+  end
+
   # Gate 3, routes computed against an independent router's on the same
   # topology, all Level 1 in one area. Each prefix the first FRR reaches
   # through the second, isis4r reaches at the first FRR's metric plus its
