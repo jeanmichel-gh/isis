@@ -20,6 +20,14 @@ module ISIS
   #            and on a LAN with a DIS, the DIS's LAN ID, the pseudonode
   #            (7.3.7); at the circuit's metric
   #   TLV 135  the configured prefixes
+  #   TLV 232  the IPv6 interface addresses, non-link-local, when there are
+  #            any (RFC 5308 section 3: in LSPs, "only the non-link-local
+  #            IPv6 addresses assigned to the IS")
+  #   TLV 236  the configured IPv6 prefixes, after the IPv4 ones, in every
+  #            metric style, since TLV 236 has only a wide metric
+  #
+  # A system with IPv6 lists :ipv6 in protocols, which RFC 5308 section 4
+  # asks of it: "it MUST advertise this in the "NLPID" TLV".
   #
   # That is metric_style :wide, the default. :narrow sends TLV 2 and TLV
   # 128 in place of 22 and 135, with only the default metric supported,
@@ -74,11 +82,13 @@ module ISIS
     attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers
     METRIC_STYLES = %i[wide narrow transition].freeze
 
-    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type
+    attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
+                  :ipv6_addresses, :ipv6_prefixes
     attr_reader :overload
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
+                   ipv6_addresses: [], ipv6_prefixes: [],
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false)
@@ -98,6 +108,8 @@ module ISIS
       @areas = areas
       @protocols = protocols
       @ip_addresses = ip_addresses
+      @ipv6_addresses = ipv6_addresses
+      @ipv6_prefixes = ipv6_prefixes
       @prefixes = prefixes
       raise ArgumentError, "metric style is :wide, :narrow or :transition" unless METRIC_STYLES.include?(metric_style)
 
@@ -332,10 +344,12 @@ module ISIS
     private
 
     # The TLVs that open LSP Number 0 and only it: TLV 1, which "shall occur
-    # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129 and 132.
+    # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129, 132 and
+    # 232.
     def fixed_tlvs
       list = [Tlv::AreaAddresses.new(area_addresses.map(&:to_s)), Tlv::ProtocolsSupported.new(@protocols)]
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
+      list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
       list
     end
 
@@ -366,6 +380,8 @@ module ISIS
         reach = prefixes.map { |p| Tlv::ExtendedIpReachability.new(p).entries.first }
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
+      reach6 = @ipv6_prefixes.map { |p| Tlv::Ipv6Reachability.new(p).entries.first }
+      list.concat(pack(Tlv::Ipv6Reachability, reach6))
       list
     end
 

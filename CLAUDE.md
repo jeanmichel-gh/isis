@@ -1941,7 +1941,16 @@ sets the default metric's ATT bit, and at Level 1 the decision adds
 0.0.0.0/0 toward them (RFC 1195 sections 1.2 and 1.3). Measured
 2026-11-01 against FRR 8.4.4: with the first FRR at both levels and
 attached, isis4r has a default route to it at 10; all in one area, none.
-Still owed by gate 3: IPv6 (TLVs 232 and 236); setting the attached bit
+**IPv6** (RFC 5308): TLVs 232 and 236 on the object contract, with
+236's control octet asserted mask by mask (U 0x80, X 0x40, S 0x20, the
+rest reserved and echoed); hellos carry the link-local address in TLV
+232 and LSPs the global ones; the originator sends TLV 236 in every
+metric style; the calculation reads TLV 236 into the same tree, and an
+IPv6 route goes through the neighbour's link-local address. The interop
+test `test_ipv6_routes_both_ways` needs a kernel with IPv6, which the
+sandbox it was written in lacks, so it was first run in CI; there
+`ISIS_SKIP_IPV6=1` is not set and the test must pass. Still owed by gate
+3: setting the attached bit
 on isis4r's own Level 1 LSP when it is at both levels (7.2.9.2), which
 needs Level 2 routes to other areas; external routes and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since

@@ -28,6 +28,10 @@ class FrrLab
   # What isis4r advertises in TLV 135: the link's subnet, and a prefix that
   # exists nowhere but in its LSP, so FRR can only have it from IS-IS.
   ISIS4R_PREFIXES = [{ prefix: "10.0.12.0/24", metric: 10 }, { prefix: "192.0.2.1/32", metric: 5 }].freeze
+  # With ipv6: in start, the link is 2001:db8:12::/64, isis4r ::1 and FRR
+  # ::2, and isis4r advertises the link and a /128 that exists nowhere
+  # else, in TLV 236.
+  ISIS4R_PREFIXES6 = [{ prefix: "2001:db8:12::/64", metric: 10 }, { prefix: "2001:db8:1::1/128", metric: 5 }].freeze
 
   def self.available?
     return [false, "set ISIS_FRR=1 to run the FRR interop tests"] unless ENV["ISIS_FRR"] == "1"
@@ -89,11 +93,14 @@ class FrrLab
   # link runs the levels is_type names, on both its ends. With isis4r_link,
   # isis4r's veth1, 10.0.13.1, joins the second FRR's veth1, 10.0.13.3, as
   # well, at those metrics.
+  # +ipv6+ runs IPv6 on the link as well, both sides, with
+  # +frr_loopback6+, a prefix such as "2001:db8:ff::2/128", on FRR's lo.
   # +network+ is :point_to_point or :broadcast, for both sides. +level+ is
   # 1 or 2, which FRR and isis4r's LAN circuit run alone, or "1-2", which
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
-            network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil)
+            network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
+            ipv6: false, frr_loopback6: nil)
     cleanup
     sh "ip netns add #{@frr_ns}"
     sh "ip netns add #{@isis_ns}"
@@ -105,6 +112,16 @@ class FrrLab
       sh "ip -n #{ns} link set veth0 up"
     end
     sh "ip -n #{@frr_ns} addr add #{frr_loopback} dev lo" if frr_loopback
+    @ipv6 = ipv6
+    @frr_loopback6 = frr_loopback6
+    if ipv6
+      sh "ip -n #{@isis_ns} -6 addr add 2001:db8:12::1/64 dev veth0 nodad"
+      sh "ip -n #{@frr_ns} -6 addr add 2001:db8:12::2/64 dev veth0 nodad"
+      sh "ip -n #{@frr_ns} -6 addr add #{frr_loopback6} dev lo" if frr_loopback6
+      # The kernel gives each end its link-local address once the link is
+      # up; isis4r reads its own when it starts, so wait for both.
+      raise "no link-local address on veth0" unless wait_for(5) { link_local(@isis_ns) && link_local(@frr_ns) }
+    end
     @network = network
     @level = level
     @frr_loopback = frr_loopback
@@ -118,8 +135,9 @@ class FrrLab
             else
               []
             end
+    v6 = ipv6 ? { ipv6: true, ipv6_addresses: ["2001:db8:12::1"], ipv6_prefixes: ISIS4R_PREFIXES6 } : {}
     start_isis4r({ interface: "veth0", system_id: ISIS4R_ID, areas: ["49.0001"], ip_addresses: ["10.0.12.1"],
-                   prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level,
+                   prefixes: ISIS4R_PREFIXES, network: network.to_s, level: level, **v6,
                    hello_interval: hello_interval, hello_multiplier: hello_multiplier,
                    extra_interfaces: extra }.merge(isis4r))
     self
@@ -144,6 +162,15 @@ class FrrLab
   rescue Errno::ESRCH
     nil
   end
+
+  # The link-local IPv6 address on veth0 in namespace +ns+, or nil.
+  def link_local(ns)
+    out, = Open3.capture3("ip", "-n", ns, "-6", "-o", "addr", "show", "dev", "veth0", "scope", "link")
+    out[%r{inet6 (fe80::[0-9a-f:]+)/}, 1]
+  end
+
+  def isis4r_link_local = link_local(@isis_ns)
+  def frr_link_local = link_local(@frr_ns)
 
   # Takes isis4r's link to the second FRR down, on isis4r's side.
   def isis4r_frr2_link_down
@@ -399,12 +426,16 @@ class FrrLab
       debug isis adj-packets
       interface veth0
        ip router isis LAB
+      #{@ipv6 ? ' ipv6 router isis LAB' : ''}
        isis circuit-type #{frr_level}
       #{@network == :broadcast ? '' : ' isis network point-to-point'}
        isis hello-interval #{hello_interval}
        isis hello-multiplier #{hello_multiplier}
       #{iface_lines.map { |l| " #{l}" }.join("\n")}
-      #{@frr_loopback ? "interface lo\n ip router isis LAB\n isis passive" : ''}
+      #{if @frr_loopback || @frr_loopback6
+          ["interface lo", (" ip router isis LAB" if @frr_loopback), (" ipv6 router isis LAB" if @frr_loopback6),
+           " isis passive"].compact.join("\n")
+        end}
       #{@frr2 ? frr2_link_stanza("veth1", hello_interval, hello_multiplier, frr2_metric_lines) : ''}
       router isis LAB
        net 49.0001.#{FRR_ID}.00

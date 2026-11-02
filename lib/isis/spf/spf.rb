@@ -22,8 +22,15 @@ module ISIS
   # outside their area only to "level 2 routers ... which indicate in
   # their level 1 LSPs that they are "attached"".
   #
+  # IPv6 prefixes come from TLV 236 (RFC 5308), in the same calculation,
+  # since one topology carries both families (RFC 5308 section 5 uses
+  # "the same changes" to RFC 1195 as RFC 5305 makes). Their routes go
+  # through the neighbour's IPv6 link-local address.
+  #
   # Not here yet: the delay, expense and error metrics (7.2.2 makes them
-  # optional), external routes and TLV 130, and IPv6.
+  # optional), external routes and TLV 130, TLV 236's X bit, and RFC 5308
+  # section 5's order of preference by the up/down bit, which matters
+  # only with routes leaked down from Level 2.
   module Spf
     # RFC 1142 annex: "MaxPathMetric 1023. Maximum total metric value for a
     # complete path". For narrow metrics.
@@ -40,17 +47,24 @@ module ISIS
 
     # One adjacency this system may forward on: the circuit's name, the
     # neighbour's System ID, the circuit ID and LAN address 7.2.7 ranks by,
-    # and the neighbour's IPv4 address from its hellos (RFC 1195 TLV 132),
-    # nil when it sent none.
-    Adjacency = Struct.new(:circuit, :neighbor, :circuit_id, :lan_address, :address, keyword_init: true) do
+    # and the neighbour's addresses from its hellos: IPv4 in TLV 132 (RFC
+    # 1195) and IPv6 link-local in TLV 232 (RFC 5308 section 3), nil when it
+    # sent none.
+    Adjacency = Struct.new(:circuit, :neighbor, :circuit_id, :lan_address, :address, :address6,
+                           keyword_init: true) do
       # Clause 7.2.7's order after the metric sum: "neighbour ID", then
       # "circuit ID", then "lANAddress", lower first.
       def rank
         [neighbor.b, circuit_id.to_i, lan_address.to_s.b]
       end
 
-      def to_s
-        "#{address || neighbor.unpack1('H*').scan(/.{1,4}/).join('.')} via #{circuit}"
+      # The next hop for +family+, :ipv4 or :ipv6.
+      def next_hop(family = :ipv4)
+        family == :ipv6 ? address6 : address
+      end
+
+      def to_s(family = :ipv4)
+        "#{next_hop(family) || neighbor.unpack1('H*').scan(/.{1,4}/).join('.')} via #{circuit}"
       end
     end
 
@@ -62,8 +76,14 @@ module ISIS
         adjacencies.empty?
       end
 
+      def family
+        prefix.include?(":") ? :ipv6 : :ipv4
+      end
+
       def to_s
-        local? ? "#{prefix} metric #{metric} local" : "#{prefix} metric #{metric} via #{adjacencies.join(', ')}"
+        return "#{prefix} metric #{metric} local" if local?
+
+        "#{prefix} metric #{metric} via #{adjacencies.map { |a| a.to_s(family) }.join(', ')}"
       end
     end
 
@@ -258,6 +278,8 @@ module ISIS
             end
           when Tlv::IpInternalReachability
             tlv.entries.each { |e| keep_lower(found, e.prefix, e.metrics.default) if e.prefix }
+          when Tlv::Ipv6Reachability
+            tlv.entries.each { |e| keep_lower(found, e.prefix, e.metric) if e.prefix }
           end
         end
         found

@@ -269,3 +269,48 @@ class TestDecisionDefaultRoute < Minitest::Test
     assert_equal 10, d.run["0.0.0.0/0"].metric
   end
 end
+
+# IPv6 over the same adjacency (RFC 5308): each side's hellos carry its
+# link-local address in TLV 232, its LSP its global address in TLV 232 and
+# a /64 in TLV 236, and each reaches the other's /64 at 10 + 1 through the
+# other's link-local address.
+class TestDecisionIpv6 < Minitest::Test
+  IDS = { a: "0000.0000.000a", b: "0000.0000.000b" }.freeze
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @wire = ISIS::Link::SimulatedWire.new
+    TestLogs.heading(name)
+    @nodes = { a: node(:a, 1), b: node(:b, 2) }
+  end
+
+  def node(who, n)
+    log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
+    db = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: log)
+    orig = ISIS::Originator.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
+                                minimum_interval: 1, protocols: %i[ipv4 ipv6],
+                                ipv6_addresses: ["2001:db8::#{n}"],
+                                ipv6_prefixes: [{ prefix: "2001:db8:#{n}::/64", metric: 1 }])
+    circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler,
+                                   log: log, name: "#{who}-eth1", system_id: IDS[who],
+                                   snpa: "00:00:00:00:00:0#{who}", ipv6_addresses: ["fe80::#{n}"],
+                                   protocols: %i[ipv4 ipv6], database: db, originator: orig,
+                                   hello_interval: 1, hello_multiplier: 3)
+    decision = ISIS::Spf::Decision.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log)
+    circuit.levels.each_value { |l| decision.attach(l) }
+    { orig: orig, circuit: circuit, decision: decision }
+  end
+
+  def test_each_reaches_the_others_ipv6_prefix_through_its_link_local_address
+    @nodes.each_value { |n| %i[orig circuit decision].each { |k| n[k].start } }
+    20.times do
+      @scheduler.advance(0.5)
+      @nodes.each_value { |n| n[:circuit].poll }
+    end
+    a = @nodes[:a][:decision].routes.transform_values(&:to_s)
+    assert_equal "2001:db8:2::/64 metric 11 via fe80::2 via a-eth1", a["2001:db8:2::/64"]
+    assert_equal "2001:db8:1::/64 metric 1 local", a["2001:db8:1::/64"]
+    assert_equal ["fe80::1"], @nodes[:b][:circuit].neighbor.ipv6_addresses
+  end
+end

@@ -309,6 +309,34 @@ class TestFrrP2p < Minitest::Test
     assert_includes @lab.isis4r_log, "route 198.51.100.2/32 removed", @lab.report
   end
 
+  # IPv6 (RFC 5308) on the same adjacency. FRR's loopback, 2001:db8:ff::2/128,
+  # is in FRR's LSP at 10, so isis4r reaches it at 10 + 10 through FRR's
+  # link-local address, which FRR's hellos carry in TLV 232. FRR reaches
+  # isis4r's 2001:db8:1::1/128 at 10 + 5 and installs it through isis4r's
+  # link-local address. Our arithmetic.
+  #
+  # A kernel without IPv6 cannot run it. That fails the test, as any lab
+  # that cannot run does, unless ISIS_SKIP_IPV6=1 says so on purpose: the
+  # sandbox this was written in has no IPv6, and CI's runners do.
+  def test_ipv6_routes_both_ways
+    unless File.exist?("/proc/sys/net/ipv6")
+      skip "the kernel has no IPv6 (ISIS_SKIP_IPV6=1)" if ENV["ISIS_SKIP_IPV6"] == "1"
+      flunk "the kernel has no IPv6; set ISIS_SKIP_IPV6=1 to skip this test on purpose"
+    end
+    @lab.start(ipv6: true, frr_loopback6: "2001:db8:ff::2/128")
+    assert_eventually("adjacency did not come up") { both_up? }
+    assert_eventually("isis4r does not reach 2001:db8:ff::2/128 through FRR's link-local address", 60) do
+      @lab.isis4r_routes["2001:db8:ff::2/128"] ==
+        { "prefix" => "2001:db8:ff::2/128", "metric" => 20,
+          "next_hops" => [{ "address" => @lab.frr_link_local, "circuit" => "veth0" }] }
+    end
+    assert_eventually("FRR did not install 2001:db8:1::1/128 through isis4r", 60) do
+      route = @lab.frr_json("show ipv6 route 2001:db8:1::1/128").fetch("2001:db8:1::1/128", []).first
+      route && route["protocol"] == "isis" && route["installed"] && route["metric"] == 15 &&
+        route["nexthops"].any? { |h| h["ip"] == @lab.isis4r_link_local }
+    end
+  end
+
   # Area addresses at Level 2 (RFC 1142 7.2.11): FRR's Level 1 LSP lists
   # 49.0001 and 49.0002, its two nets, and isis4r's lists 49.0001. So
   # isis4r's Level 2 LSP, as FRR holds it, lists the union, both, while

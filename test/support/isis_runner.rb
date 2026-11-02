@@ -14,6 +14,7 @@ $LOAD_PATH.unshift File.expand_path("../../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../../datalink-socket/lib", __dir__)
 
 require "json"
+require "ipaddr"
 require "isis4r"
 
 config = JSON.parse(File.read(ARGV.fetch(0)), symbolize_names: true)
@@ -21,6 +22,19 @@ state_file = ARGV.fetch(1)
 $stdout.sync = true
 
 iface = config.fetch(:interface)
+# With :ipv6, the system runs IPv6 too (RFC 5308): :ipv6 in TLV 129, each
+# circuit's link-local address in its hellos' TLV 232, read from the
+# kernel, and the configured :ipv6_addresses and :ipv6_prefixes in its LSP.
+ipv6 = config.fetch(:ipv6, false)
+protocols = ipv6 ? %i[ipv4 ipv6] : %i[ipv4]
+link_local = lambda do |name|
+  return [] unless ipv6
+
+  File.foreach("/proc/net/if_inet6").filter_map do |line|
+    hex, _, _, scope, _, dev = line.split
+    IPAddr.new_ntoh([hex].pack("H*")).to_s if dev == name && scope == "20"
+  end
+end
 mac = File.read("/sys/class/net/#{iface}/address").strip
 clock = ISIS::Runtime::MonotonicClock.new
 scheduler = ISIS::Runtime::Scheduler.new(clock)
@@ -43,7 +57,9 @@ levels.each do |level|
   originator = originators[level] =
     ISIS::Originator.new(system_id: config.fetch(:system_id), database: database, scheduler: scheduler,
                          log: log, areas: config.fetch(:areas),
-                         ip_addresses: config.fetch(:ip_addresses, []),
+                         ip_addresses: config.fetch(:ip_addresses, []), protocols: protocols,
+                         ipv6_addresses: config.fetch(:ipv6_addresses, []),
+                         ipv6_prefixes: config.fetch(:ipv6_prefixes, []),
                          prefixes: config.fetch(:prefixes, []),
                          metric_style: config.fetch(:metric_style, "wide").to_sym,
                          area_key: config[:area_key],
@@ -60,6 +76,7 @@ levels.each do |level|
                            database: database, originator: originator, area_key: config[:area_key],
                            system_id: config.fetch(:system_id), snpa: mac, areas: config.fetch(:areas),
                            ip_addresses: config.fetch(:ip_addresses, []), priority: config.fetch(:priority, 64),
+                           protocols: protocols, ipv6_addresses: link_local.call(iface),
                            hello_interval: config.fetch(:hello_interval),
                            hello_multiplier: config.fetch(:hello_multiplier), hello_key: config[:hello_key])
 end
@@ -70,6 +87,7 @@ unless lan
                              hello_key: config[:hello_key],
                              name: iface, system_id: config.fetch(:system_id), snpa: mac,
                              areas: config.fetch(:areas), ip_addresses: config.fetch(:ip_addresses, []),
+                             protocols: protocols, ipv6_addresses: link_local.call(iface),
                              hello_interval: config.fetch(:hello_interval),
                              hello_multiplier: config.fetch(:hello_multiplier), metric: config.fetch(:metric, 10))
   levels.each { |l| circuits[l] = p2p }
@@ -90,6 +108,7 @@ extras = config.fetch(:extra_interfaces, []).each_with_index.map do |x, i|
                                  snpa: File.read("/sys/class/net/#{name}/address").strip,
                                  local_circuit_id: i + 2, extended_circuit_id: i + 2,
                                  areas: config.fetch(:areas), ip_addresses: x.fetch(:ip_addresses, []),
+                                 protocols: protocols, ipv6_addresses: link_local.call(name),
                                  hello_interval: config.fetch(:hello_interval),
                                  hello_multiplier: config.fetch(:hello_multiplier), metric: x.fetch(:metric, 10))
   [circuit, xtransport]
@@ -123,7 +142,7 @@ circuit_state = lambda do |circuit, database, decision|
   end
   state[:routes] = decision.routes.values.map do |r|
     { prefix: r.prefix, metric: r.metric,
-      next_hops: r.adjacencies.map { |a| { address: a.address, circuit: a.circuit } } }
+      next_hops: r.adjacencies.map { |a| { address: a.next_hop(r.family), circuit: a.circuit } } }
   end
   state
 end
