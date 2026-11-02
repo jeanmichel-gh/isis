@@ -47,6 +47,16 @@ class TestLanCircuit < Minitest::Test
 
   # Clause 8.4.1.5: initialising on the first hello, Up once the neighbour
   # lists our LAN address.
+  # RFC 5308 section 3: hellos carry the link-local IPv6 address in TLV
+  # 232, and the neighbour keeps it, for the next hops of IPv6 routes.
+  def test_hellos_carry_the_link_local_ipv6_address
+    circuit(:a, ipv6_addresses: ["fe80::a"])
+    circuit(:b, ipv6_addresses: ["fe80::b"])
+    start(:a, :b)
+    run_for(3)
+    assert_equal [["fe80::b"]], @circuits[:a].neighbors.values.map(&:ipv6_addresses)
+  end
+
   def test_two_systems_come_up
     circuit(:a)
     circuit(:b)

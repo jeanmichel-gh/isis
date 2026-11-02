@@ -47,9 +47,10 @@ module ISIS
     ALL_ISS = "09:00:2b:00:00:05"
 
     # +usage+ is the levels the adjacency serves, [1], [2] or [1, 2].
-    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1).
+    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1),
+    # and +ipv6_addresses+ in TLV 232, link-local only (RFC 5308 section 3).
     Neighbor = Struct.new(:system_id, :snpa, :state, :extended_circuit_id, :holding_time, :areas, :expiry,
-                          :usage, :ip_addresses) do
+                          :usage, :ip_addresses, :ipv6_addresses) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -73,7 +74,7 @@ module ISIS
     # and +area_key+, as it did before it ran two.
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, areas: ["49.0001"],
                    extended_circuit_id: 1, local_circuit_id: 1, hello_interval: 3, hello_multiplier: 10,
-                   ip_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
+                   ip_addresses: [], ipv6_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
                    hello_key: nil, area_key: nil, levels: nil,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL)
@@ -89,6 +90,9 @@ module ISIS
       @hello_interval = hello_interval
       @hello_multiplier = hello_multiplier
       @ip_addresses = ip_addresses
+      # RFC 5308 section 3: in hellos, "only the link-local IPv6 addresses
+      # assigned to the interface that is sending the Hello".
+      @ipv6_addresses = ipv6_addresses
       @protocols = protocols
       @neighbor = nil
       @hello_timer = nil
@@ -171,6 +175,7 @@ module ISIS
     def build_hello
       tlvs = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       tlvs << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
+      tlvs << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
       three_way = { extended_circuit_id: @extended_circuit_id }
       if @neighbor
         three_way[:neighbor_system_id] = Octets.new(@neighbor.system_id)
@@ -324,6 +329,8 @@ module ISIS
       @neighbor.holding_time = hello.holding_time
       @neighbor.areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
       @neighbor.ip_addresses = ip_addresses(hello)
+      @neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
+                                      .flat_map { |t| t.addresses.map(&:to_s) }
       @neighbor.extended_circuit_id = three_way&.extended_circuit_id
       restart_holding_timer
       was = @neighbor.usage || []

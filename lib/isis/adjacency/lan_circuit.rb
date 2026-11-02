@@ -64,9 +64,10 @@ module ISIS
     end
 
     # One neighbour on the LAN, keyed by its LAN address (clause 8.4.1.4).
-    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1).
+    # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1),
+    # and +ipv6_addresses+ in TLV 232, link-local only (RFC 5308 section 3).
     Neighbor = Struct.new(:system_id, :snpa, :state, :priority, :holding_time, :lan_id, :areas, :expiry,
-                          :ip_addresses) do
+                          :ip_addresses, :ipv6_addresses) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -84,7 +85,7 @@ module ISIS
     def initialize(transport:, scheduler:, log:, name:, system_id:, snpa:, level: 1, areas: ["49.0001"],
                    priority: PRIORITY, local_circuit_id: 1, hello_interval: HELLO_INTERVAL,
                    dis_hello_interval: DIS_HELLO_INTERVAL, hello_multiplier: HOLDING_MULTIPLIER,
-                   ip_addresses: [], protocols: [:ipv4], hello_key: nil, database: nil, originator: nil,
+                   ip_addresses: [], ipv6_addresses: [], protocols: [:ipv4], hello_key: nil, database: nil, originator: nil,
                    metric: 10, area_key: nil, complete_snp_interval: COMPLETE_SNP_INTERVAL,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
                    lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL, circuit_type: nil)
@@ -117,6 +118,8 @@ module ISIS
       @dis_hello_interval = dis_hello_interval
       @hello_multiplier = hello_multiplier
       @ip_addresses = ip_addresses
+      # RFC 5308 section 3: link-local addresses only, in hellos.
+      @ipv6_addresses = ipv6_addresses
       @protocols = protocols
       @hello_key = hello_key
       @neighbors = {} # LAN address as a String => Neighbor
@@ -214,7 +217,8 @@ module ISIS
 
     def spf_adjacency(neighbor)
       Spf::Adjacency.new(circuit: @name, neighbor: neighbor.system_id.b, circuit_id: @local_circuit_id,
-                         lan_address: neighbor.snpa.to_s, address: neighbor.ip_addresses&.first)
+                         lan_address: neighbor.snpa.to_s, address: neighbor.ip_addresses&.first,
+                         address6: neighbor.ipv6_addresses&.first)
     end
 
     # The originator generated +entry+: set SRM for it here, with an
@@ -260,6 +264,7 @@ module ISIS
     def build_hello
       tlvs = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       tlvs << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
+      tlvs << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
       listed = @neighbors.values.map(&:snpa)
       tlvs << Tlv::IsNeighbors.new(listed) unless listed.empty?
       hello = Pdu::LanHello.new(level: @level, circuit_type: @circuit_type,
@@ -386,6 +391,8 @@ module ISIS
       neighbor.areas = their_areas
       neighbor.ip_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::IpInterfaceAddresses) }
                                    .flat_map { |t| t.addresses.map(&:to_s) }
+      neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
+                                     .flat_map { |t| t.addresses.map(&:to_s) }
       restart_holding_timer(key, neighbor)
 
       listed = hello.neighbors.any? { |n| n.to_s == @snpa.to_s }

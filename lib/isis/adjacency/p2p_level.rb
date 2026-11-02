@@ -72,7 +72,7 @@ module ISIS
 
         n = @circuit.neighbor
         adj = Spf::Adjacency.new(circuit: @name, neighbor: n.system_id.b, circuit_id: @circuit.local_circuit_id,
-                                 address: n.ip_addresses&.first)
+                                 address: n.ip_addresses&.first, address6: n.ipv6_addresses&.first)
         [[(n.system_id + "\x00".b).b, @circuit.metric, adj]]
       end
 

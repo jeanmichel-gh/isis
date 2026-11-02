@@ -572,3 +572,25 @@ class TestOriginatorOverload < Minitest::Test
     assert_nil @db[@orig.lsp_id]
   end
 end
+
+# IPv6 in the LSP (RFC 5308): TLV 232 with the global address in LSP 0,
+# and TLV 236 after the IPv4 reachability. Our arithmetic:
+#   87 09 00000001 20 c0000201                 192.0.2.1/32 at 1
+#   e8 10 20010db8000000000000000000000001     2001:db8::1
+#   ec 0e 00000001 00 40 20010db800010000      2001:db8:1::/64 at 1
+class TestOriginatorIpv6 < Minitest::Test
+  def test_ipv6_tlvs
+    clock = ISIS::Runtime::ManualClock.new
+    db = ISIS::Database.new(level: 1, clock: clock)
+    orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: db,
+                                scheduler: ISIS::Runtime::Scheduler.new(clock),
+                                log: ISIS::Runtime::Log.new(clock: clock), protocols: %i[ipv4 ipv6],
+                                prefixes: [{ prefix: "192.0.2.1/32", metric: 1 }],
+                                ipv6_addresses: ["2001:db8::1"],
+                                ipv6_prefixes: [{ prefix: "2001:db8:1::/64", metric: 1 }])
+    hex = orig.build(sequence: 1).tlvs.to_shex
+    assert_equal "010403490001" "8102cc8e" "e81020010db8000000000000000000000001" \
+                 "870900000001" "20c0000201" "ec0e000000010040" "20010db800010000", hex
+  end
+end
+
