@@ -128,10 +128,12 @@ if config.fetch(:forwarding, false)
 end
 
 # A Decision Process per level, with the circuit, or the point to point
-# circuit's level, as its first hops.
+# circuit's level, as its first hops. At both levels the Level 2 one sets
+# the Level 1 originator's AttachedFlag (RFC 1142 7.2.9.2).
 decisions = levels.to_h do |l|
   decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
-                                     scheduler: scheduler, log: log, forwarding: adapters[l])
+                                     scheduler: scheduler, log: log, forwarding: adapters[l],
+                                     attached_flag: both && l == 2 ? originators[1] : nil)
   decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
   extras.each { |c, _| decision.attach(c.levels.fetch(l)) }
   [l, decision]

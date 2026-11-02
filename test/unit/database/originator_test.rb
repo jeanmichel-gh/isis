@@ -573,6 +573,34 @@ class TestOriginatorOverload < Minitest::Test
   end
 end
 
+# The default metric's ATT bit, set by a Level 2 Decision Process (RFC
+# 1142 7.2.9.2). Clause 9.8: "Bit 4 - the Default Metric" of ATT, bits 7
+# to 4, bit 1 the least significant: 0x08. With IS type 1, LSP 0's flags
+# octet is 0x09 attached and 0x01 not; the other LSP Numbers stay 0x01.
+class TestOriginatorAttached < TestOriginatorOverload
+  def test_attached_is_the_default_bit_in_lsp_number_zero_only
+    @orig.start
+    @scheduler.advance(10)
+    @orig.attached = true
+    @scheduler.advance(6)
+    assert_equal [0x09, 0x01, 0x01], @orig.numbers.map { |n| flags(n) }
+    assert_equal [2, 1, 1], @orig.numbers.map { |n| @orig.sequence(n) }
+    @orig.attached = false
+    @scheduler.advance(6)
+    assert_equal 0x01, flags(0)
+    assert_equal 3, @orig.sequence(0)
+  end
+
+  # Set to what it already is, nothing is generated.
+  def test_the_same_value_generates_nothing
+    @orig.start
+    @scheduler.advance(10)
+    @orig.attached = false
+    @scheduler.advance(6)
+    assert_equal 1, @orig.sequence(0)
+  end
+end
+
 # IPv6 in the LSP (RFC 5308): TLV 232 with the global address in LSP 0,
 # and TLV 236 after the IPv4 reachability. Our arithmetic:
 #   87 09 00000001 20 c0000201                 192.0.2.1/32 at 1

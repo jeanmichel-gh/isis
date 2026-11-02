@@ -84,7 +84,7 @@ module ISIS
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes
-    attr_reader :overload
+    attr_reader :overload, :attached
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], metric_style: :wide, area_key: nil,
@@ -120,6 +120,7 @@ module ISIS
       @buffer_size = buffer_size
       @level1_database = level1_database
       @overload = overload
+      @attached = false
       @circuits = []
       # Clause 7.3.16.1: "When a system initialises, it shall start with
       # sequence number 1". The first generation adds one to this, per LSP
@@ -243,7 +244,8 @@ module ISIS
       list = (tlvs || lsp_tlvs.fetch(number, [])).dup
       list.unshift(Tlv::Authentication.new(:hmac_md5)) if @area_key
       lsp = Pdu::Lsp.new(level: level, lsp_id: Octets.new(lsp_id(number)), lifetime: Database::MAX_AGE,
-                         sequence: sequence, tlvs: list, is_type: @is_type, overload: @overload && number.zero?)
+                         sequence: sequence, tlvs: list, is_type: @is_type, overload: @overload && number.zero?,
+                         attached: @attached && number.zero? ? [:default] : [])
       lsp.key = @area_key
       lsp
     end
@@ -292,6 +294,18 @@ module ISIS
     def overload=(on)
       @overload = on
       changed("LSP Database Overload bit #{on ? 'set' : 'cleared'} (RFC 1142 7.3.19.1)") if @generated_at
+    end
+
+    # The default metric's ATT bit, in LSP Number 0. Set by the Level 2
+    # Decision Process of a system at both levels on its Level 1
+    # originator. Clause 7.2.9.2: a Level 2 system that "can reach at least
+    # one other area" shall "set AttachedFlag for metric k to True" and
+    # "regenerate its Level 1 LSP with LSP number zero", and one that
+    # "cannot reach any other areas" sets it to False and regenerates the
+    # same. Only the default metric is computed, so only its bit is set.
+    def attached=(on)
+      @attached = on
+      changed("AttachedFlag #{on ? 'set' : 'cleared'} (RFC 1142 7.2.9.2)") if @generated_at
     end
 
     # Clause 7.3.6: an event "which would cause the information content to

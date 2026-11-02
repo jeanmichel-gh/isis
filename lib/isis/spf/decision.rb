@@ -20,8 +20,13 @@ module ISIS
     # attached Level 2 system (RFC 1142 7.2.9.1; RFC 1195 section 1.3,
     # traffic outside the area "will be forwarded to the nearest level 2
     # router"), unless a prefix of that name is already as near. Not when
-    # this system is attached itself, which 7.2.9.2 decides after the Level
-    # 2 routes and which is not here yet: so far no isis4r system sets ATT.
+    # this system is attached itself: its own Level 1 LSP Number 0 sets
+    # the bit, and its nearest Level 2 system is "Self" (7.2.9.2).
+    #
+    # At Level 2, with +attached_flag+, the Level 1 originator of a system
+    # at both levels, it sets that originator's AttachedFlag after each
+    # run: true when the routes reach at least one other area, false when
+    # they reach none (RFC 1142 7.2.9.2). A change is logged at info.
     #
     # Each step is a method a test can replace on one object: changed
     # decides when to run, and compute does the calculation.
@@ -30,10 +35,11 @@ module ISIS
     # reason that started the run, and each run at debug.
     class Decision
       attr_reader :system_id, :database, :circuits, :routes, :paths, :runs
-      attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding
+      attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding, :attached_flag
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
-                     max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil)
+                     max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
+                     attached_flag: nil)
         @system_id = system_id
         @database = database
         @scheduler = scheduler
@@ -42,6 +48,7 @@ module ISIS
         @max_path_metric = max_path_metric
         @delay = delay
         @forwarding = forwarding
+        @attached_flag = attached_flag
         @circuits = []
         @routes = {}
         @paths = {}
@@ -104,9 +111,10 @@ module ISIS
         before = @routes
         @paths = calc.paths
         @routes = calc.routes
-        add_default(calc.attached) if level == 1
+        add_default(calc.attached) if level == 1 && !calc.self_attached?
         why = reasons.uniq.first(3).join("; ")
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
+        set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
         @log.debug("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
                    "after #{why} (RFC 1142 7.2, Annex C.2)")
         report(before, @routes, why)
@@ -133,6 +141,15 @@ module ISIS
         return if held && held.metric <= attached.distance
 
         @routes[DEFAULT] = Route.new(DEFAULT, attached.distance, attached.adjacencies)
+      end
+
+      def set_attached(reach, why)
+        return if @attached_flag.attached == reach
+
+        @log.info("Level 2 routes #{reach ? 'reach' : 'reach no'} other area, AttachedFlag " \
+                  "#{reach ? 'set' : 'cleared'} in the Level 1 LSP, after #{why} (RFC 1142 7.2.9.2)",
+                  kind: :attached, attached: reach)
+        @attached_flag.attached = reach
       end
 
       # Each route operation, in prefix order, to the adapter.

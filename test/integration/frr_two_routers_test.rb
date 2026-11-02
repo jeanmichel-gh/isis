@@ -81,6 +81,31 @@ class TestFrrTwoRouters < Minitest::Test
                  @lab.vtysh("show isis database"), @lab.report)
   end
 
+  # The other way round: isis4r is the attached one (RFC 1142 7.2.9.2).
+  # isis4r at both levels in 49.0001, the first FRR Level 1 only behind
+  # its veth0, and the second FRR Level 2 only in 49.0002 on isis4r's
+  # veth1. isis4r's Level 2 routes reach 49.0002, so its Level 1 LSP 0
+  # sets ATT, FRR shows 1/0/0 for it, and FRR's way out is a default route
+  # to isis4r at the link's 10. isis4r itself, attached, adds no default
+  # route ("Self"). When the link to 49.0002 goes, isis4r reaches no
+  # other area, clears ATT, and FRR's default route goes.
+  def test_isis4r_sets_att_when_it_reaches_another_area
+    @lab.start(level: "1-2", frr_is_type: "level-1",
+               frr2: { is_type: "level-2-only", area: "49.0002", loopback: FRR2_LOOPBACK,
+                       isis4r_link: { frr_metric: 10, isis4r_metric: 10 } })
+    lsp = /^#{Regexp.escape(FrrLab::ISIS4R_ID)}\.00-00\s+\d+\s+0x\h+\s+0x\h+\s+\d+\s+(\d)\/0\/0/
+    att = -> { @lab.vtysh("show isis database")[lsp, 1] }
+    assert_eventually("FRR does not see ATT in isis4r's Level 1 LSP", 60) { att.call == "1" }
+    assert_eventually("FRR has no default route to isis4r", 60) do
+      @lab.frr_isis_routes["0.0.0.0/0"] == { "metric" => 10, "interface" => "veth0", "next_hop" => "10.0.12.1" }
+    end
+    assert_nil @lab.isis4r_routes(1)["0.0.0.0/0"], @lab.report
+    assert_includes @lab.isis4r_log, "AttachedFlag set in the Level 1 LSP", @lab.report
+    @lab.isis4r_frr2_link_down
+    assert_eventually("FRR still sees ATT in isis4r's Level 1 LSP", 30) { att.call == "0" }
+    assert_eventually("FRR keeps a default route to isis4r", 30) { @lab.frr_isis_routes["0.0.0.0/0"].nil? }
+  end
+
   # Gate 3, routes computed against an independent router's on the same
   # topology, all Level 1 in one area. Each prefix the first FRR reaches
   # through the second, isis4r reaches at the first FRR's metric plus its
