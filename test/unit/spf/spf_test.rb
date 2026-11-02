@@ -23,7 +23,7 @@ class TestSpf < Minitest::Test
 
   # Store the LSP of +node+, a letter or [letter, pseudonode], with +links+
   # to other nodes and +prefixes+, wide unless +narrow+.
-  def lsp(node, links: {}, prefixes: {}, number: 0, overload: false, narrow: false, lifetime: 1200)
+  def lsp(node, links: {}, prefixes: {}, number: 0, overload: false, narrow: false, lifetime: 1200, attached: [])
     letter, pseudonode = Array(node)
     lsp_id = id(letter, pseudonode || 0) + [number].pack("C")
     tlvs = []
@@ -45,7 +45,7 @@ class TestSpf < Minitest::Test
       tlvs << (narrow ? ISIS::Tlv::IpInternalReachability.new(list) : ISIS::Tlv::ExtendedIpReachability.new(list))
     end
     pdu = ISIS::Pdu::Lsp.new(level: 1, lsp_id: ISIS::Octets.new(lsp_id), lifetime: lifetime, sequence: 1,
-                             tlvs: tlvs, overload: overload)
+                             tlvs: tlvs, overload: overload, attached: attached)
     @db.entry(lsp_id).store(pdu)
   end
 
@@ -296,5 +296,48 @@ class TestSpf < Minitest::Test
     lsp("b", links: { "a" => 10, ["c", 1] => 0 }, prefixes: { "192.0.2.2/32" => 1 })
     calc = spf([[id("b"), 10, adj("b")], [id("c"), 5, adj("c")]])
     assert_equal "192.0.2.2/32 metric 11 via 10.0.0.11 via eth-b, 10.0.0.12 via eth-c", route(calc, "192.0.2.2/32")
+  end
+
+  # Clause 7.2.9.1's R: the nearest system whose LSP Number 0 sets the
+  # default metric's ATT bit. C at 20 in the line.
+  def test_the_nearest_attached_system
+    line
+    lsp("c", links: { "b" => 10 }, prefixes: { "192.0.2.3/32" => 1 }, attached: [:default])
+    attached = spf([[id("b"), 10, adj("b")]]).attached
+    assert_equal [20, ["10.0.0.11 via eth-b"]], [attached.distance, attached.adjacencies.map(&:to_s)]
+  end
+
+  # Of two, the nearer: B at 10 before C at 20.
+  def test_the_nearer_of_two_attached_systems
+    line
+    lsp("b", links: { "a" => 10, "c" => 10 }, attached: [:default])
+    lsp("c", links: { "b" => 10 }, attached: [:default])
+    assert_equal 10, spf([[id("b"), 10, adj("b")]]).attached.distance
+  end
+
+  # Two at one cost: both first hops, in 7.2.7's order.
+  def test_attached_systems_at_one_cost_share_r
+    lsp("a", links: { "b" => 10, "c" => 10 })
+    lsp("b", links: { "a" => 10 }, attached: [:default])
+    lsp("c", links: { "a" => 10 }, attached: [:default])
+    attached = spf([[id("c"), 10, adj("c")], [id("b"), 10, adj("b")]]).attached
+    assert_equal ["10.0.0.11 via eth-b", "10.0.0.12 via eth-c"], attached.adjacencies.map(&:to_s)
+  end
+
+  # Clause 7.2.5: the ATT bits of another LSP Number do not count; nor does
+  # an ATT bit for another metric, since this is the default metric's R.
+  def test_only_the_default_att_bit_of_lsp_zero_counts
+    line
+    lsp("c", number: 1, attached: [:default])
+    lsp("b", links: { "a" => 10, "c" => 10 }, attached: [:delay])
+    assert_nil spf([[id("b"), 10, adj("b")]]).attached
+  end
+
+  # A system not on PATHS is not in R: C reports no link back to B.
+  def test_an_unreachable_attached_system_is_not_in_r
+    lsp("a", links: { "b" => 10 })
+    lsp("b", links: { "a" => 10, "c" => 10 })
+    lsp("c", attached: [:default])
+    assert_nil spf([[id("b"), 10, adj("b")]]).attached
   end
 end

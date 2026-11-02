@@ -1935,9 +1935,15 @@ In a triangle where the cheap path runs through one system, FRR routes
 around an overloaded isis4r and still reaches its prefix, and isis4r
 routes around an FRR with `set-overload-bit`, measured 2026-11-01 on FRR
 8.4.4. Measured on the way: FRR 8.4.4 drops an `isis metric` over 63
-from its startup file. Still owed by gate 3: IPv6 (TLVs 232 and 236); the
-nearest Level 2 system (7.2.9.1) and the attached bit; external routes
-and TLV 130. The
+from its startup file. **The nearest attached Level 2 system**
+(7.2.9.1): the calculation finds the nearest systems whose LSP Number 0
+sets the default metric's ATT bit, and at Level 1 the decision adds
+0.0.0.0/0 toward them (RFC 1195 sections 1.2 and 1.3). Measured
+2026-11-01 against FRR 8.4.4: with the first FRR at both levels and
+attached, isis4r has a default route to it at 10; all in one area, none.
+Still owed by gate 3: IPv6 (TLVs 232 and 236); setting the attached bit
+on isis4r's own Level 1 LSP when it is at both levels (7.2.9.2), which
+needs Level 2 routes to other areas; external routes and TLV 130. The
 attached bit goes with SPF in gate 3, where the phase list puts it, since
 clause 7.2.9.2 sets it "after computing the level 2 routes". Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too

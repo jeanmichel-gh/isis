@@ -66,6 +66,21 @@ class TestFrrTwoRouters < Minitest::Test
     assert_nil @lab.isis4r_routes[FRR2_LOOPBACK], "isis4r has a Level 2 route at Level 1\n#{@lab.report}"
   end
 
+  # The same boundary, from inside the area: the first FRR sets ATT in its
+  # Level 1 LSP, as FRR 8.4.4 does once it reaches another area, so
+  # isis4r's way out is a default route to it, at the link's 10 (RFC 1142
+  # 7.2.9.1, RFC 1195 section 1.2).
+  def test_a_level_1_system_defaults_to_the_attached_frr
+    @lab.start(frr_is_type: "level-1-2", frr2: { is_type: "level-2-only", area: "49.0002", loopback: FRR2_LOOPBACK })
+    assert_eventually("isis4r has no default route to the attached FRR", 60) do
+      @lab.isis4r_routes["0.0.0.0/0"] ==
+        { "prefix" => "0.0.0.0/0", "metric" => 10,
+          "next_hops" => [{ "address" => "10.0.12.2", "circuit" => "veth0" }] }
+    end
+    assert_match(/^#{Regexp.escape(@lab.name)}\.00-00\s+\*\s+\d+\s+0x\h+\s+0x\h+\s+\d+\s+1\/0\/0/,
+                 @lab.vtysh("show isis database"), @lab.report)
+  end
+
   # Gate 3, routes computed against an independent router's on the same
   # topology, all Level 1 in one area. Each prefix the first FRR reaches
   # through the second, isis4r reaches at the first FRR's metric plus its
@@ -101,8 +116,10 @@ class TestFrrTwoRouters < Minitest::Test
       toward.call.all? { |prefix, r| far[prefix] == r.merge("metric" => r["metric"] + 10, "next_hop" => "10.0.23.2") }
     end
     # Our arithmetic, for the record: the second FRR's loopback at 10 in its
-    # LSP, plus 10 and 10.
+    # LSP, plus 10 and 10. And no default route: all one area, nobody
+    # attached.
     assert_equal 30, @lab.isis4r_routes.dig(FRR2_LOOPBACK, "metric"), @lab.report
+    assert_nil @lab.isis4r_routes["0.0.0.0/0"], @lab.report
   end
 
   # Equal cost paths. isis4r also has a link straight to the second FRR,
