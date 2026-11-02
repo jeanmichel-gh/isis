@@ -32,14 +32,18 @@ module ISIS
 
       # The octets for these field values. A delay, expense or error of nil
       # is unsupported, S set. +external+ sets I/E in each octet in
-      # +ie_octets+, the indexes this TLV gives an I/E bit.
-      def self.build(metric:, ie_octets:, delay: nil, expense: nil, error: nil, external: false)
+      # +ie_octets+, the indexes this TLV gives an I/E bit. +up_down+ sets
+      # bit 8 of the default octet, which RFC 5302 section 2 makes the
+      # up/down bit in TLVs 128 and 130; only those pass it, since in TLV 2
+      # that bit is reserved.
+      def self.build(metric:, ie_octets:, delay: nil, expense: nil, error: nil, external: false, up_down: false)
         values = [metric, delay, expense, error]
         octets = values.each_with_index.map do |v, i|
           raise ArgumentError, "the default metric is not optional" if v.nil? && i.zero?
 
           octet = v.nil? ? S : field(v, NAMES[i])
           octet |= IE if external && ie_octets.include?(i)
+          octet |= S if up_down && i.zero?
           octet
         end
         new(octets.pack("C4"))
@@ -80,8 +84,8 @@ module ISIS
 
       # True when the field values say everything: building from them gives
       # these octets back, reserved bits and all.
-      def canonical?(ie_octets)
-        self.class.build(**fields, ie_octets: ie_octets).octets == @octets
+      def canonical?(ie_octets, up_down: false)
+        self.class.build(**fields, ie_octets: ie_octets, up_down: up_down).octets == @octets
       end
 
       def to_s

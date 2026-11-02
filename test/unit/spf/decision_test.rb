@@ -355,9 +355,10 @@ class TestDecisionAttachedFlag < Minitest::Test
 
   def id(letter) = (ISIS::Pdu.dotted_octets("0000.0000.000#{letter}") + "\x00".b).b
 
-  def store(letter, links, areas, level: 2, db: @db, attached: [])
+  def store(letter, links, areas, level: 2, db: @db, attached: [], prefixes: [])
     tlvs = []
     tlvs << ISIS::Tlv::AreaAddresses.new(areas) unless areas.empty?
+    tlvs << ISIS::Tlv::ExtendedIpReachability.new(prefixes) unless prefixes.empty?
     tlvs << ISIS::Tlv::ExtendedIsReachability.new(links.map do |n|
       ISIS::Tlv::ExtendedIsReachability::Entry.new(neighbor: id(n), metric: 10)
     end)
@@ -438,6 +439,30 @@ class TestDecisionAttachedFlag < Minitest::Test
     @db.entry(one.lsp_id).store(one)
     @decision.run
     assert @flag.attached
+  end
+
+  # With a Leak, each Level 2 run hands it the routes: B's 198.51.100.3/32
+  # at 10 + 5 reaches the Level 1 originator, here a stand-in. A Level 1
+  # decision hands it nothing.
+  LeakTarget = Struct.new(:leaked_prefixes, :sets) do
+    def leaked_prefixes=(list)
+      self.sets += 1
+      self[:leaked_prefixes] = list
+    end
+  end
+
+  def test_a_level_2_run_hands_its_routes_to_the_leak
+    orig = LeakTarget.new([], 0)
+    @decision.leak = ISIS::Spf::Leak.new(originator: orig, log: @log, policy: ->(_r) { true })
+    store("b", ["a"], ["49.0002"], prefixes: [{ prefix: "198.51.100.3/32", metric: 5 }])
+    @decision.run
+    assert_equal [{ prefix: "198.51.100.3/32", metric: 15 }], orig.leaked_prefixes
+    db = ISIS::Database.new(level: 1, clock: @clock)
+    l1 = ISIS::Spf::Decision.new(system_id: "0000.0000.000a", database: db, scheduler: @scheduler, log: @log,
+                                 leak: ISIS::Spf::Leak.new(originator: (o1 = LeakTarget.new([], 0)),
+                                                           log: @log, policy: ->(_r) { true }))
+    l1.run
+    assert_equal 0, o1.sets
   end
 
   # At Level 1, a system whose own LSP Number 0 is attached adds no default

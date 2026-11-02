@@ -445,6 +445,13 @@ class FrrLab
     true
   end
 
+  # Change isis4r's policy while it runs: +control+ is what the runner reads
+  # from its control file, such as { leak: ["198.51.100.0/24"] }.
+  def isis4r_control(control)
+    File.write("#{state_file}.control.tmp", JSON.generate(control))
+    File.rename("#{state_file}.control.tmp", "#{state_file}.control")
+  end
+
   # The routes the netlink adapter put in isis4r's kernel, as `ip route`
   # prints them: proto 187 is RTPROT_ISIS, "isis" in rt_protos, so it lists exactly
   # those. +family+ is "-4" or "-6".

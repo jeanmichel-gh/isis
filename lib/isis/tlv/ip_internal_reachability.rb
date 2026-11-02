@@ -53,8 +53,8 @@ module ISIS
         # The up/down bit, bit 8 of the default metric octet. RFC 5302
         # section 2: "L1L2 routers MUST set this bit to one for prefixes
         # that are derived from L2 routing and are advertised into L1
-        # LSPs." RFC 1195 has it reserved, so it is read here and kept, and
-        # building from field values leaves it clear.
+        # LSPs." RFC 1195 has it reserved. It is read here and kept, and
+        # set when built from field values with up_down: true.
         def up_down?
           @metrics.octets.getbyte(0) & NarrowMetrics::S != 0
         end
@@ -66,7 +66,8 @@ module ISIS
         def to_hash
           h = prefix ? { prefix: prefix } : { address: IPAddr.new_ntoh(@address).to_s, mask: IPAddr.new_ntoh(@mask).to_s }
           h.merge!(@metrics.fields)
-          h[:metric_octets] = @metrics.octets.unpack1("H*") unless @metrics.canonical?(IE_OCTETS)
+          h[:up_down] = true if up_down?
+          h[:metric_octets] = @metrics.octets.unpack1("H*") unless @metrics.canonical?(IE_OCTETS, up_down: up_down?)
           h
         end
 
@@ -140,7 +141,7 @@ module ISIS
           if e.key?(:metric_octets)
             NarrowMetrics.new([e.fetch(:metric_octets)].pack("H*"))
           else
-            NarrowMetrics.build(**e.slice(:metric, :delay, :expense, :error, :external), ie_octets: IE_OCTETS)
+            NarrowMetrics.build(**e.slice(:metric, :delay, :expense, :error, :external, :up_down), ie_octets: IE_OCTETS)
           end
         address, mask =
           if e.key?(:prefix)

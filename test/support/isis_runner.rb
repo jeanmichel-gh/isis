@@ -128,13 +128,20 @@ if config.fetch(:forwarding, false)
   end
 end
 
+# At both levels, an Spf::Leak puts the Level 2 routes within :leak, a
+# list of covering prefixes, in the Level 1 LSP (RFC 5302 section 2). The
+# default leaks nothing.
+leak_policy = ->(list) { list.empty? ? ISIS::Spf::Leak::NONE : ISIS::Spf::Leak.prefixes(list) }
+leak = both ? ISIS::Spf::Leak.new(originator: originators[1], log: log, policy: leak_policy.call(config.fetch(:leak, []))) : nil
+
 # A Decision Process per level, with the circuit, or the point to point
 # circuit's level, as its first hops. At both levels the Level 2 one sets
 # the Level 1 originator's AttachedFlag (RFC 1142 7.2.9.2).
 decisions = levels.to_h do |l|
   decision = ISIS::Spf::Decision.new(system_id: config.fetch(:system_id), database: databases[l],
                                      scheduler: scheduler, log: log, forwarding: adapters[l],
-                                     attached_flag: both && l == 2 ? originators[1] : nil)
+                                     attached_flag: both && l == 2 ? originators[1] : nil,
+                                     leak: l == 2 ? leak : nil)
   decision.attach(lan ? circuits[l] : circuits[l].levels.fetch(l))
   extras.each { |c, _| decision.attach(c.levels.fetch(l)) }
   [l, decision]
@@ -184,8 +191,26 @@ originators.each_value(&:start)
 circuits.values.uniq.each(&:start)
 extras.each { |c, _| c.start }
 decisions.each_value(&:start)
+# A test changes policy while isis4r runs by writing STATE.json.control,
+# JSON with any of: leak, a new list of covering prefixes. Read when its
+# modification time moves.
+control_file = "#{state_file}.control"
+control_seen = nil
+apply_control = lambda do
+  stamp = File.exist?(control_file) && File.mtime(control_file)
+  return if !stamp || stamp == control_seen
+
+  control_seen = stamp
+  control = JSON.parse(File.read(control_file), symbolize_names: true)
+  if control.key?(:leak) && leak
+    log.info("control: leak #{control[:leak].inspect}")
+    leak.policy = leak_policy.call(control[:leak])
+  end
+end
+
 next_state = clock.now
 until stop
+  apply_control.call
   scheduler.run_due
   # Wait for a frame at most until the next timer is due. Each frame read
   # goes to every circuit on the interface; each takes its own level's.
