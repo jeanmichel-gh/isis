@@ -109,15 +109,13 @@ module ISIS
       end
 
       # System ID to hostname, from TLV 137 in each non-pseudonode LSP
-      # (RFC 5301 section 4), and this system's own.
+      # Number 0 (RFC 5301 section 4), kept through its purge until the
+      # header goes, and this system's own.
       def hostnames
         names = {}
         @router.databases.each_value do |db|
           db.entries.each do |e|
-            next if e.placeholder? || e.lsp_id_s[15, 2] != "00"
-
-            tlv = e.lsp.tlvs.to_a.grep(Tlv::DynamicHostname).first
-            names[e.lsp_id_s[0, 14]] = tlv.name.dup.force_encoding("UTF-8") if tlv
+            names[e.lsp_id_s[0, 14]] = e.hostname if e.hostname && e.lsp_id_s[15, 2] == "00"
           end
         end
         names[@router.system_id_s] = @router.config[:hostname] if @router.config[:hostname]

@@ -2081,7 +2081,10 @@ integration has begun**, in the order below: first, the originator takes
 `hostname:` and sends it in TLV 137 in LSP 0 (RFC 5301 section 3), since
 routescope's map finds an IS-IS neighbour by its hostname. Measured
 2026-11-02 against FRR 8.4.4: FRR lists isis4r by that name in `show isis
-hostname` and `show isis neighbor`. Then `lib/isis/router.rb`: an
+hostname` and `show isis neighbor`. A purge carries no TLV 137, so the
+database keeps the name its LSP had until the header goes, and isisd
+lists the purge by it, as FRR 8.4.4 does; RFC 5301 section 4 leaves how
+long a mapping lasts open. Then `lib/isis/router.rb`: an
 `ISIS::Router` builds a whole system from one configuration, the
 databases, originators and Decision Processes per level, a circuit per
 interface, a LAN circuit per level on a broadcast one, and the leak and
