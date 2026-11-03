@@ -174,6 +174,9 @@ module ISIS
       self
     end
 
+    # Whether it is sending hellos: started and not stopped.
+    def hellos? = !@hello_timer.nil?
+
     # For UpdateProcess: a broadcast circuit.
     def broadcast?
       true

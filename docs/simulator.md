@@ -198,9 +198,11 @@ error naming the parameter or value at fault.
 | `sim.neighbor.stop` | `circuit` |
 | `sim.neighbor.start` | `circuit` |
 
-`sim.state` gives the counts, every system with its levels, flags, prefix
-counts, withdrawn groups and LSP Numbers, and every link with its state,
-metric and levels. `sim.graph` gives nodes and links for a map.
+`sim.state` gives the counts, the metric style and the largest link
+metric it carries, each of the simulator's interfaces with whether it is
+sending hellos, every system with its levels, flags, prefix counts, prefix
+groups by their first prefix, withdrawn groups and LSP Numbers, and every
+link with its number, state, metric and levels. `sim.graph` gives nodes and links for a map.
 
 ## What it refuses, and what it keeps
 

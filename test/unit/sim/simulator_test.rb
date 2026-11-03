@@ -228,6 +228,19 @@ class TestSimSimulator < Minitest::Test
     assert_equal 50, route("10.200.0.6/32").metric
   end
 
+  # Started again while sending, a circuit keeps one hello timer: stopped
+  # once, it goes quiet and the DUT's adjacency times out.
+  def test_neighbor_start_twice
+    start
+    @sim.neighbor_start
+    @sim.neighbor_stop
+    run_for(5)
+    assert_nil route("10.200.0.6/32")
+    assert_equal [{ name: "a", hellos: false }], @sim.state[:interfaces]
+    @sim.neighbor_start
+    assert_equal [{ name: "a", hellos: true }], @sim.state[:interfaces]
+  end
+
   # One way, the two-way check fails (7.2.8.2) and nothing past is reached.
   def test_a_one_way_link
     start(topology("links" => [{ "from" => "s1", "to" => "r1c1", "one_way" => true }]))
@@ -240,8 +253,10 @@ class TestSimSimulator < Minitest::Test
     assert_equal [true, true, 6], [s[:generating], s[:aging], s.dig(:counts, :systems)]
     r = s[:systems].find { _1[:name] == "r2c3" }
     assert_equal [4, { 1 => 1 }], [r[:prefixes], r[:lsps]]
-    assert_equal({ name: "s1--r1c1", from: "s1", to: "r1c1", metric: 10, state: "up", one_way: false, levels: [1] },
+    assert_equal({ name: "s1--r1c1", from: "s1", to: "r1c1", metric: 10, state: "up", one_way: false, levels: [1], number: 8 },
                  s[:links].find { _1[:name] == "s1--r1c1" })
+    assert_equal ["wide", 0xFFFFFF, [{ name: "a", hellos: true }]], s.values_at(:metric_style, :metric_max, :interfaces)
+    assert_equal ["10.200.0.6/32", "30.0.0.0/24"], r[:groups], "its loopback and its group of three"
     g = @sim.graph
     assert_equal 7, g[:nodes].size
     assert_equal [true, [1, 1]], g[:nodes].values_at(0, 1).map { _1[:simulator] ? true : _1[:grid] }
