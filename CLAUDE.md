@@ -2143,7 +2143,11 @@ the simulator, whose Router answers isisd's API, and the API answers the
 `isis-cli sim ACTION KEY=VALUE` calls. Measured 2026-11-02 against FRR
 8.4.4 (`test_frr_follows_the_actions`): through the API, a metric change,
 two links down, an overload, a withdrawn group, a flush and a restore
-each reach FRR's routes. Next: routescope's IS-IS scenario conditions
+each reach FRR's routes. `sim.state` also says which interfaces send
+hellos, each system's prefix groups, each link's number and the metric
+style, which routescope's simulated area panel reads; `neighbor.start` on
+a circuit already sending leaves it alone, where it used to start a
+second hello timer. Next: routescope's IS-IS scenario conditions
 and its sim actions for isis4r-sim. Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause

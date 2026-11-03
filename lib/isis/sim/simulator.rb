@@ -241,16 +241,20 @@ module ISIS
       end
 
       # Stop or start the hellos on one of the simulator's own interfaces,
-      # or all of them, so its neighbours' adjacencies time out.
+      # or all of them, so its neighbours' adjacencies time out. A circuit
+      # already sending is not started again, which would run a second
+      # hello timer beside the first.
       def neighbor_stop(circuit: nil) = each_interface(circuit) { |c| c.stop }.tap { event(:neighbor, "hellos stopped on #{circuit || 'every interface'}") }
-      def neighbor_start(circuit: nil) = each_interface(circuit) { |c| c.start }.tap { event(:neighbor, "hellos started on #{circuit || 'every interface'}") }
+      def neighbor_start(circuit: nil) = each_interface(circuit) { |c| c.start unless c.hellos? }.tap { event(:neighbor, "hellos started on #{circuit || 'every interface'}") }
 
       # What the API's sim.state shows.
       def state
         { generating: @generating, aging: @aging, lsp_lifetime: @topology.lsp_lifetime,
-          counts: @topology.counts, levels: levels,
+          counts: @topology.counts, levels: levels, metric_style: @topology.metric_style.to_s,
+          metric_max: Sim::Topology::LIMITS.fetch(@topology.metric_style)[:link],
+          interfaces: @router.interfaces.map { |i| { name: i.name, hellos: i.each_circuit.any?(&:hellos?) } },
           systems: @topology.all_systems.map { |s| system_state(s) },
-          links: @topology.links.map { |l| link_state(l) },
+          links: @topology.links.each_with_index.map { |l, i| link_state(l).merge(number: i + 1) },
           warnings: @topology.warnings }
       end
 
@@ -369,7 +373,8 @@ module ISIS
         lsps = @originators[s.name].transform_values { |o| o.numbers.size }
         { name: s.name, system_id: s.system_id, hostname: s.hostname, simulator: s.simulator?, levels: s.levels,
           overload: s.overload ? true : false, attached: s.attached ? true : false,
-          prefixes: s.prefixes.size, externals: s.externals.size, withdrawn: @withdrawn[s.name].dup, lsps: lsps }
+          prefixes: s.prefixes.size, externals: s.externals.size, groups: (s.prefixes + s.externals).map(&:group).uniq,
+          withdrawn: @withdrawn[s.name].dup, lsps: lsps }
       end
 
       def link_state(l)

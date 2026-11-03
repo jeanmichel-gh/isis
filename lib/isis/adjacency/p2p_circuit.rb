@@ -156,6 +156,9 @@ module ISIS
       self
     end
 
+    # Whether it is sending hellos: started and not stopped.
+    def hellos? = !@hello_timer.nil?
+
     # This system's three-way state for the circuit: :down with no
     # neighbour. RFC 5303 section 3.2 reports Down when there is none.
     def three_way_state
