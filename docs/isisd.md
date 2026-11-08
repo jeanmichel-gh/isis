@@ -77,6 +77,18 @@ Every method:
 | `events.subscribe` | `since` | turns the connection into a stream of events |
 | `events.unsubscribe` | | ends the stream |
 
+An event is one log line above debug, as `show.log` and
+`events.subscribe` give it: `seq`, `time`, `level`, `circuit`, `kind`,
+`message` and `data`. Two marks are for a viewer such as routescope:
+
+- `kind: "spf"` is one SPF run, with `level`, `run`, `systems`,
+  `prefixes`, `reasons` (the first 20) and `more` (how many it left out).
+  A reason that names an LSP is written as the `database` event names it,
+  `LSP 0000.0001.0101.00-00 sequence 0x000001a7`.
+- `data.refresh: true`, on an `origination` or a `database` event, says
+  the LSP's content is what it was, only a new sequence (RFC 1142 7.3.5).
+  It is absent otherwise.
+
 isis4r-sim, the simulator, answers every one of these and its own
 `sim.*` methods, listed in `docs/simulator.md`.
 

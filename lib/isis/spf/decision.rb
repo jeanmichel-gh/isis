@@ -36,8 +36,11 @@ module ISIS
     # decides when to run, and compute does the calculation.
     #
     # Logging: each route added, changed or removed at info, with the
-    # reason that started the run, and each run at debug.
+    # reason that started the run, and each run at info as an event of
+    # kind :spf, with up to REASONS_KEPT of its reasons, so a viewer
+    # (routescope's Timeline) can see every run and what started it.
     class Decision
+      REASONS_KEPT = 20
       attr_reader :system_id, :database, :circuits, :routes, :paths, :runs
       attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding, :attached_flag, :leak, :summary
 
@@ -123,8 +126,10 @@ module ISIS
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
         @leak.update(@routes) if level == 2 && @leak
         @summary.update(@routes) if level == 1 && @summary
-        @log.debug("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
-                   "after #{why} (RFC 1142 7.2, Annex C.2)")
+        @log.info("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
+                  "after #{why} (RFC 1142 7.2, Annex C.2)",
+                  kind: :spf, level: level, run: @runs, systems: @paths.size, prefixes: @routes.size,
+                  reasons: reasons.uniq.first(REASONS_KEPT), more: [reasons.uniq.size - REASONS_KEPT, 0].max)
         report(before, @routes, why)
         install(before, @routes)
         @routes

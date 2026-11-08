@@ -306,7 +306,10 @@ What isis4r adds, because of its own rules:
   receive policy refused logs the finding and the clause. A dropped PDU
   with no reason in the log is the exact case this requirement exists for.
   Rough levels: state changes and refusals at info, each PDU and each
-  decision at debug.
+  decision at debug. An SPF run is kept at info, as an event of kind
+  `:spf`, so a viewer can see each run and its reasons; an LSP event
+  that is only a refresh carries `refresh: true` (2026-11-08, for
+  routescope's events feed).
 * **Logging is observation, so it must not change behaviour.**
   Pass-through equivalence runs with logging at debug and with it off,
   and both must match. A log statement that calls a method with a side

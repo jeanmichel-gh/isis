@@ -245,6 +245,12 @@ module ISIS
       :confused
     end
 
+    # The same TLVs and flags: what a regeneration would change. A new
+    # sequence with the same content is a refresh (RFC 1142 7.3.5).
+    def self.same_content?(held, fresh)
+      held.flags == fresh.flags && held.tlvs.to_shex == fresh.tlvs.to_shex
+    end
+
     private
 
     def remove(entry)
