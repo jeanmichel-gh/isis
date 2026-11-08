@@ -94,6 +94,29 @@ class TestDecisionP2p < Minitest::Test
     assert_includes added.map { |e| e.data[:prefix] }, "192.0.2.2/32"
   end
 
+  # Each run is an event of kind :spf at info, with its level, its
+  # number, what it found and the reasons that started it.
+  def test_each_run_is_an_event
+    start(:a, :b)
+    run_for(10)
+    runs = @nodes[:a][:log].events.select { |e| e.kind == :spf }
+    assert_equal (1..@nodes[:a][:decision].runs).to_a, runs.map { |e| e.data[:run] }
+    assert(runs.all? { |e| e.level == :info && e.data[:level] == 1 })
+    assert_equal ["start"], runs.first.data[:reasons]
+    assert_equal 2, runs.last.data[:prefixes]
+    assert(runs.drop(1).any? { |e| e.data[:reasons].any? { |r| r.start_with?("LSP 0000.0000.000b.00-00 sequence 0x") } })
+  end
+
+  # A run with many reasons keeps the first REASONS_KEPT and counts the rest.
+  def test_a_run_keeps_its_first_reasons
+    start(:a)
+    log = @nodes[:a][:log]
+    @nodes[:a][:decision].run((1..25).map { |i| "reason #{i}" })
+    run = log.events.reverse.find { |e| e.kind == :spf }
+    assert_equal ISIS::Spf::Decision::REASONS_KEPT, run.data[:reasons].size
+    assert_equal 5, run.data[:more]
+  end
+
   # A run that finds the routes as they were reports nothing.
   def test_an_unchanged_route_is_not_reported
     start(:a, :b)

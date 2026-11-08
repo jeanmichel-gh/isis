@@ -58,14 +58,17 @@ module ISIS
       case result
       when :new, :newer
         held = entry.sequence
+        before = entry.placeholder? || entry.purged? ? nil : entry.lsp
         entry.store(lsp)
+        # A refresh is marked, so a viewer can leave it out.
+        refresh = before && !lsp.lifetime.zero? && Database.same_content?(before, lsp) ? { refresh: true } : {}
         # Clause 7.3.15.1 e 1: store, clear SRM for C, and on a
         # non-broadcast circuit set SSN for C. There are no other circuits.
         entry.srm.delete(@name)
         set_ssn(entry) unless broadcast?
         @log.info("LSP #{id} sequence #{seq(lsp.sequence)} stored: " \
                   "#{result == :new ? 'not held before' : "newer than #{seq(held)}"} (RFC 1142 7.3.15.1 e 1)",
-                  circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: result)
+                  circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: result, **refresh)
       when :equal
         # Clause 7.3.15.1 e 2: clear SRM, and on a non-broadcast circuit
         # set SSN.

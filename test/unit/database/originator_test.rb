@@ -68,6 +68,22 @@ class TestOriginator < Minitest::Test
     assert lsp.checksum_ok?
   end
 
+  # A refresh is marked, both where it is generated and where it is
+  # stored, so a viewer can leave it out; a change is not. A's LSP after
+  # the adjacency comes up gains B as a neighbour, so it is no refresh.
+  def test_a_refresh_is_marked
+    start_both
+    run_for(10)
+    refute_nil generated(@log_a).last
+    assert(@log_a.events.select { |e| e.kind == :origination }.none? { |e| e.data[:refresh] })
+    a_stored = ->(e) { e.kind == :database && e.data[:lsp_id] == "0000.0000.000a.00-00" }
+    assert(@log_b.events.select(&a_stored).none? { |e| e.data[:refresh] })
+    @orig_a.refresh
+    run_for(10)
+    assert_equal true, @log_a.events.reverse.find { |e| e.kind == :origination }.data[:refresh]
+    assert_equal true, @log_b.events.reverse.find(&a_stored).data[:refresh]
+  end
+
   # With a hostname, TLV 137 follows TLV 129 in LSP 0 (RFC 5301):
   #   89 02 7231             "r1"
   def test_hostname_in_lsp_0

@@ -500,9 +500,11 @@ module ISIS
         raise Error, "#{lsp_id_s(n)} is #{size} octets, over the #{@buffer_size} octet budget" if size > @buffer_size
 
         @sequences[n] = lsp.sequence
+        # A refresh is marked, so a viewer can leave it out.
+        refresh = held&.lsp && !held.purged? && same_content?(held.lsp, lsp) ? { refresh: true } : {}
         @log.info("#{lsp_id_s(n)} sequence #{seq(lsp.sequence)} generated: #{reason}", kind: :origination,
                                                                                        lsp_id: lsp_id_s(n),
-                                                                                       sequence: lsp.sequence)
+                                                                                       sequence: lsp.sequence, **refresh)
         @database.entry(lsp_id(n)).store(lsp)
       end
       stale = only ? [] : @numbers - wanted
@@ -556,10 +558,7 @@ module ISIS
       groups.map { |g| klass.new(g) }
     end
 
-    # The same TLVs and flags: what a regeneration would change.
-    def same_content?(held, fresh)
-      held.flags == fresh.flags && held.tlvs.to_shex == fresh.tlvs.to_shex
-    end
+    def same_content?(held, fresh) = Database.same_content?(held, fresh)
 
     def seq(n)
       format("0x%08x", n)
