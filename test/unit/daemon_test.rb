@@ -163,6 +163,28 @@ class TestDaemon < Minitest::Test
     d&.shutdown
   end
 
+  # isis-cli show topology LEVEL prints show.topology's answer, as JSON.
+  def test_isis_cli_show_topology
+    d = sim_daemon.start
+    stop = false
+    t = Thread.new { d.step(wait: 0) until stop }
+    out, err, status = Open3.capture3(RbConfig.ruby, File.join(ROOT, "exe/isis-cli"), "-s", d.api.path,
+                                      "show", "topology", "1")
+    assert status.success?, err
+    answer = JSON.parse(out)
+    assert_equal 1, answer["level"]
+    assert_equal %w[lost r1c1 r1c2 s1], answer["nodes"].map { _1["hostname"] }.sort
+    r1c1 = answer["nodes"].find { _1["hostname"] == "r1c1" }
+    assert_includes r1c1["neighbors"].map { _1["id"] }, "0000.0000.0009.00", "r1c1 lists s1"
+    _, err, status = Open3.capture3(RbConfig.ruby, File.join(ROOT, "exe/isis-cli"), "-s", d.api.path, "show", "topology")
+    refute status.success?
+    assert_includes err, "show.topology needs level"
+  ensure
+    stop = true
+    t&.join
+    d&.shutdown
+  end
+
   def test_isis_cli_without_a_daemon
     _, err, status = Open3.capture3(RbConfig.ruby, File.join(ROOT, "exe/isis-cli"), "-s", File.join(@dir, "none"),
                                     "show", "overview")
