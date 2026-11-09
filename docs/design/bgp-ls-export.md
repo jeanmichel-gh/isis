@@ -1,6 +1,6 @@
 # The LSDB as a topology, for a BGP-LS Producer
 
-Status: draft, waiting for approval.
+Status: approved 2026-11-09.
 
 Part of the BGP-LS lab. Two other specs go with it:
 bgp4r `docs/design/bgp-ls-producer.md` and routescope
