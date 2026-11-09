@@ -65,6 +65,7 @@ Every method:
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
+| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, flags, reachable |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |
@@ -76,6 +77,41 @@ Every method:
 | `api.info` | | versions, every method, the last event number |
 | `events.subscribe` | `since` | turns the connection into a stream of events |
 | `events.unsubscribe` | | ends the stream |
+
+`show.topology` gives one level's LSDB as a topology. It is for a reader
+such as a BGP-LS Producer, which needs the graph and not the LSP headers.
+
+```json
+{"level": 1, "run": 3,
+ "nodes": [
+  {"id": "0000.0001.0101.00", "hostname": "r1c1",
+   "areas": ["49.0001"], "overload": false, "attached": false,
+   "reachable": true,
+   "neighbors": [{"id": "0000.0001.0102.00", "metric": 10, "style": "wide"}],
+   "prefixes": [{"prefix": "10.200.0.1/32", "metric": 0, "up_down": false,
+                 "style": "wide"}]}
+ ]}
+```
+
+- A node is a system ID and a pseudonode octet. A pseudonode is a node
+  of its own.
+- All LSP fragments of a node are merged. Purged LSPs are left out. So
+  is a node whose LSP Number 0 is missing, as SPF leaves it out
+  (RFC 1142 7.2.5).
+- `neighbors` come from TLV 22. When no fragment of the node has TLV 22,
+  they come from TLV 2, with `style: "narrow"`.
+- `prefixes` come from TLV 135. When no fragment has TLV 135, they come
+  from TLV 128 and 130, with `style: "narrow"`.
+- `areas`, `overload` and `attached` come from LSP Number 0. `attached`
+  is true when any ATT bit is set.
+- `reachable` is true when the last SPF run at that level reached the
+  node. `run` is that run's number.
+- Sub-TLVs and IPv6 prefixes are not given.
+- A level the router does not run answers no nodes.
+
+To follow changes, subscribe to events and read `show.topology` again
+after each `spf` event for the level. A refresh also runs SPF, and then
+the answer is the same.
 
 An event is one log line above debug, as `show.log` and
 `events.subscribe` give it: `seq`, `time`, `level`, `circuit`, `kind`,
