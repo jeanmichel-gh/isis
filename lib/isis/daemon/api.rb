@@ -42,6 +42,7 @@ module ISIS
         "show.adjacencies" => ->(a, _) { a.views.adjacencies },
         "show.database" => ->(a, p) { a.views.database(level: p["level"]) },
         "show.routes" => ->(a, p) { a.views.routes(level: p["level"]) },
+        "show.topology" => ->(a, p) { a.views.topology(level: p["level"]) },
         "show.hostnames" => ->(a, _) { a.views.hostnames },
         "show.log" => ->(a, p) { a.views.log((p["count"] || 100).to_i.clamp(1, 1000)) },
         "show.configuration" => ->(a, _) { a.configuration },

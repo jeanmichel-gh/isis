@@ -86,6 +86,31 @@ module ISIS
         end
       end
 
+      # One level's database as a topology, for a reader such as a BGP-LS
+      # Producer (docs/design/bgp-ls-export.md): one node per System ID and
+      # pseudonode octet, its LSP fragments merged. Purged LSPs and
+      # placeholders are left out, and so is a node without LSP Number 0,
+      # as clause 7.2.5 has the Decision Process leave it out. +reachable+
+      # is whether the last SPF run placed the node on PATHS, and +run+ is
+      # that run's number. A level the router does not run has no nodes.
+      def topology(level:)
+        raise ArgumentError, "show.topology needs level" if level.nil?
+
+        l = Integer(level)
+        decision = @router.decisions[l] if @router.levels.include?(l)
+        return { level: l, run: 0, nodes: [] } unless decision
+
+        names = hostnames
+        lsps = @router.databases[l].entries.reject { _1.placeholder? || _1.purged? }
+                      .group_by { _1.lsp_id.b[0...-1] }
+        nodes = lsps.filter_map do |node, entries|
+          next unless entries.first.lsp_id.getbyte(-1).zero? # entries come in LSP ID order
+
+          topology_node(node, entries.map(&:lsp), names, decision.paths.key?(node))
+        end
+        { level: l, run: decision.runs, nodes: nodes.sort_by { _1[:id] } }
+      end
+
       # The last +count+ events, oldest first.
       def log(count = 100)
         @router.log.events.last(count).map { |e| Views.event(e) }
@@ -123,6 +148,58 @@ module ISIS
       end
 
       private
+
+      # One node of #topology from its LSPs, LSP Number 0 first.
+      def topology_node(node, lsps, names, reachable)
+        id = node_s(node)
+        zero = lsps.first
+        { id: id, hostname: names[id[0...-3]],
+          areas: zero.tlvs.grep(Tlv::AreaAddresses).flat_map(&:areas).map(&:to_s),
+          overload: zero.overload?, attached: !zero.attached.empty?, reachable: reachable,
+          neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps) }
+      end
+
+      # TLV 22's entries, or TLV 2's when no LSP of the node has TLV 22.
+      def topology_neighbors(lsps)
+        tlvs = lsps.flat_map { _1.tlvs.to_a }
+        wide = tlvs.grep(Tlv::ExtendedIsReachability)
+        if wide.empty?
+          tlvs.grep(Tlv::IsReachability).flat_map(&:entries).map do |e|
+            { id: e.neighbor_s, metric: e.metrics.default, style: "narrow" }
+          end
+        else
+          wide.flat_map(&:entries).map { |e| { id: e.neighbor_s, metric: e.metric, style: "wide" } }
+        end
+      end
+
+      # TLV 135's entries, or TLV 128's and 130's when no LSP of the node
+      # has TLV 135; TLV 130's class is a subclass of 128's. An entry that
+      # is no prefix, a mask that is not contiguous, is left out, as SPF
+      # leaves it out.
+      def topology_prefixes(lsps)
+        tlvs = lsps.flat_map { _1.tlvs.to_a }
+        wide = tlvs.grep(Tlv::ExtendedIpReachability)
+        if wide.empty?
+          tlvs.grep(Tlv::IpInternalReachability).flat_map(&:entries).filter_map do |e|
+            next unless e.prefix
+
+            { prefix: e.prefix, metric: e.metrics.default, up_down: e.up_down?, style: "narrow" }
+          end
+        else
+          wide.flat_map(&:entries).filter_map do |e|
+            next unless e.prefix
+
+            { prefix: e.prefix, metric: e.metric, up_down: e.up_down ? true : false, style: "wide" }
+          end
+        end
+      end
+
+      # A node ID, the System ID and the pseudonode octet, as TLV 22 prints
+      # a neighbour: "0000.0001.0101.00".
+      def node_s(octets)
+        hex = octets.unpack1("H*")
+        (hex[0...-2].scan(/.{1,4}/) + [hex[-2, 2]]).join(".")
+      end
 
       def dis(circuit)
         d = circuit.dis

@@ -139,4 +139,130 @@ class TestDaemonViews < Minitest::Test
     assert_equal({ "octets" => "�", "sym" => "x" }, e[:data])
     JSON.generate(e)
   end
+
+  # An LSP of +id+, "0000.0000.000c.00-01", stored in +router+'s Level 1
+  # database as if it had arrived.
+  def store_lsp(router, id, tlvs, **flags)
+    lsp = ISIS::Pdu::Lsp.new(level: 1, lsp_id: id, lifetime: 1200, sequence: 1, tlvs: tlvs, **flags)
+    router.databases[1].entry(ISIS::Pdu.lsp_id_octets(id)).store(lsp)
+  end
+
+  # C in two fragments, its pseudonode C.01, D narrow, in two fragments,
+  # overloaded and attached in fragment 0 alone, F with both styles, and E
+  # purged; then an SPF run. Only A and B are linked both ways, so only
+  # they are reachable.
+  def topology_fixture
+    views, a, = p2p_pair
+    store_lsp(a, "0000.0000.000c.00-00",
+              [ISIS::Tlv::AreaAddresses.new("49.0001"), ISIS::Tlv::DynamicHostname.new("c"),
+               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 10 })])
+    store_lsp(a, "0000.0000.000c.00-01",
+              [ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000c.01", metric: 20 }),
+               ISIS::Tlv::ExtendedIpReachability.new({ prefix: "192.0.2.12/32", metric: 3, up_down: true })])
+    store_lsp(a, "0000.0000.000c.01-00",
+              [ISIS::Tlv::ExtendedIsReachability.new([{ neighbor: "0000.0000.000c.00", metric: 0 },
+                                                      { neighbor: "0000.0000.000d.00", metric: 0 }])])
+    store_lsp(a, "0000.0000.000d.00-00",
+              [ISIS::Tlv::AreaAddresses.new("49.0002"),
+               ISIS::Tlv::IsReachability.new({ neighbor: "0000.0000.000c.01", metric: 5 }),
+               ISIS::Tlv::IpInternalReachability.new({ prefix: "10.0.13.0/24", metric: 7 }),
+               ISIS::Tlv::IpExternalReachability.new({ prefix: "198.51.100.0/24", metric: 9, up_down: true })],
+              overload: true, attached: [:default])
+    store_lsp(a, "0000.0000.000d.00-01", []) # OL and ATT clear: only fragment 0's count
+    store_lsp(a, "0000.0000.000f.00-00",
+              [ISIS::Tlv::IsReachability.new({ neighbor: "0000.0000.000a.00", metric: 5 }),
+               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 6 }),
+               ISIS::Tlv::IpInternalReachability.new({ prefix: "10.0.15.0/24", metric: 7 }),
+               ISIS::Tlv::ExtendedIpReachability.new({ prefix: "10.0.15.0/24", metric: 8 })])
+    db = a.databases[1]
+    store_lsp(a, "0000.0000.000e.00-00", [ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 1 })])
+    db.purge(db[ISIS::Pdu.lsp_id_octets("0000.0000.000e.00-00")], "test")
+    a.decisions[1].run(["test"])
+    [views, a]
+  end
+
+  def topology_node(topology, id)
+    topology[:nodes].find { _1[:id] == id }
+  end
+
+  def test_topology_lists_each_node_once_and_leaves_out_a_purge
+    views, = topology_fixture
+    t = views.topology(level: 1)
+    assert_equal 1, t[:level]
+    assert_equal %w[0000.0000.000a.00 0000.0000.000b.00 0000.0000.000c.00 0000.0000.000c.01 0000.0000.000d.00
+                    0000.0000.000f.00], t[:nodes].map { _1[:id] }
+    JSON.generate(t)
+  end
+
+  def test_topology_run_is_the_decisions
+    views, a, = topology_fixture
+    assert_equal a.decisions[1].runs, views.topology(level: "1")[:run]
+    a.decisions[1].run(["again"])
+    assert_equal a.decisions[1].runs, views.topology(level: 1)[:run]
+  end
+
+  # Fragment 1's neighbour and prefix join fragment 0's.
+  def test_topology_merges_fragments
+    views, = topology_fixture
+    c = topology_node(views.topology(level: 1), "0000.0000.000c.00")
+    assert_equal({ id: "0000.0000.000c.00", hostname: "c", areas: ["49.0001"], overload: false, attached: false,
+                   reachable: false,
+                   neighbors: [{ id: "0000.0000.000a.00", metric: 10, style: "wide" },
+                               { id: "0000.0000.000c.01", metric: 20, style: "wide" }],
+                   prefixes: [{ prefix: "192.0.2.12/32", metric: 3, up_down: true, style: "wide" }] }, c)
+  end
+
+  def test_topology_pseudonode_is_a_node
+    views, = topology_fixture
+    p = topology_node(views.topology(level: 1), "0000.0000.000c.01")
+    assert_equal [%w[0000.0000.000c.00 wide], %w[0000.0000.000d.00 wide]],
+                 p[:neighbors].map { _1.values_at(:id, :style) }
+    assert_equal [], p[:areas]
+    assert_equal [], p[:prefixes]
+  end
+
+  # D has no TLV 22 and no TLV 135: TLV 2, 128 and 130, marked narrow; and
+  # its fragment 0 sets OL and ATT.
+  def test_topology_narrow_when_no_wide_and_flags_from_fragment_zero
+    views, = topology_fixture
+    d = topology_node(views.topology(level: 1), "0000.0000.000d.00")
+    assert_equal [{ id: "0000.0000.000c.01", metric: 5, style: "narrow" }], d[:neighbors]
+    assert_equal [{ prefix: "10.0.13.0/24", metric: 7, up_down: false, style: "narrow" },
+                  { prefix: "198.51.100.0/24", metric: 9, up_down: true, style: "narrow" }], d[:prefixes]
+    assert_equal [true, true, ["49.0002"]], d.values_at(:overload, :attached, :areas)
+  end
+
+  # F has both styles: only the wide ones are given.
+  def test_topology_wide_over_narrow
+    views, = topology_fixture
+    f = topology_node(views.topology(level: 1), "0000.0000.000f.00")
+    assert_equal [{ id: "0000.0000.000a.00", metric: 6, style: "wide" }], f[:neighbors]
+    assert_equal [{ prefix: "10.0.15.0/24", metric: 8, up_down: false, style: "wide" }], f[:prefixes]
+  end
+
+  # A and B are on PATHS; C, its pseudonode, D and F are not, since A
+  # lists none of them.
+  def test_topology_reachable_is_on_paths
+    views, = topology_fixture
+    t = views.topology(level: 1)
+    assert_equal({ "0000.0000.000a.00" => true, "0000.0000.000b.00" => true, "0000.0000.000c.00" => false,
+                   "0000.0000.000c.01" => false, "0000.0000.000d.00" => false, "0000.0000.000f.00" => false },
+                 t[:nodes].to_h { [_1[:id], _1[:reachable]] })
+    b = topology_node(t, "0000.0000.000b.00")
+    assert_equal [{ id: "0000.0000.000a.00", metric: 10, style: "wide" }], b[:neighbors]
+    assert_includes b[:prefixes], { prefix: "192.0.2.11/32", metric: 1, up_down: false, style: "wide" }
+  end
+
+  # A fragment 1 with no fragment 0 is no node, as clause 7.2.5 has it.
+  def test_topology_needs_fragment_zero
+    views, a, = p2p_pair
+    store_lsp(a, "0000.0000.000c.00-01", [ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 1 })])
+    assert_equal %w[0000.0000.000a.00 0000.0000.000b.00], views.topology(level: 1)[:nodes].map { _1[:id] }
+  end
+
+  def test_topology_needs_a_level
+    views, = p2p_pair
+    assert_raises(ArgumentError) { views.topology(level: nil) }
+    assert_equal({ level: 2, run: 0, nodes: [] }, views.topology(level: 2))
+  end
 end

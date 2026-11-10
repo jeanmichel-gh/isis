@@ -79,6 +79,16 @@ class TestDaemonApi < Minitest::Test
     assert_equal ISIS::VERSION, info["version"]
   end
 
+  # show.topology needs a level; at a level this router does not run it
+  # answers no nodes.
+  def test_show_topology
+    s = connect
+    assert_equal "show.topology needs level", ask(s, "show.topology")["error"]
+    assert_equal({ "level" => 3, "run" => 0, "nodes" => [] }, ask(s, "show.topology", "level" => 3)["result"])
+    assert_equal %w[level nodes run], ask(s, "show.topology", "level" => 1)["result"].keys.sort
+    assert_match(/\Ainvalid value for Integer/, ask(s, "show.topology", "level" => "x")["error"])
+  end
+
   def test_policy_leak_and_overload
     assert_equal ["10.0.0.0/8"], ask(connect, "policy.leak", "prefixes" => ["10.0.0.0/8"]).dig("result", "leak")
     refute_same ISIS::Spf::Leak::NONE, @router.leak.policy
