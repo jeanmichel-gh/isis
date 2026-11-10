@@ -62,10 +62,10 @@ module ISIS
         entry.store(lsp)
         # A refresh is marked, so a viewer can leave it out.
         refresh = before && !lsp.lifetime.zero? && Database.same_content?(before, lsp) ? { refresh: true } : {}
-        # Clause 7.3.15.1 e 1: store, clear SRM for C, and on a
-        # non-broadcast circuit set SSN for C. There are no other circuits.
-        entry.srm.delete(@name)
-        set_ssn(entry) unless broadcast?
+        # Clause 7.3.15.1 e 1: store, set SRM on the other circuits and
+        # clear their SSN, clear SRM for C, and on a non-broadcast circuit
+        # set SSN for C.
+        stored_from_c(entry)
         @log.info("LSP #{id} sequence #{seq(lsp.sequence)} stored: " \
                   "#{result == :new ? 'not held before' : "newer than #{seq(held)}"} (RFC 1142 7.3.15.1 e 1)",
                   circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: result, **refresh)
@@ -125,11 +125,10 @@ module ISIS
       result = Database.compare(held, sequence: lsp.sequence, lifetime: 0, checksum: lsp.checksum)
       case result
       when :newer
-        # b 1: store it, clear SRM for C, and on a non-broadcast circuit set
-        # SSN. Its header goes after ZeroAgeLifetime.
+        # b 1: store it, and the flags as 7.3.15.1 e 1 sets them. Its
+        # header goes after ZeroAgeLifetime.
         held.store(lsp)
-        held.srm.delete(@name)
-        set_ssn(held) unless broadcast?
+        stored_from_c(held)
         @log.info("LSP #{id} sequence #{seq(lsp.sequence)} purged by a neighbour (RFC 1142 7.3.16.4 b 1)",
                   circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: :purged)
       when :equal
@@ -362,6 +361,25 @@ module ISIS
 
     def set_ssn(entry)
       entry.ssn << @name
+    end
+
+    # The flags after storing a newer LSP or purge received on this
+    # circuit, C: RFC 1142 7.3.15.1 e 1 ii to v, and 7.3.16.4 b 1 ii to v,
+    # in the same words. "Set SRMflag for that LSP for all circuits other
+    # than C", "Clear SRMflag for C", "If C is a non-broadcast circuit, set
+    # SSNflag for that LSP for C", "Clear SSNflag for that LSP for the
+    # circuits other than C".
+    #
+    # The other circuits are the database's, each asked to flood the
+    # entry: a circuit sets SRM only while it has an adjacency up, as for
+    # this system's own LSPs and for a purge (7.3.16.4 a). One that comes
+    # up later is brought level by the CSNP sent on its adjacency coming
+    # up.
+    def stored_from_c(entry)
+      entry.ssn.clear
+      @database.circuits.each { |c| c.flood(entry) unless c.equal?(self) }
+      entry.srm.delete(@name)
+      set_ssn(entry) unless broadcast?
     end
 
     # RFC 1142 clause 7.3.15: "SRMflag shall never be set for an LSP with

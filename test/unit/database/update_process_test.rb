@@ -14,13 +14,13 @@ class TestUpdateProcess < Minitest::Test
     attr_reader :database, :sent
     attr_accessor :area_key, :generators
 
-    def initialize(broadcast:, scheduler:, log:)
+    def initialize(broadcast:, scheduler:, log:, name: "h-eth0", database: nil)
       @broadcast = broadcast
-      @name = "h-eth0"
+      @name = name
       @system_id = ISIS::Pdu.dotted_octets("0000.0000.000a")
       @scheduler = scheduler
       @log = log
-      @database = ISIS::Database.new(level: 1, clock: scheduler.clock)
+      @database = database || ISIS::Database.new(level: 1, clock: scheduler.clock)
       @database.attach(self)
       @area_key = nil
       @generators = []
@@ -55,9 +55,15 @@ class TestUpdateProcess < Minitest::Test
     TestLogs.heading(name)
   end
 
-  def host(broadcast)
+  def host(broadcast, name: "h-eth0", database: nil)
     log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
-    Host.new(broadcast: broadcast, scheduler: @scheduler, log: log)
+    Host.new(broadcast: broadcast, scheduler: @scheduler, log: log, name: name, database: database)
+  end
+
+  # Two circuits on one database: C, where the LSP comes in, and another.
+  def two_circuits(broadcast)
+    c = host(broadcast)
+    [c, host(broadcast, name: "h-eth1", database: c.database)]
   end
 
   def lsp(sequence = 5)
@@ -91,6 +97,44 @@ class TestUpdateProcess < Minitest::Test
       assert_equal :new, h.receive_lsp(lsp)
       assert_equal ssn, entry(h).ssn.to_a, "broadcast #{broadcast}"
     end
+  end
+
+  # 7.3.15.1 e 1 ii and v: a new LSP is flooded on every circuit but the
+  # one it came on, and SSN is cleared there. Before, it went nowhere
+  # else: a system with three circuits passed on nothing it received.
+  def test_a_new_lsp_is_flooded_on_the_other_circuits
+    [false, true].each do |broadcast|
+      c, other = two_circuits(broadcast)
+      entry_on = c.database.entry(lsp.lsp_id)
+      entry_on.ssn << "h-eth1"
+      assert_equal :new, c.receive_lsp(lsp)
+      assert_equal ["h-eth1"], entry(c).srm.to_a, "broadcast #{broadcast}: SRM on the other circuit, not on C"
+      assert_equal(broadcast ? [] : ["h-eth0"], entry(c).ssn.to_a, "broadcast #{broadcast}: SSN cleared on the other")
+      @scheduler.advance(0)
+      assert_equal [lsp.lsp_id], other.sent.grep(ISIS::Pdu::Lsp).map(&:lsp_id), "broadcast #{broadcast}"
+      assert_empty c.sent.grep(ISIS::Pdu::Lsp), "broadcast #{broadcast}: not sent back on C"
+    end
+  end
+
+  # And a newer one, as a new one.
+  def test_a_newer_lsp_is_flooded_on_the_other_circuits
+    c, other = two_circuits(false)
+    held(c, 4)
+    assert_equal :newer, c.receive_lsp(lsp(5))
+    assert_equal ["h-eth1"], entry(c).srm.to_a
+    @scheduler.advance(0)
+    assert_equal [5], other.sent.grep(ISIS::Pdu::Lsp).map(&:sequence)
+  end
+
+  # An equal or older one changes nothing on the other circuit.
+  def test_an_equal_or_older_lsp_is_not_flooded_on
+    c, other = two_circuits(false)
+    held(c, 5)
+    assert_equal :equal, c.receive_lsp(lsp(5))
+    assert_equal :older, c.receive_lsp(lsp(4))
+    assert_equal ["h-eth0"], entry(c).srm.to_a, "the older one sends ours back on C only"
+    @scheduler.advance(0)
+    assert_empty other.sent
   end
 
   # 7.3.15.1 e 2 ii: so does an equal one.
@@ -158,6 +202,18 @@ class TestUpdateProcess < Minitest::Test
       assert_empty entry(h).srm
       assert_equal ssn, entry(h).ssn.to_a, "broadcast #{broadcast}"
     end
+  end
+
+  # 7.3.16.4 b 1 ii and v: a newer purge is flooded on the other circuits
+  # too, with SSN cleared there.
+  def test_a_newer_purge_is_flooded_on_the_other_circuits
+    c, other = two_circuits(false)
+    held(c).ssn << "h-eth1"
+    assert_equal :newer, c.receive_lsp(purge)
+    assert_equal ["h-eth1"], entry(c).srm.to_a
+    assert_equal ["h-eth0"], entry(c).ssn.to_a
+    @scheduler.advance(0)
+    assert_equal [0], other.sent.grep(ISIS::Pdu::Lsp).map(&:lifetime)
   end
 
   # b 2 and b 3: an equal purge clears SRM; an older one sends ours back.

@@ -163,6 +163,31 @@ class TestRouter < Minitest::Test
     end
   end
 
+  # A line of three, a - b - c, where b - c comes up before a starts, as
+  # in a lab whose systems start in any order. b has to pass a's LSP on to
+  # c (RFC 1142 7.3.15.1 e 1 ii). isis4r sends no periodic CSNP on a point
+  # to point circuit, so nothing else would bring it to c.
+  def test_a_system_in_the_middle_passes_lsps_on
+    conf = lambda do |id, name, ifaces|
+      { system_id: "0000.0000.000#{id}", hostname: name, minimum_lsp_interval: 1,
+        interfaces: ifaces.map { |i, ip| { name: i, ip_addresses: [ip], hello_interval: 1, hello_multiplier: 3 } } }
+    end
+    a = router(conf.("a", "a", [["ab", "10.0.12.1"]]), { "ab" => "00:00:00:00:00:0a" })
+    b = router(conf.("b", "b", [["ab", "10.0.12.2"], ["bc", "10.0.23.2"]]),
+               { "ab" => "00:00:00:00:00:1b", "bc" => "00:00:00:00:00:2b" })
+    c = router(conf.("c", "c", [["bc", "10.0.23.3"]]), { "bc" => "00:00:00:00:00:0c" })
+    [b, c].each(&:start)
+    run_for(10)
+    assert_equal "up", c.interfaces.first.circuits[1].three_way_state.to_s, "b - c is up before a starts"
+    a.start
+    run_for(10)
+    a_lsp = a.originators[1].lsp_id
+    assert b.databases[1][a_lsp], "b has a's LSP"
+    held = c.databases[1][a_lsp]
+    assert held && !held.placeholder?, "c has a's LSP, through b"
+    assert_equal a.databases[1][a_lsp].sequence, held.sequence
+  end
+
   def test_stop_stops_the_circuits
     a, b = pair
     [a, b].each(&:start)
