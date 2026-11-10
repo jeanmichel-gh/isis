@@ -2287,7 +2287,10 @@ on FRR 8.4.4 and 10.5.1, the fourth on an Ubuntu VM with FRR 10.5.1:
 * **AppArmor confines isisd on newer Ubuntu**, and gives the same pid file
   error with the chown in place, plus `failed to mkdir
   "/var/lib/frr/<name>"`. Ubuntu's `apparmor` package ships
-  `/etc/apparmor.d/isisd` (26.04 does, 24.04 and the CI runners do not).
+  `/etc/apparmor.d/isisd` (26.04 does, 24.04 does not). CI's
+  `ubuntu-latest` became 26.04 between 6 and 9 November 2026, so the
+  `interop (FRR)` job unloads the profile before the tests; the runner
+  is thrown away after the job.
   It allows only FRR's default paths, `/run/frr/isisd.pid`,
   `/etc/frr/isisd.conf` and `/var/log/frr/`, and the lab uses
   `/run/frr/<name>/`, `/etc/frr/<name>/` and a temporary directory. zebra

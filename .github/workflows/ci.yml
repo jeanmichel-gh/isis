@@ -78,6 +78,22 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq frr iproute2 iputils-ping
       - name: FRR version
         run: /usr/lib/frr/isisd --version | head -1
+      # ubuntu-latest moved from 24.04 to 26.04 between 6 and 9 November
+      # 2026. 26.04 ships an AppArmor profile for isisd that allows only
+      # FRR's default paths, so the lab's isisd cannot write its pid file
+      # and every interop test fails (see FrrLab.isisd_confined?). The
+      # runner is thrown away after the job, so unload the profile, which
+      # is the way round it FrrLab's own message gives. 24.04 has no
+      # profile and this does nothing there.
+      - name: Unload the isisd AppArmor profile
+        run: |
+          if [ -f /etc/apparmor.d/isisd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/isisd
+            echo "isisd profile unloaded"
+          else
+            echo "no isisd profile"
+          fi
+          grep '^isisd ' /sys/kernel/security/apparmor/profiles || echo "isisd not confined"
       - name: Interop tests against FRR
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
