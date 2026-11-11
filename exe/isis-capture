@@ -1,0 +1,5 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+require 'isis/wire_capture/cli'
+exit ISIS::WireCapture::CLI.new.run(ARGV)
