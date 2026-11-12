@@ -36,7 +36,9 @@ RUN ruby -Ilib -Itest -e 'Dir["test/{unit,docs,scenario}/**/*_test.rb"].sort.eac
 FROM base AS runtime
 # Opening the interfaces needs CAP_NET_RAW, installing routes NET_ADMIN,
 # granted at run time. iproute2 to look at what it installed: proto 187.
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iproute2 tcpdump \
+# ping, from iputils-ping, to check that packets follow those routes, as
+# a lab's scenarios do with routescope's ping condition.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iproute2 tcpdump iputils-ping \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /etc/iproute2/rt_protos.d /etc/isis4r /run/isis4r \
  && echo '187 isis' > /etc/iproute2/rt_protos.d/isis4r.conf
