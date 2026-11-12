@@ -1,0 +1,45 @@
+name: The nearest attached system wins
+description: >
+  s3's r3c3 claims the attached bit while b3 is whole. r3 keeps its
+  default toward b3, at 10, not r3c3, at 60: the nearest attached system
+  wins (RFC 1142 section 7.2.9.1). With r3's link to b3 down, b3 through s3
+  is 20, still nearer. But s3 is a simulator: it installs no routes and
+  forwards nothing, so a route through it carries no traffic. Then all
+  comes back.
+timeout: 150
+
+steps:
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.3.1.1 } }
+    within: 90
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1 first, so the failed ping below means something
+
+  - sim: router.attached
+    node: s3
+    router: r3c3
+    on: true
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: r3c3.00-00, att: true } }
+    within: 15
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.3.1.1 } }
+    name: b3 at 10, not r3c3 at 60
+
+  - interface: b3:eth4
+    state: down
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 20, next_hop: 10.3.2.2 } }
+    within: 15
+    name: b3 through s3 at 20, still nearer than r3c3
+    continue: true
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 3, reachable: false } }
+    within: 10
+    name: the route goes through s3, which forwards nothing
+    continue: true
+
+  - interface: b3:eth4
+    state: up
+  - sim: router.attached
+    node: s3
+    router: r3c3
+    on: false
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.3.1.1 } }
+    within: 30

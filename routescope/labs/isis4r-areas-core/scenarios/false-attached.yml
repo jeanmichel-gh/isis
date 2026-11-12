@@ -1,0 +1,53 @@
+name: A false attached bit in area 3
+description: >
+  b3's only backbone link goes down: b3 reaches no other area and clears
+  its attached bit, and r3 loses its default. Then s3's simulated r3c3
+  claims the attached bit. r3 trusts it and sends its default toward r3c3,
+  the nearest attached system (RFC 1142 section 7.2.9.1), through s3. A
+  simulated system forwards nothing, so r3 still reaches nobody outside
+  area 3. r3c3 drops the bit, the link comes back, and r3 goes back to b3.
+capture: [r3]
+timeout: 180
+
+steps:
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, next_hop: 10.3.1.1 } }
+    within: 90
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1 first, so the failed ping below means something
+
+  - interface: c0:eth3
+    state: down
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: b3.00-00, att: false } }
+    within: 15
+    name: b3 clears its attached bit
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, present: false } }
+    within: 10
+
+  - sim: router.attached
+    node: s3
+    router: r3c3
+    on: true
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: r3c3.00-00, att: true } }
+    within: 15
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 60, next_hop: 10.3.2.2 } }
+    within: 10
+    name: r3 follows r3c3's bit, through s3
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 3, reachable: false } }
+    within: 10
+    name: a simulated system forwards nothing
+    continue: true
+
+  - sim: router.attached
+    node: s3
+    router: r3c3
+    on: false
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, present: false } }
+    within: 15
+  - interface: c0:eth3
+    state: up
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, next_hop: 10.3.1.1 } }
+    within: 30
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1 again

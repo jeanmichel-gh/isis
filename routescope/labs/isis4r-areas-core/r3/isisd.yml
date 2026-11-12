@@ -1,0 +1,17 @@
+# r3, a Level 1 router in area 49.0003, beside s3's grid. See
+# ../isis4r-areas-core.clab.yml.
+#
+# It knows only its own area, and reaches the rest by the default route
+# toward the nearest attached system (RFC 1142 section 7.2.9.1).
+system_id: 0000.0000.0023
+hostname: r3
+areas: [49.0003]
+level: 1
+metric_style: wide
+forwarding: true
+minimum_lsp_interval: 1
+prefixes:
+  - { prefix: 10.255.0.23/32, metric: 0 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.3.1.2], metric: 10, hello_interval: 1, hello_multiplier: 3 }   # to b3
+  - { name: eth2, ip_addresses: [10.3.2.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }   # to s3

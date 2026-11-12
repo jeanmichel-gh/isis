@@ -1,0 +1,52 @@
+name: b2 summarises area 2 into Level 2
+description: >
+  b2 puts 10.202.0.0/24 at metric 20, and 32.0.0.0/20 with no metric, into
+  Level 2 in place of the prefixes they cover (RFC 1195 section 3.2). With
+  no metric, a summary takes the lowest one it covers. When s2's grid is
+  cut off, nothing covered is reachable, and both summaries go. Then the
+  grid comes back and the summaries are cleared. Needs routescope's isis:
+  step.
+capture: [b2]
+timeout: 150
+
+steps:
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.9/32, metric: 70 } }
+    within: 90
+
+  - isis: policy.summaries
+    node: b2
+    summaries:
+      - { prefix: 10.202.0.0/24, metric: 20 }
+      - { prefix: 32.0.0.0/20 }
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.0/24, metric: 30 } }
+    within: 15
+    measure: summarised
+    name: c0 has the /24 at b2's 20, plus 10
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.9/32, present: false } }
+    within: 10
+    name: the /32s it covers are gone
+  - expect: { isis_route: { node: c0, level: 2, prefix: 32.0.0.0/20, metric: 80 } }
+    name: the /20 at the lowest it covers, 70, plus 10
+  - expect: { isis_route: { node: c0, level: 2, prefix: 32.0.0.0/24, present: false } }
+
+  - sim: link.down
+    node: s2
+    link: s2--r1c1
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.0/24, present: false } }
+    within: 15
+    name: nothing it covers is reachable, so it goes
+    continue: true
+  - expect: { isis_route: { node: c0, level: 2, prefix: 32.0.0.0/20, present: false } }
+    within: 10
+    continue: true
+
+  - sim: link.up
+    node: s2
+    link: s2--r1c1
+  - isis: policy.summaries
+    node: b2
+    summaries: []
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.9/32, metric: 70 } }
+    within: 20
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.202.0.0/24, present: false } }
+    within: 10

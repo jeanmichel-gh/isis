@@ -52,13 +52,19 @@ router and a simulated grid:
 [routescope/labs/isis4r-areas](routescope/labs/isis4r-areas/ABOUT.md).
 `test/lab/isis4r-areas.sh netns` runs it in network namespaces.
 
-Both labs live in `routescope/labs/`, the path every repository uses for
+Three areas around a Level 2-only backbone router, for leaking with the
+up/down bit, summaries, the nearest attached system and overload:
+[routescope/labs/isis4r-areas-core](routescope/labs/isis4r-areas-core/ABOUT.md).
+`test/lab/isis4r-areas-core.sh netns` runs it in network namespaces.
+
+The labs live in `routescope/labs/`, the path every repository uses for
 its routescope labs. To run one in routescope, install it into `~/labs`
 with routescope's `routescope-labs` command:
 
 ```sh
 routescope-labs install isis/isis4r-frr
 routescope-labs install isis/isis4r-areas
+routescope-labs install isis/isis4r-areas-core
 ```
 
 ## Run the demo
