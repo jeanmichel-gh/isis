@@ -1,0 +1,39 @@
+name: Three areas over a Level 2 backbone
+description: >
+  Each border has two Level 1 adjacencies (its simulator and its r) and
+  two Level 2 adjacencies (the other borders; Level 1 needs a common area,
+  RFC 1142 section 7.1.3). Each border carries its area into Level 2 and
+  sets the attached bit, and each r has a default route to its border.
+timeout: 120
+
+steps:
+  - expect: { isis_adjacencies: { node: b1, level: 2, up: 2 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: b2, level: 2, up: 2 } }
+    within: 30
+  - expect: { isis_adjacencies: { node: b3, level: 2, up: 2 } }
+    within: 30
+  - expect: { isis_adjacencies: { node: b1, level: 1, up: 2 } }
+  - expect: { isis_adjacencies: { node: b2, level: 1, up: 2 } }
+  - expect: { isis_adjacencies: { node: b3, level: 1, up: 2 } }
+
+  - mark: level 2
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 30
+    name: b2 reaches area 1's r3c3 over b1
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.13.1 } }
+  - expect: { isis_route: { node: b1, level: 2, prefix: 10.202.0.9/32, metric: 70 } }
+  - expect: { isis_route: { node: b1, level: 2, prefix: 10.203.0.9/32, metric: 70 } }
+  - expect: { isis_route: { node: b2, level: 2, prefix: 31.0.9.0/24, metric: 80 } }
+
+  - mark: attached
+  - expect: { isis_lsp: { node: r1, level: 1, lsp_id: b1.00-00, att: true } }
+    within: 15
+  - expect: { isis_lsp: { node: r2, level: 1, lsp_id: b2.00-00, att: true } }
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: b3.00-00, att: true } }
+  - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, next_hop: 10.1.1.1 } }
+    name: r1 follows b1's attached bit
+  - expect: { isis_route: { node: r2, prefix: 0.0.0.0/0, next_hop: 10.2.1.1 } }
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, next_hop: 10.3.1.1 } }
+  - expect: { isis_route: { node: r1, prefix: 10.202.0.9/32, present: false } }
+    name: r1 knows only its own area

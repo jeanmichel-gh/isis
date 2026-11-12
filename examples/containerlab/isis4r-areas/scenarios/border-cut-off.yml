@@ -1,0 +1,43 @@
+name: A border is cut off from Level 2
+description: >
+  Both of b1's backbone links go down. b1 reaches no other area, so it
+  clears the attached bit in its Level 1 LSP (RFC 1142 section 7.2.9.2),
+  and r1 loses its default route. b2 and b3 lose area 1. Then both links
+  come back, and so does all of it.
+capture: [b1]
+timeout: 180
+
+steps:
+  - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, next_hop: 10.1.1.1 } }
+    within: 90
+
+  - interface: b1:eth1
+    state: down
+  - interface: b1:eth2
+    state: down
+  - expect: { isis_lsp: { node: r1, level: 1, lsp_id: b1.00-00, att: false } }
+    within: 15
+    measure: attached_cleared
+    continue: true
+  - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, present: false } }
+    within: 10
+    name: r1 has no default route
+    continue: true
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, present: false } }
+    within: 15
+    continue: true
+  - expect: { isis_route: { node: r1, prefix: 10.201.0.9/32 } }
+    name: area 1 still works inside
+    continue: true
+
+  - interface: b1:eth1
+    state: up
+  - interface: b1:eth2
+    state: up
+  - expect: { isis_lsp: { node: r1, level: 1, lsp_id: b1.00-00, att: true } }
+    within: 30
+    measure: attached_set
+  - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, next_hop: 10.1.1.1 } }
+    within: 10
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70 } }
+    within: 15

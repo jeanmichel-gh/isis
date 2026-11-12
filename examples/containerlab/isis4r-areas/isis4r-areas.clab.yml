@@ -1,0 +1,174 @@
+# isis4r in three IS-IS areas over a Level 2 backbone. In each area a
+# Level 1-2 border, a Level 1 router, and an isis4r simulator with a 3x3
+# grid of Level 1 systems behind it. See docs/design/isis4r-areas-lab.md.
+#
+#        49.0001                  49.0002                  49.0003
+#     grid 3x3, L1             grid 3x3, L1             grid 3x3, L1
+#          |                        |                        |
+#     s1 (isis4r-sim)          s2 (isis4r-sim)          s3 (isis4r-sim)
+#      |          \             |          \             |          \
+#      |      r1 (isisd, L1)    |      r2 (isisd, L1)    |      r3 (isisd, L1)
+#      |          /             |          /             |          /
+#     b1 (isisd, L1-2) ====== b2 (isisd, L1-2) ====== b3 (isisd, L1-2)
+#      \\================== Level 2 backbone ==================//
+#
+# Links, every metric 10, every one point-to-point:
+#
+#   b1 eth1  10.0.12.1/30  --  10.0.12.2/30  eth1 b2     Level 2
+#   b2 eth2  10.0.23.1/30  --  10.0.23.2/30  eth1 b3     Level 2
+#   b1 eth2  10.0.13.1/30  --  10.0.13.2/30  eth2 b3     Level 2
+#   bN eth3  10.N.0.1/30   --  10.N.0.2/30   eth1 sN     Level 1
+#   bN eth4  10.N.1.1/30   --  10.N.1.2/30   eth1 rN     Level 1
+#   rN eth2  10.N.2.1/30   --  10.N.2.2/30   eth2 sN     Level 1
+#
+# Loopbacks: bN 10.255.0.N, sN 10.255.0.1N, rN 10.255.0.2N.
+# Area N's grid: 0000.000N.0101 (r1c1) to 0000.000N.0303 (r3c3),
+# loopbacks 10.20N.0.1 to 10.20N.0.9, and 3N.0.0.0/24 x 10 on r3c3.
+#
+# Things to watch:
+# - Between borders only Level 2 comes up: two Level 1 systems need an
+#   area address in common (RFC 1142 section 7.1.3).
+# - Each border carries its area into Level 2. b2 reaches area 1's r3c3,
+#   10.201.0.9/32, at 70 over b1, or at 80 through b3 when b1-b2 is down.
+# - Each border sets the attached bit in its Level 1 LSP 00-00 while
+#   Level 2 reaches another area (section 7.2.9.2), and rN follows it with
+#   a default route to bN. r1 pings r2's loopback through b1 and b2.
+# - Cut b1 off from Level 2 and it clears the bit: r1 loses its default.
+#
+# s and the routers come from one image, told apart by their command.
+# Build it from an isis4r checkout beside datalink-socket:
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+# Then copy this folder into ~/labs and start it from routescope's lab
+# menu, or here:
+#   sudo containerlab deploy -t isis4r-areas.clab.yml
+# test/lab/isis4r-areas.sh runs it and checks it, in containerlab or in
+# network namespaces.
+name: isis4r-areas
+
+topology:
+  defaults:
+    labels: { routescope.protocols: isis }
+  nodes:
+    # isisd opens its interfaces when it starts, so it waits for
+    # containerlab to wire them, and has its addresses before it does.
+    b1:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [b1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth4 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.1/30 dev eth1; ip addr add 10.0.13.1/30 dev eth2;
+        ip addr add 10.1.0.1/30 dev eth3; ip addr add 10.1.1.1/30 dev eth4;
+        ip addr add 10.255.0.1/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r1:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [r1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.1.1.2/30 dev eth1; ip addr add 10.1.2.1/30 dev eth2;
+        ip addr add 10.255.0.21/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    s1:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r-sim, routescope.protocols: isis }
+      binds: [s1:/lab]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.1.0.2/30 dev eth1; ip addr add 10.1.2.2/30 dev eth2;
+        ip addr add 10.255.0.11/32 dev lo;
+        exec isis4r-sim -c /lab/sim.yml -l -"
+    b2:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [b2:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth4 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.2/30 dev eth1; ip addr add 10.0.23.1/30 dev eth2;
+        ip addr add 10.2.0.1/30 dev eth3; ip addr add 10.2.1.1/30 dev eth4;
+        ip addr add 10.255.0.2/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r2:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [r2:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.2.1.2/30 dev eth1; ip addr add 10.2.2.1/30 dev eth2;
+        ip addr add 10.255.0.22/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    s2:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r-sim, routescope.protocols: isis }
+      binds: [s2:/lab]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.2.0.2/30 dev eth1; ip addr add 10.2.2.2/30 dev eth2;
+        ip addr add 10.255.0.12/32 dev lo;
+        exec isis4r-sim -c /lab/sim.yml -l -"
+    b3:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [b3:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth4 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.23.2/30 dev eth1; ip addr add 10.0.13.2/30 dev eth2;
+        ip addr add 10.3.0.1/30 dev eth3; ip addr add 10.3.1.1/30 dev eth4;
+        ip addr add 10.255.0.3/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r3:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r, routescope.protocols: isis }
+      binds: [r3:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.3.1.2/30 dev eth1; ip addr add 10.3.2.1/30 dev eth2;
+        ip addr add 10.255.0.23/32 dev lo;
+        ip route del default dev eth0 2>/dev/null; sysctl -qw net.ipv4.ip_forward=1;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    s3:
+      kind: linux
+      image: isis4r:latest
+      labels: { routescope.kind: isis4r-sim, routescope.protocols: isis }
+      binds: [s3:/lab]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.3.0.2/30 dev eth1; ip addr add 10.3.2.2/30 dev eth2;
+        ip addr add 10.255.0.13/32 dev lo;
+        exec isis4r-sim -c /lab/sim.yml -l -"
+  links:
+    - endpoints: ["b1:eth1", "b2:eth1"]
+    - endpoints: ["b2:eth2", "b3:eth1"]
+    - endpoints: ["b1:eth2", "b3:eth2"]
+    - endpoints: ["b1:eth3", "s1:eth1"]
+    - endpoints: ["b1:eth4", "r1:eth1"]
+    - endpoints: ["r1:eth2", "s1:eth2"]
+    - endpoints: ["b2:eth3", "s2:eth1"]
+    - endpoints: ["b2:eth4", "r2:eth1"]
+    - endpoints: ["r2:eth2", "s2:eth2"]
+    - endpoints: ["b3:eth3", "s3:eth1"]
+    - endpoints: ["b3:eth4", "r3:eth1"]
+    - endpoints: ["r3:eth2", "s3:eth2"]

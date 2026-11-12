@@ -1,0 +1,32 @@
+name: A prefix block leaves area 1
+description: >
+  Area 1's r3c3 withdraws 31.0.0.0/24 to 31.0.9.0/24. b1 takes them out of
+  its Level 2 LSP, so b2 and b3 lose them; the rest of area 1 stays.
+  Advertised again, they come back.
+timeout: 120
+
+steps:
+  - expect: { isis_route: { node: b2, level: 2, prefix: 31.0.9.0/24, metric: 80 } }
+    within: 90
+
+  - sim: prefixes.withdraw
+    node: s1
+    router: r3c3
+    prefix: 31.0.0.0/24
+  - expect: { isis_route: { node: b2, level: 2, prefix: 31.0.9.0/24, present: false } }
+    within: 15
+    measure: withdraw
+    continue: true
+  - expect: { isis_route: { node: b3, level: 2, prefix: 31.0.9.0/24, present: false } }
+    within: 15
+    continue: true
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70 } }
+    continue: true
+
+  - sim: prefixes.advertise
+    node: s1
+    router: r3c3
+    prefix: 31.0.0.0/24
+  - expect: { isis_route: { node: b2, level: 2, prefix: 31.0.9.0/24, metric: 80 } }
+    within: 15
+    measure: advertise

@@ -30,6 +30,8 @@ ENV PATH=/app/exe:$PATH \
 FROM base AS test
 RUN gem install --no-document minitest -v '~> 5.0'
 COPY test/ test/
+# test/scenario/isis4r_areas_lab_test.rb runs an example lab's own files.
+COPY examples/ examples/
 RUN ruby -Ilib -Itest -e 'Dir["test/{unit,docs,scenario}/**/*_test.rb"].sort.each { |f| require "./#{f}" }'
 
 # ---- runtime

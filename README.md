@@ -47,6 +47,11 @@ In a container, beside FRR, with containerlab:
 `test/lab/isis4r-frr.sh netns` runs the same lab in network namespaces,
 with no Docker.
 
+Three areas over a Level 2 backbone, each with a border, a Level 1
+router and a simulated grid:
+[examples/containerlab/isis4r-areas](examples/containerlab/isis4r-areas/ABOUT.md).
+`test/lab/isis4r-areas.sh netns` runs it in network namespaces.
+
 ## Run the demo
 
 No privileges needed. It runs two instances on one in-memory wire.
