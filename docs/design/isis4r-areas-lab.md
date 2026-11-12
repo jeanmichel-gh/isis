@@ -125,13 +125,19 @@ routescope runs these, once the folder is copied into `~/labs`.
 
 | File | Does | Checks |
 |------|------|--------|
-| `baseline.yml` | nothing | each border: 2 Level 1 and 2 Level 2 adjacencies up; `att` on its Level 1 LSP 00-00; b2 reaches 10.201.0.9/32 at Level 2, metric 70, next hop 10.0.12.1; each r has 0.0.0.0/0 to its border |
-| `backbone-link-down.yml` | `interface: b1:eth1` down, then up | b2 reaches 10.201.0.9/32 at metric 80 through b3 (next hop 10.0.23.2), then at 70 again |
-| `border-cut-off.yml` | b1:eth1 and b1:eth2 down, then up | b1 clears `att` (RFC 1142 7.2.9.2); r1 loses its default route; b2 and b3 lose area 1's prefixes; all come back |
+| `baseline.yml` | nothing | each border: 2 Level 1 and 2 Level 2 adjacencies up; `att` on its Level 1 LSP 00-00; b2 reaches 10.201.0.9/32 at Level 2, metric 70, next hop 10.0.12.1; each r has 0.0.0.0/0 to its border; r1 pings r2, r3 pings r1 |
+| `backbone-link-down.yml` | `interface: b1:eth1` down, then up | b2 reaches 10.201.0.9/32 at metric 80 through b3 (next hop 10.0.23.2), and r1 still pings r2; then 70 again |
+| `border-cut-off.yml` | b1:eth1 and b1:eth2 down, then up | b1 clears `att` (RFC 1142 7.2.9.2); r1 loses its default route; r1 pings r2 before, cannot during, and can again after; b2 and b3 lose area 1's prefixes; all come back |
 | `area-prefix-withdraw.yml` | `sim: prefixes.withdraw` on s1, r3c3, 31.0.0.0/24; then advertise | b2 and b3 lose 31.0.0.0/24 to 31.0.9.0/24 at Level 2, then get them back |
 | `grid-metric.yml` | `sim: link.metric` on s1, s1--r1c1, 100; then 10 | b1 reaches 10.201.0.9/32 at 150, b2 at 160; then 70 again |
 
 Each starts and ends with the lab whole, so they run in any order.
+
+The pings use routescope's `ping` condition, which runs `ping` inside the
+node. The isis4r image has it from isis PR #71. A ping that cannot run
+reports nothing received, so a `reachable: false` check would pass
+without `ping`. Each scenario that expects a ping to fail first expects
+one to succeed.
 
 ### `ABOUT.md`
 
@@ -145,8 +151,9 @@ back here for the design.
 Same shape as `isis4r-frr.sh`: `clab` or `netns`, the example's own
 files, the same checks both ways. It checks the Level 2 adjacencies,
 each r's default route in the kernel, and b2's route to area 1 before,
-during and after b1:eth1 down. In netns mode r1 also pings r2's
-loopback. The isis4r image has no `ping`, so clab mode skips that.
+during and after b1:eth1 down. r1 pings r2's loopback: in netns mode
+with the host's `ping`, in clab mode when the image has one, and
+otherwise it says it skipped the ping.
 
 ### The test on simulated time: `test/scenario/isis4r_areas_lab_test.rb`
 
@@ -164,9 +171,6 @@ there first.
   `policy.summaries`. Each one can be a later scenario.
 - **No FRR.** You asked for isis4r and the simulator.
 - **No BGP-LS.**
-- **No ping in the scenarios.** The isis4r image has no `ping`. Adding
-  `iputils-ping` to its runtime stage would let a scenario ping r2 from
-  r1. That is a change to the image, left for its own pull request.
 
 ## Open question, answered
 

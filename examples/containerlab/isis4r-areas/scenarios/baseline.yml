@@ -4,6 +4,7 @@ description: >
   two Level 2 adjacencies (the other borders; Level 1 needs a common area,
   RFC 1142 section 7.1.3). Each border carries its area into Level 2 and
   sets the attached bit, and each r has a default route to its border.
+  r1 pings r2 and r3 pings r1, across two areas and the backbone.
 timeout: 120
 
 steps:
@@ -37,3 +38,11 @@ steps:
   - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, next_hop: 10.3.1.1 } }
   - expect: { isis_route: { node: r1, prefix: 10.202.0.9/32, present: false } }
     name: r1 knows only its own area
+
+  - mark: forwarding
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 pings r2 by its default route, b1, Level 2 and b2
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1

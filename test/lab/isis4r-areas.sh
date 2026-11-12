@@ -8,8 +8,9 @@
 # Both use the example's own files, isisd.yml and sim.yml, and run the
 # same checks: each border's two Level 2 adjacencies, each r's default
 # route to its border (the attached bit), b2's route to area 1's r3c3
-# over b1, then through b3 while b1:eth1 is down. In netns mode r1 also
-# pings r2's loopback across the backbone; the isis4r image has no ping.
+# over b1, then through b3 while b1:eth1 is down. r1 pings r2's loopback
+# across the backbone: in netns mode with the host's ping, in clab mode
+# when the image has one (isis4r PR #71 adds it).
 # Needs root. KEEP_LAB=1 leaves it up.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -25,7 +26,8 @@ clab)
   up() { (cd "$EX" && containerlab deploy -t isis4r-areas.clab.yml --reconfigure); }
   down() { (cd "$EX" && containerlab destroy -t isis4r-areas.clab.yml --cleanup) || true; }
   logs() { for n in $NODES; do echo "--- $n"; docker logs --tail 20 "clab-isis4r-areas-$n" 2>&1 || true; done; }
-  can_ping() { false; }
+  # ping is in the image from isis4r PR #71; an older image has none.
+  can_ping() { on r1 sh -c "command -v ping" >/dev/null 2>&1; }
   ;;
 netns)
   on() { local n=$1; shift; ip netns exec "isis4r-areas-$n" "$@"; }
@@ -110,6 +112,8 @@ echo "ok: b2 reaches area 1's r3c3 over b1"
 if can_ping; then
   eventually 30 r1_pings_r2 || fail "r1 does not reach r2's loopback"
   echo "ok: r1 pings r2's loopback, by default routes and Level 2"
+else
+  echo "skip: no ping in the image, so r1 to r2 is not pinged"
 fi
 on b1 ip link set eth1 down
 eventually 20 b2_to_area1 10.0.23.2 || fail "b2 does not reroute through b3 with b1:eth1 down"

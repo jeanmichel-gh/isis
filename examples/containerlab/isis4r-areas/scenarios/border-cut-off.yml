@@ -2,14 +2,17 @@ name: A border is cut off from Level 2
 description: >
   Both of b1's backbone links go down. b1 reaches no other area, so it
   clears the attached bit in its Level 1 LSP (RFC 1142 section 7.2.9.2),
-  and r1 loses its default route. b2 and b3 lose area 1. Then both links
-  come back, and so does all of it.
+  and r1 loses its default route: r1 can no longer ping r2. b2 and b3
+  lose area 1. Then both links come back, and so does all of it.
 capture: [b1]
 timeout: 180
 
 steps:
   - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, next_hop: 10.1.1.1 } }
     within: 90
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 pings r2 first, so the failed ping below means something
 
   - interface: b1:eth1
     state: down
@@ -22,6 +25,10 @@ steps:
   - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, present: false } }
     within: 10
     name: r1 has no default route
+    continue: true
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 3, reachable: false } }
+    within: 10
+    name: r1 cannot reach r2
     continue: true
   - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, present: false } }
     within: 15
@@ -41,3 +48,6 @@ steps:
     within: 10
   - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70 } }
     within: 15
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 pings r2 again
