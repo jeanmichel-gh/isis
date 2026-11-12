@@ -12,7 +12,7 @@
 # isis4r's installed routes. Needs root. KEEP_LAB=1 leaves it up.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-EX=$ROOT/examples/containerlab/isis4r-frr
+EX=$ROOT/routescope/labs/isis4r-frr
 MODE=${1:?usage: isis4r-frr.sh clab|netns}
 W=${LAB_DIR:-/tmp/isis4r-frr-lab}
 

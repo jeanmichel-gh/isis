@@ -144,7 +144,9 @@ test/fixtures/             PDUs captured from real routers, as hex, named
 test/functional/           tests that put PDUs on a real interface
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
-examples/containerlab/     labs of isis4r and FRR; test/lab/ runs them
+routescope/labs/           labs of isis4r and FRR, as routescope reads them;
+                           test/lab/ runs them. examples/containerlab/
+                           holds symlinks to them for one release
 Dockerfile                 the isis4r image
 ```
 
@@ -2113,7 +2115,7 @@ sequence and the route to FRR's loopback. Measured on the way: YAML
 reads an area 49.0010 as the number 49.001, so isisd reads the areas as
 the file wrote them. routescope reads isisd through this API. A
 `Dockerfile` builds the isis4r image, its unit tests run in it, and
-`examples/containerlab/isis4r-frr` puts isis4r between a Level 1 FRR and
+`routescope/labs/isis4r-frr` puts isis4r between a Level 1 FRR and
 a Level 2 FRR. `test/lab/isis4r-frr.sh` runs that lab's own files and
 checks the routing through isis4r, in containerlab (the CI job `lab
 (containerlab)`) or in network namespaces with no Docker. Measured

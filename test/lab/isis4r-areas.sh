@@ -14,7 +14,7 @@
 # Needs root. KEEP_LAB=1 leaves it up.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-EX=$ROOT/examples/containerlab/isis4r-areas
+EX=$ROOT/routescope/labs/isis4r-areas
 MODE=${1:?usage: isis4r-areas.sh clab|netns}
 W=${LAB_DIR:-/tmp/isis4r-areas-lab}
 NODES="b1 b2 b3 r1 r2 r3 s1 s2 s3"

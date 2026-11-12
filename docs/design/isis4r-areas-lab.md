@@ -52,7 +52,7 @@ Read on master at 788822b.
 
 ## The design
 
-### The lab: `examples/containerlab/isis4r-areas/`
+### The lab: `routescope/labs/isis4r-areas/`
 
 ```
      49.0001                  49.0002                  49.0003
@@ -121,7 +121,8 @@ Each simulator enters its grid at r1c1, as `isis4r-sim` does.
 
 ### Scenarios: `scenarios/`
 
-routescope runs these, once the folder is copied into `~/labs`.
+routescope runs these, once the lab is installed with
+`routescope-labs install isis/isis4r-areas`.
 
 | File | Does | Checks |
 |------|------|--------|
