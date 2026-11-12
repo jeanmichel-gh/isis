@@ -44,3 +44,10 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends iproute
  && echo '187 isis' > /etc/iproute2/rt_protos.d/isis4r.conf
 ENTRYPOINT ["isisd"]
 CMD ["-c", "/etc/isis4r/isisd.yml", "-l", "-"]
+
+# Passive capture helper: same protocol parser, no daemon startup.
+FROM runtime AS capture
+ENTRYPOINT ["isis-capture"]
+CMD ["-i", "eth0"]
+
+FROM runtime AS router

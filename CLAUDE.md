@@ -2,6 +2,12 @@
 
 Guide for AI agents working on isis4r. Read this before writing anything.
 
+## Wire capture addition
+
+`exe/isis-capture` emits passive Ethernet capture as JSON lines for RouteScope.
+The parser-backed adapter is `lib/isis/wire_capture/`; see `docs/capture.md`.
+It does not change daemon or routing behaviour.
+
 ## What this is
 
 isis4r is a programmable IS-IS router and protocol testing platform, with

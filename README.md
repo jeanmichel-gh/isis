@@ -155,3 +155,5 @@ as bgp4r. You can redistribute it and/or modify it under either:
 isis4r is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE.
+
+Passive wire capture for RouteScope: see [capture](docs/capture.md).
