@@ -1,0 +1,37 @@
+# s1, the simulator of area 49.0001: a real IS-IS system on eth1 (to b1)
+# and eth2 (to r1), with a 3x3 grid of simulated systems behind it, all
+# Level 1. See ../isis4r-areas.clab.yml.
+#
+# Grid system IDs come from system_id_base, row then column: r1c1 is
+# 0000.0001.0101, r3c3 is 0000.0001.0303. Grid loopbacks come from
+# loopbacks in the same order: r1c1 10.201.0.1 to r3c3 10.201.0.9, each a
+# /32 at metric 0. r3c3 also has 31.0.0.0/24 to 31.0.9.0/24.
+#
+# Distances the scenarios rely on, every metric 10:
+#   b1 to r3c3's loopback: b1-s1 10, s1-r1c1 10, four grid hops 40 = 60
+#   from either other border, over its backbone link:    10 + 60 = 70
+#   the long way round, when that link is down:          20 + 60 = 80
+simulator:
+  system_id: 0000.0000.0011
+  hostname: s1
+  areas: [49.0001]
+  level: 1
+  metric_style: wide
+  minimum_lsp_interval: 1
+  prefixes:
+    - { prefix: 10.255.0.11/32, metric: 0 }
+  interfaces:
+    - { name: eth1, ip_addresses: [10.1.0.2], metric: 10, hello_interval: 1, hello_multiplier: 3 }
+    - { name: eth2, ip_addresses: [10.1.2.2], metric: 10, hello_interval: 1, hello_multiplier: 3 }
+grid:
+  columns: 3
+  rows: 3
+  metric: 10
+  system_id_base: 0000.0001.0000
+  loopbacks: 10.201.0.0/24
+routers:
+  - name: r3c3
+    prefixes:
+      - { prefix: 31.0.0.0/24, count: 10, metric: 10 }
+links:
+  - { from: s1, to: r1c1, metric: 10 }

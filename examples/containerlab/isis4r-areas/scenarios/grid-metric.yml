@@ -1,0 +1,30 @@
+name: A metric changes inside area 1
+description: >
+  s1's link into its grid, s1--r1c1, goes from 10 to 100. b1 reaches the
+  grid at 90 more, puts the new metrics in its Level 2 LSP, and b2 follows:
+  area 1's r3c3 goes from 70 to 160. Then the metric goes back to 10.
+timeout: 120
+
+steps:
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70 } }
+    within: 90
+
+  - sim: link.metric
+    node: s1
+    link: s1--r1c1
+    metric: 100
+  - expect: { isis_route: { node: b1, level: 1, prefix: 10.201.0.9/32, metric: 150 } }
+    within: 15
+    continue: true
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 160 } }
+    within: 15
+    measure: level_2_update
+    continue: true
+
+  - sim: link.metric
+    node: s1
+    link: s1--r1c1
+    metric: 10
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70 } }
+    within: 15
+    measure: restore

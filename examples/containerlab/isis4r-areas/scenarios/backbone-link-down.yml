@@ -1,0 +1,36 @@
+name: A backbone link goes down
+description: >
+  b1:eth1, the b1-b2 link, goes down. b2 reaches area 1 the long way,
+  through b3, at 80 instead of 70. Every border keeps the attached bit:
+  each still reaches the other areas, and r1 still pings r2, through b3.
+  Then the link comes back.
+capture: [b2]
+timeout: 180
+
+steps:
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 90
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 pings r2 over b1-b2
+
+  - interface: b1:eth1
+    state: down
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 80, next_hop: 10.0.23.2 } }
+    within: 15
+    measure: reroute
+    continue: true
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 still pings r2, now through b3
+    continue: true
+  - expect: { isis_lsp: { node: r1, level: 1, lsp_id: b1.00-00, att: true } }
+    continue: true
+  - expect: { isis_lsp: { node: r2, level: 1, lsp_id: b2.00-00, att: true } }
+    continue: true
+
+  - interface: b1:eth1
+    state: up
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 30
+    measure: restore
