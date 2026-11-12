@@ -56,3 +56,11 @@ Every link is point-to-point, metric 10.
 | `grid-metric` | s1--r1c1 metric 10 to 100, then back | b1 reaches r3c3 at 150, b2 at 160, then at 70 again |
 
 The design is `docs/design/isis4r-areas-lab.md` in the isis repo. `test/scenario/isis4r_areas_lab_test.rb` runs these files on simulated time and checks the same numbers. The ping checks need an isis4r image with `ping` in it.
+
+## Images
+
+Every node runs `isis4r:latest`, built in an isis4r checkout beside datalink-socket:
+
+```sh
+docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+```

@@ -98,7 +98,7 @@ jobs:
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
 
-  # The example lab, examples/containerlab/isis4r-frr: the isis4r image
+  # The example lab, routescope/labs/isis4r-frr: the isis4r image
   # builds and the unit tests pass inside it, then containerlab runs it
   # beside FRR and test/lab/isis4r-frr.sh checks the routing through it.
   lab-containerlab:

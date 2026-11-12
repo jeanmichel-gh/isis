@@ -18,8 +18,9 @@
 # datalink-socket, and FRR:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
 #   docker pull quay.io/frrouting/frr:10.2.1
-# Then copy this folder into ~/labs and start it from routescope's lab
-# menu, or here:
+# Then install it into ~/labs with
+#   routescope-labs install isis/isis4r-frr
+# and start it from routescope's lab menu, or here:
 #   sudo containerlab deploy -t isis4r-frr.clab.yml
 name: isis4r-frr
 

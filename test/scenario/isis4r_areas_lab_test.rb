@@ -6,14 +6,14 @@ require_relative "../support/sim_host"
 # The isis4r-areas example lab, from its own files, on simulated wires and
 # a manual clock: three borders (b1-b3, Level 1-2), three Level 1 routers
 # (r1-r3) and three simulators (s1-s3), each with a 3x3 grid. Wired as
-# examples/containerlab/isis4r-areas/isis4r-areas.clab.yml wires them.
+# routescope/labs/isis4r-areas/isis4r-areas.clab.yml wires them.
 #
 # It holds the numbers the lab's comments and scenarios rely on, so a
 # change to a file that moves one fails here before it fails in a lab.
 #
 # ISIS_LOG=info or ISIS_LOG=debug prints each test's log as it runs.
 class TestIsis4rAreasLab < Minitest::Test
-  EX = File.expand_path("../../examples/containerlab/isis4r-areas", __dir__)
+  EX = File.expand_path("../../routescope/labs/isis4r-areas", __dir__)
   STEP = 0.5
 
   # A wire that can be cut: a cut wire delivers nothing, as a link with

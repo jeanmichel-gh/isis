@@ -38,8 +38,9 @@
 # s and the routers come from one image, told apart by their command.
 # Build it from an isis4r checkout beside datalink-socket:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
-# Then copy this folder into ~/labs and start it from routescope's lab
-# menu, or here:
+# Then install it into ~/labs with
+#   routescope-labs install isis/isis4r-areas
+# and start it from routescope's lab menu, or here:
 #   sudo containerlab deploy -t isis4r-areas.clab.yml
 # test/lab/isis4r-areas.sh runs it and checks it, in containerlab or in
 # network namespaces.

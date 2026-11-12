@@ -43,14 +43,23 @@ sudo ruby exe/isis-cli show adjacencies
 ```
 
 In a container, beside FRR, with containerlab:
-[examples/containerlab/isis4r-frr](examples/containerlab/isis4r-frr/isis4r-frr.clab.yml).
+[routescope/labs/isis4r-frr](routescope/labs/isis4r-frr/isis4r-frr.clab.yml).
 `test/lab/isis4r-frr.sh netns` runs the same lab in network namespaces,
 with no Docker.
 
 Three areas over a Level 2 backbone, each with a border, a Level 1
 router and a simulated grid:
-[examples/containerlab/isis4r-areas](examples/containerlab/isis4r-areas/ABOUT.md).
+[routescope/labs/isis4r-areas](routescope/labs/isis4r-areas/ABOUT.md).
 `test/lab/isis4r-areas.sh netns` runs it in network namespaces.
+
+Both labs live in `routescope/labs/`, the path every repository uses for
+its routescope labs. To run one in routescope, install it into `~/labs`
+with routescope's `routescope-labs` command:
+
+```sh
+routescope-labs install isis/isis4r-frr
+routescope-labs install isis/isis4r-areas
+```
 
 ## Run the demo
 
