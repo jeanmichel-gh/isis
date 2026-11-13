@@ -1787,6 +1787,17 @@ RFC 8706, multi topology, TLVs 222 or 229, or TE.
 * The bgp-ls-export gate on the VM, the 16 grid nodes, is not verified.
 * The gem has not been published.
 
+**Noted for later, from the owner, 2026-11-13.** Not designed yet;
+routescope's `CLAUDE.md`, "Where the work is going", holds the full note.
+
+* One CLI for IS-IS, BGP and OSPF in Cisco syntax (IOS XE is the likely
+  OS, once its public command references are checked). `isis-cli` would
+  join `ospf-cli` and `bgp4r-cli` behind it.
+* CI runs only the jobs a change's paths need.
+* Review and document every lab in `routescope/labs/`.
+* Do not open a pull request for documents alone: CI costs money. Let a
+  document change ride with the next code change, or ask first.
+
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors, `SystemId` and the
