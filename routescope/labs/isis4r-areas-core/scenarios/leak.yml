@@ -1,0 +1,38 @@
+name: b1 leaks area 3 into area 1
+description: >
+  b1 leaks the Level 2 routes under 10.203.0.0/24, area 3's grid, into
+  Level 1 with the up/down bit (RFC 5302 section 4). r1 gets them as Level 1
+  routes and prefers them to its default. b1 does not put them back into
+  Level 2: c0 still reaches area 3 through b3. Then the leak is cleared.
+  Needs routescope's isis: step.
+capture: [b1]
+timeout: 150
+
+steps:
+  - expect: { isis_route: { node: r1, prefix: 10.203.0.9/32, present: false } }
+    within: 90
+    name: r1 has only its default for area 3
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.23, count: 5 } }
+    within: 15
+
+  - isis: policy.leak
+    node: b1
+    prefixes: [10.203.0.0/24]
+  - expect: { isis_route: { node: r1, prefix: 10.203.0.9/32, level: 1, metric: 90, next_hop: 10.1.1.1, up_down: true } }
+    within: 15
+    measure: leaked
+    name: r1 has area 3's r3c3, up/down set, at b1's 80 plus 10
+  - expect: { isis_route: { node: r1, prefix: 10.202.0.9/32, present: false } }
+    name: only what the policy covers
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.203.0.9/32, next_hop: 10.0.3.2 } }
+    name: c0 still reaches area 3 through b3, not b1
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.23, count: 5 } }
+    within: 15
+    name: r1 still pings r3
+
+  - isis: policy.leak
+    node: b1
+    prefixes: []
+  - expect: { isis_route: { node: r1, prefix: 10.203.0.9/32, present: false } }
+    within: 15
+    name: r1 back to its default

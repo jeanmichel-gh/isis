@@ -1,0 +1,60 @@
+name: Three areas around a Level 2-only backbone
+description: >
+  c0 runs Level 2 only, in its own area: three Level 2 adjacencies, no
+  Level 1 LSP. Each border has its simulator and its r at Level 1, and the
+  backbone at Level 2; b3 has one way in, through c0. Level 1 databases
+  stay in their area, and no simulated system reaches Level 2. Each border
+  carries its area into Level 2 and sets the attached bit, and each r has
+  a default route to its border.
+timeout: 150
+
+steps:
+  - expect: { isis_adjacencies: { node: c0, level: 2, up: 3 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: c0, level: 1, up: 0 } }
+    name: c0 has no Level 1 adjacency
+  - expect: { isis_adjacencies: { node: b1, level: 2, up: 2 } }
+    within: 30
+  - expect: { isis_adjacencies: { node: b2, level: 2, up: 2 } }
+  - expect: { isis_adjacencies: { node: b3, level: 2, up: 1 } }
+  - expect: { isis_adjacencies: { node: b1, level: 1, up: 2 } }
+    within: 30
+  - expect: { isis_adjacencies: { node: b2, level: 1, up: 2 } }
+  - expect: { isis_adjacencies: { node: b3, level: 1, up: 2 } }
+
+  - mark: databases
+  - expect: { isis_lsdb: { node: c0, level: 1, count: 0 } }
+    name: c0 holds no Level 1 LSP
+  - expect: { isis_lsdb: { node: c0, level: 2, count: 4 } }
+    within: 30
+    name: Level 2 holds c0 and the borders, no simulated system
+  - expect: { isis_lsdb: { node: r1, level: 1, count: 12 } }
+    within: 30
+    name: area 1 holds b1, r1, s1 and nine grid systems
+
+  - mark: level 2
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 30
+    name: b2 reaches area 1's r3c3 over b1
+  - expect: { isis_route: { node: c0, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.1.2 } }
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.201.0.9/32, metric: 80, next_hop: 10.0.3.1 } }
+    name: b3 reaches area 1 through c0
+
+  - mark: attached
+  - expect: { isis_lsp: { node: r1, level: 1, lsp_id: b1.00-00, att: true } }
+    within: 15
+  - expect: { isis_lsp: { node: r2, level: 1, lsp_id: b2.00-00, att: true } }
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: b3.00-00, att: true } }
+  - expect: { isis_route: { node: r1, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.1.1.1 } }
+  - expect: { isis_route: { node: r2, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.2.1.1 } }
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, metric: 10, next_hop: 10.3.1.1 } }
+  - expect: { isis_route: { node: r1, prefix: 10.203.0.9/32, present: false } }
+    name: r1 knows only its own area
+
+  - mark: forwarding
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.22, count: 5 } }
+    within: 15
+    name: r1 pings r2 over b1 and b2
+  - expect: { ping: { node: r1, from: 10.255.0.21, to: 10.255.0.23, count: 5 } }
+    within: 15
+    name: r1 pings r3 through c0

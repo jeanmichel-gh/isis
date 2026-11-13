@@ -1,0 +1,22 @@
+# c0, the backbone: Level 2 only, in its own area 49.0000. See
+# ../isis4r-areas-core.clab.yml.
+#
+# It has no Level 1 at all: no Level 1 LSP, no Level 1 adjacency. Its
+# area is "another area" for every border, so a border that reaches only
+# c0 still sets its attached bit (RFC 1142 section 7.2.9.2).
+# scenarios/core-overload.yml sets its overload bit: then Level 2 SPF
+# does not go through it, and area 3, which has no other way, is cut off
+# from areas 1 and 2.
+system_id: 0000.0000.0100
+hostname: c0
+areas: [49.0000]
+level: 2
+metric_style: wide
+forwarding: true
+minimum_lsp_interval: 1
+prefixes:
+  - { prefix: 10.255.0.100/32, metric: 0 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.1.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }   # to b1
+  - { name: eth2, ip_addresses: [10.0.2.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }   # to b2
+  - { name: eth3, ip_addresses: [10.0.3.1], metric: 10, hello_interval: 1, hello_multiplier: 3 }   # to b3

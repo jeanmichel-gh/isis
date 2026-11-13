@@ -1,0 +1,24 @@
+name: The b1-b2 link goes down
+description: >
+  b1:eth2, the b1-b2 link, goes down. b2 reaches area 1 through c0, at 80
+  instead of 70 over b1, and r2 still pings r1. Then the link comes back.
+capture: [b2]
+timeout: 150
+
+steps:
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 90
+
+  - interface: b1:eth2
+    state: down
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 80, next_hop: 10.0.2.1 } }
+    within: 15
+    measure: reroute
+  - expect: { ping: { node: r2, from: 10.255.0.22, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r2 pings r1 through c0
+
+  - interface: b1:eth2
+    state: up
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, metric: 70, next_hop: 10.0.12.1 } }
+    within: 30

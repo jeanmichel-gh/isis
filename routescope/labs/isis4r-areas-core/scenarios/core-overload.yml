@@ -1,0 +1,51 @@
+name: The backbone is overloaded
+description: >
+  c0 sets its overload bit, so Level 2 SPF does not go through it. b3,
+  whose only way in is c0, loses areas 1 and 2, and b1 and b2 lose area 3.
+  b3 keeps its attached bit: c0's own area, 49.0000, is still another
+  area it reaches (RFC 1142 section 7.2.9.2). So r3 keeps a default route,
+  and r3 still cannot reach r1. The bit says "some other area", not every
+  area. Needs routescope's isis: step.
+capture: [b3]
+timeout: 150
+
+steps:
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.201.0.9/32, metric: 80 } }
+    within: 90
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1 first, so the failed ping below means something
+
+  - isis: policy.overload
+    node: c0
+    on: true
+  - expect: { isis_lsp: { node: b3, level: 2, lsp_id: c0.00-00, ol: true } }
+    within: 15
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.201.0.9/32, present: false } }
+    within: 10
+    name: b3 reaches area 1 only through c0
+    continue: true
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.255.0.100/32 } }
+    name: c0's own prefixes stay
+    continue: true
+  - expect: { isis_lsp: { node: r3, level: 1, lsp_id: b3.00-00, att: true } }
+    name: b3 keeps its attached bit, for c0's area
+    continue: true
+  - expect: { isis_route: { node: r3, prefix: 0.0.0.0/0, next_hop: 10.3.1.1 } }
+    continue: true
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 3, reachable: false } }
+    within: 10
+    name: a default route, and no way to area 1
+    continue: true
+  - expect: { isis_route: { node: b2, level: 2, prefix: 10.201.0.9/32, next_hop: 10.0.12.1 } }
+    name: b1 and b2 keep each other
+    continue: true
+
+  - isis: policy.overload
+    node: c0
+    on: false
+  - expect: { isis_route: { node: b3, level: 2, prefix: 10.201.0.9/32, metric: 80 } }
+    within: 15
+  - expect: { ping: { node: r3, from: 10.255.0.23, to: 10.255.0.21, count: 5 } }
+    within: 15
+    name: r3 pings r1 again
