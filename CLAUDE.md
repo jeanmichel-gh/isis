@@ -1747,6 +1747,46 @@ it out.
 Record status here as it moves, because a plan that lives only in a chat
 is lost when the chat is.
 
+**Status by gate, measured 2026-11-13.** Update this table in the pull
+request that moves a gate. The paragraph after it has the detail.
+
+| Phase | Gate | Status |
+| --- | --- | --- |
+| 1, minimal speaker | 1 offline | Done |
+| | 2 hellos | Done, FRR 8.4.4 and 10.5.1, 2026-10-31 |
+| | 3 LSP and SNP exchange | Done, FRR 8.4.4, 2026-11-01 |
+| 2, basic router | 1 LAN | Done, FRR 8.4.4, 2026-11-01 |
+| | 2 two levels | Done, FRR 8.4.4, 2026-11-01 |
+| | 3 routes computed | Done, FRR 8.4.4, 2026-11-01 |
+| | 4 routes installed | Done, FRR 8.4.4, 2026-11-01 |
+| 3, enhanced router | 1 policy | Done, FRR 8.4.4, 2026-11-02 |
+| | 2 failure handling (BFD, RFC 8706) | Not started |
+| | 3 topologies and TE | Not started |
+| 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | Not started |
+
+Not started was measured by searching `lib/` and `exe/`: nothing for BFD,
+RFC 8706, multi topology, TLVs 222 or 229, or TE.
+
+**Left in the core**, found in the code's own comments:
+
+* Jitter on the LSP refresh timer, clause 10.1
+  (`database/originator.rb`).
+* Jitter on the hello, PSNP and CSNP timers, clause 10.1
+  (`adjacency/lan_circuit.rb`, `adjacency/p2p_level.rb`).
+* Hello padding: to maxsize on a LAN, clause 8.4.1
+  (`adjacency/lan_circuit.rb`), and on the first point to point IIH,
+  clause 8.2.3 c.
+* A database too large for one CSNP: `send_csnp` sends one PDU
+  (`database/update_process.rb`).
+
+**Left around it:**
+
+* TLV 132, interface addresses, in `show.topology`. It is the open
+  question of `docs/design/bgp-ls-export.md`, and it blocks BGP-LS TLVs
+  259 and 260 for IS-IS in bgp4r's Producer.
+* The bgp-ls-export gate on the VM, the 16 grid nodes, is not verified.
+* The gem has not been published.
+
 **Status, measured 2026-10-31.** The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors, `SystemId` and the
@@ -2158,8 +2198,8 @@ each reach FRR's routes. `sim.state` also says which interfaces send
 hellos, each system's prefix groups, each link's number and the metric
 style, which routescope's simulated area panel reads; `neighbor.start` on
 a circuit already sending leaves it alone, where it used to start a
-second hello timer. Next: routescope's IS-IS scenario conditions
-and its sim actions for isis4r-sim. Not yet in
+second hello timer. routescope's IS-IS scenario conditions and its sim
+actions for isis4r-sim are built (routescope #35 and #36). Not yet in
 the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
 large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been

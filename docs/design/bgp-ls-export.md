@@ -1,6 +1,7 @@
 # The LSDB as a topology, for a BGP-LS Producer
 
-Status: approved 2026-11-09.
+Status: approved 2026-11-09, built in #66. The open question on TLV 132
+is still open.
 
 Part of the BGP-LS lab. Two other specs go with it:
 bgp4r `docs/design/bgp-ls-producer.md` and routescope

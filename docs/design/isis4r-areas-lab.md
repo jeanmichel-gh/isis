@@ -1,7 +1,8 @@
 # The isis4r-areas lab
 
 Status: approved 2026-11-12, with one Level 1 router per area added (the
-open question at the end, answered yes).
+open question at the end, answered yes). Built in #69. The leak and
+summaries scenarios went into a separate lab, isis4r-areas-core (#72).
 
 ## The problem
 
