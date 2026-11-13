@@ -2,34 +2,24 @@
 
 [![CI](https://github.com/jeanmichel-gh/isis/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/jeanmichel-gh/isis/actions/workflows/ci.yml)
 
-A proof-of-concept IS-IS daemon built on
-[datalink-socket](../datalink-socket). It forms a LAN adjacency using
-IS-IS Hello (IIH) PDUs, carried over IEEE 802.3 with an LLC header and
-sent to the AllL1ISs multicast.
-
-This is step 2 of the roadmap: build the consumer, let it show what belongs
-in datalink-socket, then refactor. It deliberately hand-rolls the
-link-layer plumbing (LLC framing, the 802.3 length field, polling the
-socket). Those are the pieces we will reassess.
+isis4r, an IS-IS router in Ruby, with a daemon (`isisd`), a CLI
+(`isis-cli`) and a simulator (`isis4r-sim`). It is built on
+[datalink-socket](../datalink-socket) and tested against FRR.
 
 ## What works
 
-- IS-IS system ID, LLC header, TLVs, and a LAN Hello PDU: encode and parse.
-- A circuit that sends periodic Hellos and runs the adjacency handshake.
-- The LAN handshake: Down, then Init when a neighbor is heard, then Up
-  when the neighbor lists our SNPA in its IS Neighbors TLV.
-- Two instances converging over the datalink-socket loopback backend, with
-  no privileges.
-- An injected clock and scheduler, and a simulated link, so tests run
-  protocol time without real waiting.
+Phases 1 and 2 of the plan, and the first gate of phase 3:
 
-## Scope
+- Point to point and LAN adjacencies, the RFC 5303 three-way handshake,
+  the DIS election and pseudonode LSPs.
+- Level 1 and Level 2 databases, flooding, refresh, aging and purge, with
+  RFC 5304 authentication.
+- SPF for IPv4 and IPv6, ECMP, overload and attached, and routes installed
+  through netlink.
+- Route leaking, summaries and redistribution.
 
-In: one L1 LAN adjacency, the Hello PDU, the Init/Up handshake.
-
-Out, on purpose: SPF, the LSP database and flooding, SNP exchange,
-multi-level, authentication, and the designated IS election. Those come
-after the refactor.
+Not yet: BFD, graceful restart, multi topology, TE, segment routing and
+Flex-Algo. `CLAUDE.md`, "Where to start", has the phases and their status.
 
 ## Run it as a router
 
