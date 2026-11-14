@@ -1776,6 +1776,12 @@ RFC 8706, multi topology, TLVs 222 or 229, or TE.
 * Hello padding: to maxsize on a LAN, clause 8.4.1
   (`adjacency/lan_circuit.rb`), and on the first point to point IIH,
   clause 8.2.3 c.
+* Interface subnets are not advertised. isisd puts only its config's
+  `prefixes` in its LSPs; FRR also advertises each interface's subnet.
+  So in the isis4r-frr lab, r1 learns its own link subnets from f1 and
+  f2 and installs them through them, metric 21 and 22. The kernel's
+  connected route still wins. Measured 2026-11-14; found in the lab
+  review, not in a code comment.
 
 **Done in the core, 2026-11-14:** a database too large for one SNP.
 `send_csnp` sends a complete set of CSNPs, each within

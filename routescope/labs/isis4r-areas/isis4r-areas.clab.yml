@@ -36,7 +36,7 @@
 # - Cut b1 off from Level 2 and it clears the bit: r1 loses its default.
 #
 # s and the routers come from one image, told apart by their command.
-# Build it from an isis4r checkout beside datalink-socket:
+# Build it from an isis checkout beside datalink-socket:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
 # Then install it into ~/labs with
 #   routescope-labs install isis/isis4r-areas
