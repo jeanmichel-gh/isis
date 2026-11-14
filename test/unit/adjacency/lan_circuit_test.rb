@@ -426,6 +426,30 @@ class TestLanUpdate < Minitest::Test
     assert_empty sent(:a, ISIS::Pdu::Csnp)
   end
 
+  # Clause 7.3.15.3 a: more LSPs than one CSNP holds go in a complete set
+  # of several, "separated by an interval of at least
+  # minimumBroadcastLSPTransmissionInterval", every completeSNPInterval.
+  def test_the_dis_sends_a_large_database_as_a_spaced_set_of_csnps
+    node(:a)
+    node(:b)
+    up(:a, :b)
+    (1..300).each { |i| seed(:b, lsp(id: format("0000.0000.%04x.00-00", 0x1000 + i))) }
+    start_at = @clock.now
+    run_for(12)
+    csnps = sent(:b, ISIS::Pdu::Csnp).select { |t, _| t > start_at }
+    first = csnps.index { |_, c| c.start_lsp_id_s == "0000.0000.0000.00-00" }
+    set = csnps.drop(first)
+    set = set.take(set.index { |_, c| c.end_lsp_id_s == "ffff.ffff.ffff.ff-ff" } + 1)
+    assert_operator set.size, :>, 1
+    set.each { |_, c| assert_operator c.encode.bytesize, :<=, 1492 }
+    set.each_cons(2) { |(x, _), (y, _)| assert_operator y - x, :>=, 0.033 - 1e-9 }
+    assert_equal 300, set.sum { |_, c| c.entries.count { |e| ISIS::Pdu.lsp_id_s(e.lsp_id).start_with?("0000.0000.1") } }
+    # a asks for them in PSNPs that each hold what fits (7.3.15.4), and
+    # the DIS sends one LSP every minimumBroadcastLSPTransmissionInterval.
+    run_for(30)
+    assert_equal held(:b).keys.sort, held(:a).keys.sort, "a learned every LSP"
+  end
+
   # An LSP only the DIS holds: its CSNP lists it, a asks for it in a PSNP
   # (7.3.15.2 b 4, 7.3.15.4 a), and the DIS sends it (7.3.15.2 b 2).
   def test_the_other_system_asks_the_dis_for_what_it_lacks

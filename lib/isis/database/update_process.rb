@@ -175,32 +175,55 @@ module ISIS
       :processed
     end
 
-    # Send a PSNP with every entry whose SSN is set for this circuit, and
-    # clear them. RFC 1142 clause 7.3.15.4: "If there were no ... Link State
-    # PDUs with SSNflag set, do not transmit". Returns the PSNP, or nil.
+    # Send a PSNP with the entries whose SSN is set for this circuit, as
+    # many as fit, and clear SSN for those. RFC 1142 clause 7.3.15.4: "as
+    # many ... with SSNflag set as will fit in the PDU", and "to avoid the
+    # possibility of starvation, the scan ... shall commence with the next
+    # LSP which was not included in the previous scan". "If there were no
+    # ... Link State PDUs with SSNflag set, do not transmit". Returns the
+    # PSNP, or nil.
     def send_psnp
-      entries = @database.entries.select { |e| e.ssn.include?(@name) }
-      return nil if entries.empty?
+      flagged = @database.entries.select { |e| e.ssn.include?(@name) }.sort_by(&:lsp_id)
+      return nil if flagged.empty?
 
-      psnp = Pdu::Psnp.new(level: level, source_id: snp_source_id,
-                           tlvs: keyed(lsp_entry_tlvs(entries.map(&:snp_entry)), @area_key))
-      psnp.key = @area_key
+      after = flagged.index { |e| e.lsp_id > @psnp_scanned_to } if @psnp_scanned_to
+      flagged = flagged.rotate(after || 0)
+      build = ->(slice) { snp(Pdu::Psnp, slice.map(&:snp_entry)) }
+      entries = flagged.first(fitting(flagged.size) { |n| build.(flagged.first(n)) })
+      psnp = build.(entries)
       entries.each { |e| e.ssn.delete(@name) }
+      @psnp_scanned_to = entries.last.lsp_id
       @log.debug("PSNP with #{entries.size} entries: #{entries.map(&:lsp_id_s).join(', ')}", circuit: @name)
       transmit(psnp)
+      psnp
     end
 
-    # A CSNP of every LSP held, over the whole range. On a point to point
-    # circuit clause 7.3.15.3 b sends it "at initialisation", and on a
-    # broadcast one the DIS sends "a complete set" every
-    # completeSNPInterval (7.3.15.3 a). One PDU: more LSPs than fit in one
-    # are not handled yet.
+    # A complete set of CSNPs: every LSP held, over the whole range. On a
+    # point to point circuit clause 7.3.15.3 b sends it "at
+    # initialisation", and on a broadcast one the DIS sends "a complete
+    # set" every completeSNPInterval (7.3.15.3 a).
+    #
+    # More entries than fit in one PDU of originatingLxLSPBufferSize octets
+    # go in "a series of individual CSNPs, each referring to a subset of
+    # the complete range". The ranges "shall be contiguous ... and shall
+    # cover the entire range of possible LSPIDs" (section 9.10): the first
+    # starts at all zeros, each next one right after the last LSP of the
+    # one before, and the last ends at all ones. On a broadcast circuit
+    # they go "separated by an interval of at least
+    # minimumBroadcastLSPTransmissionInterval" (7.3.15.3 a). Returns them.
     def send_csnp
-      entries = @database.entries.reject { |e| e.sequence.zero? }.map(&:snp_entry)
-      csnp = Pdu::Csnp.new(level: level, source_id: snp_source_id, tlvs: keyed(lsp_entry_tlvs(entries), @area_key))
-      csnp.key = @area_key
-      @log.debug("CSNP with #{entries.size} entries", circuit: @name)
-      transmit(csnp)
+      entries = @database.entries.reject { |e| e.sequence.zero? }.sort_by(&:lsp_id).map(&:snp_entry)
+      csnps = csnp_set(entries)
+      @log.debug("CSNP set of #{csnps.size} with #{entries.size} entries", circuit: @name)
+      csnps.each_with_index do |csnp, i|
+        if i.zero? || !broadcast?
+          transmit(csnp)
+        else
+          # Only while still DIS: it may have lost the election meanwhile.
+          @scheduler.after(i * @lsp_transmission_interval) { transmit(csnp) if dis? }
+        end
+      end
+      csnps
     end
 
     # Send the LSPs whose SRM is set for this circuit. Before sending, the
@@ -403,6 +426,60 @@ module ISIS
         e.srm.delete(@name)
         e.ssn.delete(@name)
       end
+    end
+
+    # The CSNPs of a complete set for +entries+, sorted by LSP ID.
+    def csnp_set(entries)
+      width = @system_id.bytesize + 2
+      bottom = "\x00".b * width
+      top = "\xff".b * width
+      return [snp(Pdu::Csnp, [], bottom, top)] if entries.empty?
+
+      set = []
+      start = bottom
+      until entries.empty?
+        n = fitting(entries.size) { |k| snp(Pdu::Csnp, entries.first(k), start, top) }
+        slice = entries.shift(n)
+        last = entries.empty? ? top : slice.last.lsp_id
+        set << snp(Pdu::Csnp, slice, start, last)
+        start = lsp_id_after(last) unless entries.empty?
+      end
+      set
+    end
+
+    # A PSNP, or a CSNP over +start+ to +last+, holding +entries+, keyed.
+    def snp(klass, entries, start = nil, last = nil)
+      range = klass == Pdu::Csnp ? { start_lsp_id: Pdu.lsp_id_s(start), end_lsp_id: Pdu.lsp_id_s(last) } : {}
+      pdu = klass.new(level: level, source_id: snp_source_id, tlvs: keyed(lsp_entry_tlvs(entries), @area_key), **range)
+      pdu.key = @area_key
+      pdu
+    end
+
+    # The most of +available+ entries whose PDU, as the block builds it,
+    # fits in originatingLxLSPBufferSize octets (clauses 7.3.15.3 and
+    # 7.3.15.4). At least one, so a set always moves on.
+    def fitting(available)
+      fits = ->(n) { yield(n).encode.bytesize <= snp_buffer_size }
+      return available if fits.(available)
+
+      low = 1
+      high = available
+      while high - low > 1
+        mid = (low + high) / 2
+        fits.(mid) ? low = mid : high = mid
+      end
+      low
+    end
+
+    # originatingL1LSPBufferSize or originatingL2LSPBufferSize: the
+    # originators' buffer size, which is the same at a level.
+    def snp_buffer_size
+      generators.map { |g| g.respond_to?(:buffer_size) ? g.buffer_size : nil }.compact.min || Originator::LSP_BUFFER_SIZE
+    end
+
+    # The LSP ID one above +octets+, where the next CSNP's range starts.
+    def lsp_id_after(octets)
+      [format("%0#{octets.bytesize * 2}x", octets.unpack1("H*").to_i(16) + 1)].pack("H*")
     end
 
     # TLV 9s holding +entries+, as many to a TLV as fit in 255 octets.

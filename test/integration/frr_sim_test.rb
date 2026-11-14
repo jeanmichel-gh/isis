@@ -55,6 +55,22 @@ class TestFrrSim < Minitest::Test
     end
   end
 
+  # More LSPs than one CSNP holds (RFC 1142 7.3.15.3): 18 by 18 systems,
+  # 326 LSPs with FRR's and the simulator's, over a link of 1500 octets.
+  # isis4r sends its CSNPs as a set of ranges, FRR its own; both end with
+  # the same database.
+  BIG = { "grid" => { "rows" => 18, "columns" => 18, "metric" => 10, "loopbacks" => "10.201.0.0/16" },
+          "links" => [{ "from" => "s1", "to" => "r1c1" }] }.freeze
+
+  def test_a_database_larger_than_one_csnp
+    @lab.start(sim: BIG)
+    assert_eventually("FRR's adjacency with the simulator did not come up") { @lab.frr_adjacency_state == "Up" }
+    assert_eventually("FRR does not hold all 326 Level 1 LSPs", 120) { @lab.frr_database(1).size == 326 }
+    assert_eventually("isis4r does not hold FRR's LSP", 60) do
+      Array(@lab.isisd("show.database", "level" => 1)).size == 326
+    end
+  end
+
   def frr_metric(prefix)
     r = @lab.frr_route(prefix)
     r && r["protocol"] == "isis" ? r["metric"] : nil
