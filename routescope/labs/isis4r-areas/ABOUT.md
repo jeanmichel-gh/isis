@@ -55,11 +55,11 @@ Every link is point-to-point, metric 10.
 | `area-prefix-withdraw` | s1's r3c3 withdraws 31.0.0.0/24 x 10, then advertises | b2 and b3 lose them at Level 2, then get them back |
 | `grid-metric` | s1--r1c1 metric 10 to 100, then back | b1 reaches r3c3 at 150, b2 at 160, then at 70 again |
 
-The design is `docs/design/isis4r-areas-lab.md` in the isis repo. `test/scenario/isis4r_areas_lab_test.rb` runs these files on simulated time and checks the same numbers. The ping checks need an isis4r image with `ping` in it.
+The design is `docs/design/isis4r-areas-lab.md` in the isis repo. `test/scenario/isis4r_areas_lab_test.rb` runs these files on simulated time and checks the same numbers. The image has `ping`, which the ping checks need. All five passed twice through routescope on the VM, 2026-11-14, the second time in reverse order, on isis master 71faf44: b2 rerouted in about 2.6 s, b1 cleared its attached bit in about 2.7 s.
 
 ## Images
 
-Every node runs `isis4r:latest`, built in an isis4r checkout beside datalink-socket:
+Every node runs `isis4r:latest`, built in an isis checkout beside datalink-socket:
 
 ```sh
 docker build -t isis4r --build-context datalink-socket=../datalink-socket .

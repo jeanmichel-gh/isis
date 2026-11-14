@@ -30,7 +30,7 @@
 # Areas 1 and 2 reach the backbone two ways, c0 and each other. Area 3
 # has one, through c0.
 #
-# Build the image from an isis4r checkout beside datalink-socket:
+# Build the image from an isis checkout beside datalink-socket:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
 # Then install it into ~/labs with
 #   routescope-labs install isis/isis4r-areas-core
