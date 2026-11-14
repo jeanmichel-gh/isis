@@ -1787,6 +1787,12 @@ RFC 8706, multi topology, TLVs 222 or 229, or TE.
 * The bgp-ls-export gate on the VM, the 16 grid nodes, is not verified.
 * The gem has not been published.
 
+**Done around it, 2026-11-14:** what routescope reads from isisd and
+isis4r-sim is copied in `test/support/routescope_vocabulary.rb`, and
+`test/unit/daemon/routescope_vocabulary_test.rb` holds the API to it, so
+a change that removes or renames a key routescope reads fails here
+(routescope `docs/design/api-contract.md`, part 3).
+
 **Noted for later, from the owner, 2026-11-13.** Not designed yet;
 routescope's `CLAUDE.md`, "Where the work is going", holds the full note.
 
