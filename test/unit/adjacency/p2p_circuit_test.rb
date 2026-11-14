@@ -299,6 +299,72 @@ class TestP2pCircuit < Minitest::Test
     refute_empty held(@a).srm
   end
 
+  # +n+ LSPs from systems 0000.0000.1001 upwards, each with one TLV.
+  def many_lsps(n)
+    (1..n).map { |i| lsp(id: format("0000.0000.%04x.00-00", 0x1000 + i)) }
+  end
+
+  ALL_ZEROS = "0000.0000.0000.00-00"
+  ALL_ONES = "ffff.ffff.ffff.ff-ff"
+
+  # The LSP ID right after +octets+: where a CSNP's next range starts.
+  def next_id(octets)
+    ISIS::Pdu.lsp_id_s([format("%016x", octets.unpack1("H*").to_i(16) + 1)].pack("H*"))
+  end
+
+  # RFC 1142 clause 7.3.15.3 and section 9.10: more LSPs than one CSNP of
+  # originatingL1LSPBufferSize octets holds go in "a series of individual
+  # CSNPs, each referring to a subset of the complete range", ranges
+  # "contiguous" that "cover the entire range of possible LSPIDs".
+  def test_a_database_larger_than_one_csnp_is_sent_in_several
+    lsps = many_lsps(300)
+    lsps.each { |l| seed(@a, l) }
+    up_both
+    # The set sent at adjacency up (7.3.15.3 b): from the last that starts
+    # at the bottom of the range.
+    all = sent(ISIS::Pdu::Csnp)
+    csnps = all.drop(all.rindex { |c| c.start_lsp_id_s == ALL_ZEROS })
+    assert_operator csnps.size, :>, 1, "one CSNP cannot hold 300 entries in 1492 octets"
+    csnps.each { |c| assert_operator c.encode.bytesize, :<=, 1492 }
+    assert_equal ALL_ZEROS, csnps.first.start_lsp_id_s
+    assert_equal ALL_ONES, csnps.last.end_lsp_id_s
+    csnps.each_cons(2) { |x, y| assert_equal next_id(x.end_lsp_id), y.start_lsp_id_s, "contiguous" }
+    csnps.each do |c|
+      c.entries.each { |e| assert (c.start_lsp_id..c.end_lsp_id).cover?(e.lsp_id), "#{ISIS::Pdu.lsp_id_s(e.lsp_id)} in its range" }
+    end
+    assert_equal lsps.map(&:lsp_id).sort, csnps.flat_map { |c| c.entries.map(&:lsp_id) }.sort
+  end
+
+  # The other side, given those CSNPs, holds and asks for nothing more: its
+  # database matches, and no LSP is resent for want of a mention.
+  def test_several_csnps_leave_nothing_unmentioned
+    many_lsps(300).each { |l| seed(@a, l) }
+    up_both
+    run_for(60)
+    assert_equal 300, @b.database.entries.count { |e| !e.placeholder? }
+    srm = @a.database.entries.select { |e| e.srm.any? }
+    assert_empty srm, "every LSP acknowledged: #{srm.size} still flagged"
+  end
+
+  # Clause 7.3.15.4: a PSNP holds "as many ... with SSNflag set as will fit
+  # in the PDU", clears SSN for those only, and the next scan "shall
+  # commence with the next LSP which was not included in the previous
+  # scan".
+  def test_a_psnp_holds_what_fits_and_the_next_one_goes_on_from_there
+    many_lsps(300).each { |l| seed(@b, l) }
+    @b.database.entries.each { |e| e.ssn << @b.name }
+    first = @b.send_psnp
+    assert_operator first.encode.bytesize, :<=, 1492
+    assert_operator first.entries.size, :<, 300
+    flagged = @b.database.entries.count { |e| e.ssn.include?(@b.name) }
+    assert_equal 300 - first.entries.size, flagged
+    second = @b.send_psnp
+    assert_operator second.entries.first.lsp_id, :>, first.entries.last.lsp_id, "goes on from the next LSP"
+    5.times { @b.send_psnp }
+    assert_equal 0, @b.database.entries.count { |e| e.ssn.include?(@b.name) }
+    assert_nil @b.send_psnp
+  end
+
   def test_an_older_lsp_received_sends_ours_back
     seed(@a, lsp(sequence: 7))
     up_both

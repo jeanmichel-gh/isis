@@ -1776,8 +1776,16 @@ RFC 8706, multi topology, TLVs 222 or 229, or TE.
 * Hello padding: to maxsize on a LAN, clause 8.4.1
   (`adjacency/lan_circuit.rb`), and on the first point to point IIH,
   clause 8.2.3 c.
-* A database too large for one CSNP: `send_csnp` sends one PDU
-  (`database/update_process.rb`).
+
+**Done in the core, 2026-11-14:** a database too large for one SNP.
+`send_csnp` sends a complete set of CSNPs, each within
+originatingLxLSPBufferSize octets, their ranges contiguous from all
+zeros to all ones (RFC 1142 7.3.15.3, section 9.10), spaced by
+minimumBroadcastLSPTransmissionInterval on a LAN. `send_psnp` sends what
+fits and goes on next time from the next LSP (7.3.15.4). Before, one
+oversized CSNP made isis4r-sim exit with `Errno::EMSGSIZE` on a 1500 octet
+link; measured against FRR 10.5.1 with 326 LSPs
+(`test/integration/frr_sim_test.rb`).
 
 **Left around it:**
 
@@ -2217,8 +2225,8 @@ style, which routescope's simulated area panel reads; `neighbor.start` on
 a circuit already sending leaves it alone, where it used to start a
 second hello timer. routescope's IS-IS scenario conditions and its sim
 actions for isis4r-sim are built (routescope #35 and #36). Not yet in
-the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter, and a database too
-large for one CSNP. Not yet done in the hellos: the padding RFC 1142 clause
+the originator: jitter on the refresh timer (clause 10.1). Not yet in the update process: PSNP jitter. A database too large
+for one CSNP or PSNP is sent as a set (2026-11-14). Not yet done in the hellos: the padding RFC 1142 clause
 8.2.3 c asks for on the first IIH, and hello timer jitter. The gem has not been
 published. It is licensed as bgp4r is, GPLv3 or later, or the conditions in
 `LICENSE.txt`. Update this paragraph when that changes.

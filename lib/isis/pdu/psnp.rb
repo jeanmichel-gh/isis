@@ -38,6 +38,11 @@ module ISIS
         (hex[0...-2].scan(/.{1,4}/) + [hex[-2..]]).compact.join(".")
       end
 
+      # Every LSP entry the PSNP describes, from all its TLV 9s, as Csnp has.
+      def entries
+        @tlvs.select { |t| t.is_a?(Tlv::LspEntries) }.flat_map(&:entries)
+      end
+
       def to_hash
         h = @header.to_hash.merge(source_id: source_id_s)
         h[:tlvs] = @tlvs.to_hash[:tlvs]
