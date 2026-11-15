@@ -2425,6 +2425,40 @@ output, which is where these messages appear. With `ISIS_FRR=1` set, a lab
 that cannot run fails the tests rather than skipping them, because a skip
 shows its reason only under `-v` and a CI job of skips is green.
 
+**A second independent implementation: Nokia SR Linux**, decided
+2026-11-15. With FRR alone, a reading isis4r and FRR share passes every
+gate, which is the bgp4r failure the gates exist to prevent. Candidates,
+measured that day on a 6 core arm64 VM with containerlab 0.83:
+
+| | SR Linux 26.7.2 | Holo v0.9.0 |
+| --- | --- | --- |
+| IS-IS | p2p, LAN, L1/L2, wide and narrow (`metric-style`), HMAC-MD5, IPv4 and IPv6, from its YANG | the same, from its source (`MetricType` standard, wide, both; TLVs 132, 232, 236; RFC 5304) |
+| p2p with isis4r | adjacency, each LSP at the originator's sequence and checksum, each prefix installed: the gate test passes | the same, by hand |
+| Licence | proprietary, free image, no licence needed for this | MIT |
+| Images | `ghcr.io/nokia/srlinux`, amd64 and arm64, versioned tags; 3.14 GB, pulled in 30 s | `holod` and `holo-bundle` amd64 only, versioned only at v0.8.0; holo-cli untagged since v0.5.0, and its master no longer speaks v0.9.0's gRPC; built here in 215 s plus 76 s |
+| Start | 25 s for `containerlab deploy` to a node that takes config | 0.8 s to holo-cli answering |
+| State | `sr_cli -d "... \| as json"`; `show` tables keep their column headings as keys | ietf-isis YANG as JSON through holo-cli or gNMI, with each LSP's raw octets |
+
+**Why SR Linux.** Holo's leading contributor (1076 commits) has at
+least 100 commits in FRR's `isisd`, 2018 to 2023 (GitHub API), so Holo is
+a second codebase but not clearly a second reading of the specification,
+and a second reading is the point. SR Linux shares no code or authors
+with either that we know of, runs from one pinned image on the CI's
+amd64 and on arm64, and routescope already has its node kind. What it
+costs: 25 s per lab, 3 GB, and docker with containerlab. Holo stays the
+choice for a third, or for a lab that needs many routers fast; its raw
+LSP octets in state would let a test compare bytes.
+
+`test/support/srl_lab.rb` deploys one SR Linux node with containerlab,
+its `ethernet-1/1` joined to a host end that the lab moves into isis4r's
+namespace as `veth0`, commits its configuration with `sr_cli`, and runs
+isis4r as FrrLab does. `test/integration/srl_p2p_test.rb` is one test,
+since the lab takes most of the time: the adjacency up on both sides,
+each LSP held at the originator's sequence and checksum, and each side's
+prefix installed through the other. `sudo env "PATH=$PATH" ISIS_SRL=1
+rake interop_srl` runs it, and CI's `interop (SR Linux)` job; `rake
+interop` now runs the `frr_*` files only.
+
 **What routescope needed to show an isis4r lab**, from its
 `docs/protocols.md` and code. Every one was an additive change in
 routescope, which its own rules require (`ospfv2/docs/console-plan.md`).

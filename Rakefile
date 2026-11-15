@@ -25,7 +25,7 @@ task :interop do
   require "rbconfig"
   require "tempfile"
   libs = ["lib", "test", File.expand_path("../datalink-socket/lib", __dir__)].flat_map { |l| ["-I", l] }
-  files = FileList["test/integration/**/*_test.rb"].sort_by { |f| -File.size(f) }
+  files = FileList["test/integration/**/frr_*_test.rb"].sort_by { |f| -File.size(f) }
   jobs = Integer(ENV.fetch("ISIS_INTEROP_JOBS", files.size.to_s)).clamp(1, files.size)
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   queue = files.dup
@@ -47,6 +47,17 @@ task :interop do
   puts "interop: #{files.size} files in #{(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(1)} s, " \
        "#{jobs} at a time"
   abort "interop failed: #{failed.join(', ')}" unless failed.empty?
+end
+
+# Interop tests against Nokia SR Linux, the second independent
+# implementation. They need root, docker, containerlab and iproute2, and
+# skip unless ISIS_SRL=1:
+#
+#   sudo env "PATH=$PATH" ISIS_SRL=1 rake interop_srl
+Rake::TestTask.new(:interop_srl) do |t|
+  t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__)
+  t.test_files = FileList["test/integration/**/srl_*_test.rb"]
+  t.warning = false
 end
 
 task default: :test

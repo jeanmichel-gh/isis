@@ -98,6 +98,38 @@ jobs:
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
 
+  # The gates against a second independent implementation, Nokia SR
+  # Linux, so a reading isis4r and FRR share cannot pass unseen.
+  # containerlab runs SR Linux, and test/support/srl_lab.rb joins it to
+  # isis4r in a network namespace. CLAUDE.md, "Labs and interop", says why
+  # SR Linux. The image tag is the one SrlLab::IMAGE names.
+  interop-srl:
+    name: interop (SR Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: isis
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jeanmichel-gh/datalink-socket
+          path: datalink-socket
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: isis
+          bundler-cache: true
+      - name: containerlab and SR Linux
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)"
+          docker pull -q ghcr.io/nokia/srlinux:26.7.2
+      - name: Interop tests against SR Linux
+        working-directory: isis
+        run: sudo -E env "PATH=$PATH" ISIS_SRL=1 bundle exec rake interop_srl
+
   # The example lab, routescope/labs/isis4r-frr: the isis4r image
   # builds and the unit tests pass inside it, then containerlab runs it
   # beside FRR and test/lab/isis4r-frr.sh checks the routing through it.
@@ -129,19 +161,21 @@ jobs:
         run: sudo test/lab/isis4r-frr.sh clab
 
   # The one check to require before merging. It passes only if every
-  # matrix job, the FRR interop job and the lab job passed, so adding or removing a Ruby version never means
+  # matrix job, the FRR and SR Linux interop jobs and the lab job passed, so adding or removing a Ruby version never means
   # editing the branch rules. A skipped job counts as a failure here.
   ci:
     name: ci
     if: always()
-    needs: [test, interop-frr, lab-containerlab]
+    needs: [test, interop-frr, interop-srl, lab-containerlab]
     runs-on: ubuntu-latest
     steps:
       - name: All test jobs passed
         run: |
           echo "test: ${{ needs.test.result }}"
           echo "interop-frr: ${{ needs.interop-frr.result }}"
+          echo "interop-srl: ${{ needs.interop-srl.result }}"
           echo "lab-containerlab: ${{ needs.lab-containerlab.result }}"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.interop-frr.result }}" = "success"
+          test "${{ needs.interop-srl.result }}" = "success"
           test "${{ needs.lab-containerlab.result }}" = "success"
