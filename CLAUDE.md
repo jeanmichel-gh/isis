@@ -1776,6 +1776,15 @@ RFC 8706, multi topology, TLVs 222 or 229, or TE.
 * Hello padding: to maxsize on a LAN, clause 8.4.1
   (`adjacency/lan_circuit.rb`), and on the first point to point IIH,
   clause 8.2.3 c.
+* The purge of a corrupted LSP, RFC 1142 clause 7.3.14 e. isis4r drops
+  an LSP whose checksum is wrong and starts no purge
+  (`database/update_process.rb`, in `receive_lsp`).
+* Interface subnets are not advertised. isisd puts only its config's
+  `prefixes` in its LSPs; FRR also advertises each interface's subnet.
+  So in the isis4r-frr lab, r1 learns its own link subnets from f1 and
+  f2 and installs them through them, metric 21 and 22. The kernel's
+  connected route still wins. Measured 2026-11-14; found in the lab
+  review, not in a code comment.
 
 **Done in the core, 2026-11-14:** a database too large for one SNP.
 `send_csnp` sends a complete set of CSNPs, each within
@@ -1789,9 +1798,6 @@ link; measured against FRR 10.5.1 with 326 LSPs
 
 **Left around it:**
 
-* TLV 132, interface addresses, in `show.topology`. It is the open
-  question of `docs/design/bgp-ls-export.md`, and it blocks BGP-LS TLVs
-  259 and 260 for IS-IS in bgp4r's Producer.
 * The bgp-ls-export gate on the VM, the 16 grid nodes, is not verified.
 * The gem has not been published.
 
@@ -1800,6 +1806,13 @@ isis4r-sim is copied in `test/support/routescope_vocabulary.rb`, and
 `test/unit/daemon/routescope_vocabulary_test.rb` holds the API to it, so
 a change that removes or renames a key routescope reads fails here
 (routescope `docs/design/api-contract.md`, part 3).
+
+**Done around it, 2026-11-15:** `show.topology` gives each node's
+`interface_addresses`, from TLV 132, and `ipv6_interface_addresses`,
+from TLV 232, from every LSP of the node (`docs/isisd.md`). That was the
+open question of `docs/design/bgp-ls-export.md`, which blocked BGP-LS
+TLVs 259 and 260 for IS-IS in bgp4r's Producer; reading them there is
+bgp4r's change.
 
 **Noted for later, from the owner, 2026-11-13.** Not designed yet;
 routescope's `CLAUDE.md`, "Where the work is going", holds the full note.
@@ -1812,7 +1825,10 @@ routescope's `CLAUDE.md`, "Where the work is going", holds the full note.
 * Do not open a pull request for documents alone: CI costs money. Let a
   document change ride with the next code change, or ask first.
 
-**Status, measured 2026-10-31.** The tree follows the Layout above but
+**History, 2026-10-31 to 2026-11-14.** The status table above is the
+current state. This paragraph is the record of how each gate was met,
+in the order the work was done, so "began" marks where work on a gate
+started and a later sentence says when it was met. The tree follows the Layout above but
 only partly fills it: `isis4r.gemspec`, `lib/isis4r.rb`,
 `lib/isis/version.rb`, `lib/isis/common.rb` (errors, `SystemId` and the
 ISO 8473 checksum),
@@ -1870,8 +1886,8 @@ none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
 check waits for. The LAN hello is on the contract, and replays a hello
 captured from FRR 8.4.4 byte for byte. That closes gate 2's list.
 `exe/isis-demo` runs two `LanCircuit`s on datalink-socket's loopback
-wire with `--log` and `--debug`. **Gate 3 has
-begun**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
+wire with `--log` and `--debug`. **Gate 3
+began**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
 CSNP captured from FRR 8.4.4 byte for byte, the LSP's checksum included,
 and TLV 9 reads the CSNP's entries at the PDU's ID Length. TLV 135
 parses, replays and rebuilds FRR's, from an LSP FRR 8.4.4 regenerated
@@ -1909,7 +1925,7 @@ hello key forms no adjacency on either side; a wrong area key leaves the
 adjacency up and each side without the other's LSP. Measured on the way:
 FRR 8.4.4's first LSP after start can go out with no TLV 10 although its
 area password is configured, and isis4r refuses that one. **Phase 2 gate
-1 has begun**: `test/integration/frr_lan_test.rb` brings a broadcast
+1 began**: `test/integration/frr_lan_test.rb` brings a broadcast
 adjacency up with FRR 8.4.4, has both sides agree on the Level 1 DIS and
 its LAN ID whichever side wins, follows a DIS change made by raising
 FRR's priority with no adjacency going down, and expires FRR when it goes
@@ -1940,7 +1956,7 @@ purged, although RFC 1142 7.3.14 e asks for a purge. **Phase 2 gate 1 is
 met against FRR 8.4.4**, measured 2026-11-01:
 `test_databases_agree_through_a_dis_change_to_frr` and `..._to_isis4r`
 have the databases agree through a DIS change either way, the old DIS's
-pseudonode a purge on both sides. **Phase 2 gate 2 has begun**: the
+pseudonode a purge on both sides. **Phase 2 gate 2 began**: the
 originator and the pseudonode take their level from their database, so a
 `LanCircuit` at Level 2 with a Level 2 database runs the same update
 process with Level 2 LSPs, IS type 3 (RFC 1142 9.9), and Level 2 SNPs.
@@ -1990,7 +2006,7 @@ in 49.0002; isis4r's Level 1 database and the first FRR's hold the area's
 two LSPs, the second FRR's Level 2 database holds the two Level 2 LSPs,
 and nothing crosses either way. Measured on the way: FRR 8.4.4's Level 2
 LSP carries only its own prefixes, not its area's, and its Level 1 LSP
-sets the attached bit. **Phase 2 gate 3 has begun**:
+sets the attached bit. **Phase 2 gate 3 began**:
 `lib/isis/spf/spf.rb` is RFC 1142 Annex C.2's calculation for one level
 and the default metric, over TLVs 22 and 2 for links and 135 and 128 for
 IPv4 prefixes: equal cost paths pruned to maximumPathSplits by 7.2.7's
@@ -2068,7 +2084,7 @@ way: FRR 8.4.4 never sends TLV 130, putting redistributed routes in TLV
 128 at either level, so the reading of TLV 130 is held only to our
 arithmetic; and it reads an external type metric of 7, 0x47, as 71, its
 low seven bits. **Phase 2 gate 3 is met against FRR 8.4.4.** **Phase 2
-gate 4 has begun**: `lib/isis/forwarding/forwarding.rb` turns each change
+gate 4 began**: `lib/isis/forwarding/forwarding.rb` turns each change
 in a Decision Process's routes into a route operation, install, replace
 or withdraw, a route this system advertises itself counting as absent,
 and `lib/isis/forwarding/netlink.rb` applies them in pure Ruby: rtnetlink
@@ -2109,7 +2125,7 @@ debug line with a side effect, a control that sends one extra hello, one
 that shifts a timer by a millisecond, and one that withdraws and
 reinstalls routes that end the same each fail it. **Phase 2 gate 4 is
 met against FRR 8.4.4**, measured 2026-11-01, with IPv6 traffic shown in
-CI. **Phase 2 is complete.** **Phase 3 gate 1 has begun, with route
+CI. **Phase 2 is complete.** **Phase 3 gate 1 began, with route
 leaking** (RFC 5302 section 2): `lib/isis/spf/leak.rb` is a mechanism
 object that, after each Level 2 run of a system at both levels, chooses
 the Level 2 routes its policy allows, none by default (section 4: "it is
@@ -2153,7 +2169,7 @@ FRR withdraws it; added again and then no longer redistributed by a
 policy change, FRR withdraws it again. **Phase 3 gate 1 is met against
 FRR 8.4.4**: a change of leak, summary or redistribution policy each
 withdraws the obsolete advertisement and route at FRR. **routescope
-integration has begun**, in the order below: first, the originator takes
+integration began**, in the order below: first, the originator takes
 `hostname:` and sends it in TLV 137 in LSP 0 (RFC 5301 section 3), since
 routescope's map finds an IS-IS neighbour by its hostname. Measured
 2026-11-02 against FRR 8.4.4: FRR lists isis4r by that name in `show isis
@@ -2189,7 +2205,7 @@ route through isis4r, f2's route to f1's loopback through it, and f1
 pinging f2's loopback. The image is built only in CI, since this
 sandbox reaches no container registry; there, measured 2026-11-02, it
 builds, 760 tests pass in it, and the lab passes every check under
-containerlab with FRR 10.2.1. **The simulator has begun**, after
+containerlab with FRR 10.2.1. **The simulator began**, after
 ospfv2's (`docs/simulator.md`): `lib/isis/sim/topology.rb` reads the
 simulated area's file, the simulator's own isisd settings, a grid, more
 systems, prefix groups expanded by count, and links carried at the levels
@@ -2313,9 +2329,10 @@ compatibility statement, not a promise to implement every extension.
 
 The gates above need an independent router. The plan is to follow what the
 sibling projects already do, and not to invent a third way. Surveyed
-2026-10-31 at ospfv2 `0ec77c6` and routescope `265156a`. **The namespace
-harness is built; routescope support is not.** Record decisions here as
-they are made.
+2026-10-31 at ospfv2 `0ec77c6` and routescope `265156a`. **Both tiers are
+built**: the namespace harness, and routescope's drivers `Isis4r` and
+`Isis4rSim`, measured 2026-11-15 at routescope `327d6fd`. Record
+decisions here as they are made.
 
 **Two tiers, and they do different jobs.**
 
@@ -2386,9 +2403,13 @@ output, which is where these messages appear. With `ISIS_FRR=1` set, a lab
 that cannot run fails the tests rather than skipping them, because a skip
 shows its reason only under `-v` and a CI job of skips is green.
 
-**What routescope needs before it can show an isis4r lab**, from its
-`docs/protocols.md` and code. Every one is an additive change in
-routescope, which its own rules require (`ospfv2/docs/console-plan.md`):
+**What routescope needed to show an isis4r lab**, from its
+`docs/protocols.md` and code. Every one was an additive change in
+routescope, which its own rules require (`ospfv2/docs/console-plan.md`).
+All five are there, measured 2026-11-15 at routescope `327d6fd`: `isis4r`
+and `isis4r-sim` in `Lab::KINDS`, the drivers `Isis4r` and `Isis4rSim`
+reading isisd's API, IS-IS tables and events from FRR's isisd, and an
+`isis` capture profile on the `isis4r-capture` image (`exe/isis-capture`).
 
 * a node kind for isis4r in `Lab::KINDS`, and a driver in `drivers.rb`
   that reads isis4r's state, which means isis4r needs a state API to read;
@@ -2408,9 +2429,9 @@ an isis4r node needs root or `CAP_NET_RAW` in its namespace or container.
 Anything in a lab that assumes an IP address on the link for the protocol
 to work is OSPF's assumption, not ours.
 
-**Order.** The namespace harness comes with phase 1 gate 2, because that
-gate needs FRR. routescope support comes later, once there is state worth
-looking at, and is its own topic in routescope's repository.
+**Order.** The namespace harness came with phase 1 gate 2, because that
+gate needs FRR. routescope support came later, once there was state worth
+looking at, in routescope's repository.
 
 ## Rules for agents
 

@@ -147,7 +147,8 @@ class TestDaemonViews < Minitest::Test
     router.databases[1].entry(ISIS::Pdu.lsp_id_octets(id)).store(lsp)
   end
 
-  # C in two fragments, its pseudonode C.01, D narrow, in two fragments,
+  # C in two fragments, with TLV 132 in both and TLV 232 in fragment 1,
+  # its pseudonode C.01, D narrow, in two fragments,
   # overloaded and attached in fragment 0 alone, F with both styles, and E
   # purged; then an SPF run. Only A and B are linked both ways, so only
   # they are reachable.
@@ -155,10 +156,13 @@ class TestDaemonViews < Minitest::Test
     views, a, = p2p_pair
     store_lsp(a, "0000.0000.000c.00-00",
               [ISIS::Tlv::AreaAddresses.new("49.0001"), ISIS::Tlv::DynamicHostname.new("c"),
-               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 10 })])
+               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 10 }),
+               ISIS::Tlv::IpInterfaceAddresses.new("10.0.12.3")])
     store_lsp(a, "0000.0000.000c.00-01",
               [ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000c.01", metric: 20 }),
-               ISIS::Tlv::ExtendedIpReachability.new({ prefix: "192.0.2.12/32", metric: 3, up_down: true })])
+               ISIS::Tlv::ExtendedIpReachability.new({ prefix: "192.0.2.12/32", metric: 3, up_down: true }),
+               ISIS::Tlv::IpInterfaceAddresses.new("10.0.13.3", "10.0.12.3"),
+               ISIS::Tlv::Ipv6InterfaceAddresses.new("2001:db8::c")])
     store_lsp(a, "0000.0000.000c.01-00",
               [ISIS::Tlv::ExtendedIsReachability.new([{ neighbor: "0000.0000.000c.00", metric: 0 },
                                                       { neighbor: "0000.0000.000d.00", metric: 0 }])])
@@ -209,7 +213,22 @@ class TestDaemonViews < Minitest::Test
                    reachable: false,
                    neighbors: [{ id: "0000.0000.000a.00", metric: 10, style: "wide" },
                                { id: "0000.0000.000c.01", metric: 20, style: "wide" }],
-                   prefixes: [{ prefix: "192.0.2.12/32", metric: 3, up_down: true, style: "wide" }] }, c)
+                   prefixes: [{ prefix: "192.0.2.12/32", metric: 3, up_down: true, style: "wide" }],
+                   interface_addresses: ["10.0.12.3", "10.0.13.3"],
+                   ipv6_interface_addresses: ["2001:db8::c"] }, c)
+  end
+
+  # TLV 132 may occur "in an LSP with any LSP number" (RFC 1195 section
+  # 5.2): every fragment's, fragment 0's first, each address once. A node
+  # with no TLV 132 or 232 answers empty lists.
+  def test_topology_interface_addresses_from_every_fragment
+    views, = topology_fixture
+    t = views.topology(level: 1)
+    c = topology_node(t, "0000.0000.000c.00")
+    assert_equal ["10.0.12.3", "10.0.13.3"], c[:interface_addresses]
+    assert_equal ["2001:db8::c"], c[:ipv6_interface_addresses]
+    d = topology_node(t, "0000.0000.000d.00")
+    assert_equal [[], []], d.values_at(:interface_addresses, :ipv6_interface_addresses)
   end
 
   def test_topology_pseudonode_is_a_node

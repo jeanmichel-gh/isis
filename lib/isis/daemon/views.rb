@@ -156,7 +156,17 @@ module ISIS
         { id: id, hostname: names[id[0...-3]],
           areas: zero.tlvs.grep(Tlv::AreaAddresses).flat_map(&:areas).map(&:to_s),
           overload: zero.overload?, attached: !zero.attached.empty?, reachable: reachable,
-          neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps) }
+          neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps),
+          interface_addresses: topology_addresses(lsps, Tlv::IpInterfaceAddresses),
+          ipv6_interface_addresses: topology_addresses(lsps, Tlv::Ipv6InterfaceAddresses) }
+      end
+
+      # TLV 132's addresses, or TLV 232's, from every LSP of the node, LSP
+      # Number 0 first, each once. RFC 1195 section 5.2: TLV 132 "may occur
+      # multiple times in an LSP, and may occur in an LSP with any LSP
+      # number". RFC 5308 section 3 maps TLV 232 directly onto it.
+      def topology_addresses(lsps, klass)
+        lsps.flat_map { _1.tlvs.to_a.grep(klass) }.flat_map(&:addresses).map(&:to_s).uniq
       end
 
       # TLV 22's entries, or TLV 2's when no LSP of the node has TLV 22.

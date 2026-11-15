@@ -65,6 +65,16 @@ class TestFrrIsisd < Minitest::Test
     route = @lab.isisd("show.routes").find { _1["prefix"] == "198.51.100.2/32" }
     assert_equal [{ "address" => "10.0.12.2", "interface" => "veth0" }], route["next_hops"]
 
+    # Each node's TLV 132 in show.topology: FRR's as FRR itself shows its
+    # LSP, and isis4r's own. Which addresses FRR puts there is FRR's
+    # choice: 10.5.1 with a loopback sent the loopback alone, measured in
+    # CI 2026-11-15, where the 8.4.4 fixture without one has 10.0.12.2.
+    nodes = @lab.isisd("show.topology", level: 1)["nodes"].to_h { [_1["id"], _1] }
+    frr_says = @lab.frr_database_detail(1).fetch("#{FrrLab::FRR_ID}.00-00").scan(/IPv4 Interface Address: (\S+)/).flatten
+    refute_empty frr_says, "FRR shows no TLV 132 in its LSP"
+    assert_equal frr_says, nodes.fetch("#{FrrLab::FRR_ID}.00")["interface_addresses"]
+    assert_equal ["10.0.12.1"], nodes.fetch("#{FrrLab::ISIS4R_ID}.00")["interface_addresses"]
+
     overview = @lab.isisd("show.overview")
     assert_equal [FrrLab::ISIS4R_ID, "isis4r-a", 1], overview.values_at("system_id", "hostname", "adjacencies_up")
 

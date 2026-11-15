@@ -65,7 +65,7 @@ Every method:
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
-| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, flags, reachable |
+| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |
@@ -89,7 +89,9 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
    "reachable": true,
    "neighbors": [{"id": "0000.0001.0102.00", "metric": 10, "style": "wide"}],
    "prefixes": [{"prefix": "10.200.0.1/32", "metric": 0, "up_down": false,
-                 "style": "wide"}]}
+                 "style": "wide"}],
+   "interface_addresses": ["10.200.0.1"],
+   "ipv6_interface_addresses": []}
  ]}
 ```
 
@@ -102,6 +104,10 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
   they come from TLV 2, with `style: "narrow"`.
 - `prefixes` come from TLV 135. When no fragment has TLV 135, they come
   from TLV 128 and 130, with `style: "narrow"`.
+- `interface_addresses` come from TLV 132 and `ipv6_interface_addresses`
+  from TLV 232, in every fragment, LSP Number 0 first, each address once.
+  RFC 1195 section 5.2 lets TLV 132 "occur in an LSP with any LSP
+  number". A node with none, a pseudonode for one, answers `[]`.
 - `areas`, `overload` and `attached` come from LSP Number 0. `attached`
   is true when any ATT bit is set.
 - `reachable` is true when the last SPF run at that level reached the

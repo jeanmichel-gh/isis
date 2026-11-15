@@ -1,7 +1,7 @@
 name: b1 leaks area 3 into area 1
 description: >
   b1 leaks the Level 2 routes under 10.203.0.0/24, area 3's grid, into
-  Level 1 with the up/down bit (RFC 5302 section 4). r1 gets them as Level 1
+  Level 1 with the up/down bit (RFC 5302 section 2). r1 gets them as Level 1
   routes and prefers them to its default. b1 does not put them back into
   Level 2: c0 still reaches area 3 through b3. Then the leak is cleared.
   Needs routescope's isis: step.

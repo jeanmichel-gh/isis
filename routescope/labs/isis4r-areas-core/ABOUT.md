@@ -48,7 +48,7 @@ Every link is point-to-point, metric 10.
 - **Databases by level.** `r1` holds 12 Level 1 LSPs: b1, r1, s1 and nine grid systems. The Level 2 database holds 4: c0 and the three borders. No simulated system reaches Level 2.
 - **Each border carries its area into Level 2.** `b1` reaches area 1's r3c3, 10.201.0.9/32, at 60. `b2` and `c0` reach it at 70, and `b3` at 80, through `c0`.
 - **The attached bit.** Each border sets it in its Level 1 LSP 00-00 while Level 2 reaches another area (RFC 1142 section 7.2.9.2). Each `rN` has a default route to its border at 10.
-- **Leaking, area 1.** With `policy.leak` on `b1`, `r1` gets area 3's routes in Level 1 with the **up/down bit** (RFC 5302 section 4), and prefers them to its default. `b1` never puts them back into Level 2.
+- **Leaking, area 1.** With `policy.leak` on `b1`, `r1` gets area 3's routes in Level 1 with the **up/down bit** (RFC 5302 section 2; section 4 says to leak only when configured), and prefers them to its default. `b1` never puts them back into Level 2.
 - **Summaries, area 2.** With `policy.summaries` on `b2`, one prefix replaces those it covers in Level 2 (RFC 1195 section 3.2). It goes when nothing it covers is reachable.
 - **The attached bit is trusted, area 3.** A Level 1 router follows the **nearest** system with the bit (RFC 1142 section 7.2.9.1). If a simulated system claims it, `r3` follows it, and its traffic goes nowhere.
 - **The bit means "some other area".** With `c0` overloaded, `b3` reaches only `c0`'s area. It keeps the bit, so `r3` keeps a default route that leads nowhere useful.
@@ -65,4 +65,4 @@ Every link is point-to-point, metric 10.
 | `core-overload` | `isis: policy.overload` on c0, then off | b3 loses area 1 but keeps its attached bit; r3 has a default and cannot ping r1 |
 | `backbone-reroute` | b1:eth2 down, then up | b2 reaches area 1 through c0 at 80 instead of 70; r2 still pings r1 |
 
-`leak`, `summaries` and `core-overload` need routescope's `isis:` scenario step. `test/scenario/isis4r_areas_core_lab_test.rb` loads this lab's node files on simulated time and checks every number above. `test/lab/isis4r-areas-core.sh` runs the lab in containerlab or in network namespaces. The design is routescope's `docs/design/isis-areas-core.md`.
+`leak`, `summaries` and `core-overload` need routescope's `isis:` scenario step. `test/scenario/isis4r_areas_core_lab_test.rb` loads this lab's node files on simulated time and checks every number above. `test/lab/isis4r-areas-core.sh` runs the lab in containerlab or in network namespaces. All seven passed twice through routescope on the VM, 2026-11-14, the second time in reverse order, on isis master 71faf44. The design is routescope's `docs/design/isis-areas-core.md`.
