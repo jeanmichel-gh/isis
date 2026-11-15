@@ -65,6 +65,12 @@ class TestFrrIsisd < Minitest::Test
     route = @lab.isisd("show.routes").find { _1["prefix"] == "198.51.100.2/32" }
     assert_equal [{ "address" => "10.0.12.2", "interface" => "veth0" }], route["next_hops"]
 
+    # Each node's TLV 132 in show.topology: FRR's address on veth0, and
+    # isis4r's own.
+    nodes = @lab.isisd("show.topology", level: 1)["nodes"].to_h { [_1["id"], _1] }
+    assert_includes nodes.fetch("#{FrrLab::FRR_ID}.00")["interface_addresses"], "10.0.12.2"
+    assert_equal ["10.0.12.1"], nodes.fetch("#{FrrLab::ISIS4R_ID}.00")["interface_addresses"]
+
     overview = @lab.isisd("show.overview")
     assert_equal [FrrLab::ISIS4R_ID, "isis4r-a", 1], overview.values_at("system_id", "hostname", "adjacencies_up")
 
