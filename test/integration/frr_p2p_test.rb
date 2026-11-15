@@ -110,8 +110,12 @@ class TestFrrP2p < Minitest::Test
   # and checksum, runs SPF over it, and installs the prefix isis4r
   # advertises, through isis4r. 192.0.2.1/32 exists only in isis4r's TLV
   # 135, so FRR can have the route from nowhere else.
+  #
+  # The one test left on FRR's own lsp-gen-interval, 30 s, where the rest
+  # of the lab sets 1 s: isis4r has to work with an FRR at its defaults,
+  # and this is the timing measured below.
   def test_frr_learns_isis4rs_prefix
-    @lab.start
+    @lab.start(frr_lsp_gen_interval: nil)
     assert_eventually("adjacency did not come up") { both_up? }
     own = "#{FrrLab::ISIS4R_ID}.00-00"
     assert_eventually("FRR does not hold isis4r's latest LSP", 30) do
@@ -119,10 +123,11 @@ class TestFrrP2p < Minitest::Test
       frr = @lab.frr_database[own]
       held && frr && held["sequence"] >= 2 && frr["sequence"] == held["sequence"] && frr["checksum"] == held["checksum"]
     end
-    # Measured on FRR 8.4.4: the route comes about 30 s after the adjacency.
-    # FRR holds isis4r's LSP within a second, but its own LSP names isis4r
-    # in TLV 22 only when it regenerates it, about 30 s on, and its SPF
-    # needs the link in both LSPs.
+    # Measured on FRR 8.4.4 and 10.5.1 under the default lsp-gen-interval
+    # of 30 s: the route comes about 30 s after the adjacency. FRR holds
+    # isis4r's LSP within a second, but its own LSP names isis4r in TLV 22
+    # only when it regenerates it, about 30 s on, and its SPF needs the
+    # link in both LSPs. At 1 s, the lab's setting, it comes within 2 s.
     assert_eventually("FRR did not install 192.0.2.1/32 from IS-IS", 60) do
       route = @lab.frr_route("192.0.2.1/32")
       route && route["protocol"] == "isis" && route["installed"] &&

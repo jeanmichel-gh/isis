@@ -97,6 +97,12 @@ module ISIS
         start_psnp_timer unless @psnp_timer
       end
 
+      # The neighbour's hellos gave it other interface addresses, which are
+      # the next hops' addresses.
+      def addresses_changed(neighbor)
+        @decision&.changed("addresses of #{neighbor} on #{@name} changed")
+      end
+
       # The adjacency stopped serving this level, so nothing is owed on it.
       def adjacency_down
         @originator&.changed("adjacency on #{@name} down at Level #{@level} (RFC 1142 7.3.6)")

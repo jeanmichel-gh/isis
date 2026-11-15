@@ -140,6 +140,20 @@ class TestDecisionP2p < Minitest::Test
     assert_equal ["adjacency with 0000.0000.000b on a-eth1 up", "adjacency on a-eth1 down"], heard
   end
 
+  # The next hop's address is the neighbour's, from its hellos' TLV 132, so
+  # when its hellos carry another the route moves with no LSP changing.
+  # Measured on FRR 10.5.1: its first hellos carry no TLV 232, which it
+  # adds after the adjacency is Up, and an IPv6 route through it waited for
+  # the next LSP to run SPF with the address.
+  def test_a_route_follows_the_neighbors_new_address
+    start(:a, :b)
+    run_for(10)
+    assert_equal "192.0.2.2/32 metric 11 via 10.0.12.2 via a-eth1", routes(:a)["192.0.2.2/32"]
+    @nodes[:b][:circuit].instance_variable_set(:@ip_addresses, ["10.0.12.9"])
+    run_for(3)
+    assert_equal "192.0.2.2/32 metric 11 via 10.0.12.9 via a-eth1", routes(:a)["192.0.2.2/32"]
+  end
+
   # Changes in one callback share one run.
   def test_changes_at_one_time_share_a_run
     decision = @nodes[:a][:decision]
@@ -215,6 +229,17 @@ class TestDecisionLan < Minitest::Test
     run_for(40)
     assert_includes heard, "adjacency with 0000.0000.000b up on a-eth0"
     assert(heard.any? { |r| r.start_with?("Level 1 DIS on a-eth0 now") }, heard.inspect)
+  end
+
+  # As on a point to point circuit: B's hellos carry another address, and
+  # A's route through B moves with no LSP changing.
+  def test_a_route_follows_a_neighbors_new_address
+    @nodes.each_value { |n| %i[orig circuit decision].each { |k| n[k].start } }
+    run_for(40)
+    @nodes[:b][:circuit].instance_variable_set(:@ip_addresses, ["10.0.1.9"])
+    run_for(15)
+    routes = @nodes[:a][:decision].routes.transform_values(&:to_s)
+    assert_equal "192.0.2.2/32 metric 11 via 10.0.1.9 via a-eth0", routes["192.0.2.2/32"]
   end
 
   # No pseudonode to step through while the DIS's adjacency is not Up, or
