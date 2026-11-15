@@ -21,13 +21,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A pull request runs one Ruby; master runs from the gemspec's
-        # required_ruby_version (>= 3.1) to the newest. isis is private,
-        # so each job is billed, rounded up to a whole minute, and the
-        # unit tests take under one: five versions cost five minutes a
-        # run (routescope docs/design/ci-cost.md). A pull request that
-        # breaks an older Ruby shows on master's run after the merge.
-        ruby: ${{ github.event_name == 'pull_request' && fromJSON('["3.4"]') || fromJSON('["3.1", "3.2", "3.3", "3.4", "4.0"]') }}
+        # From the gemspec's required_ruby_version (>= 3.1) to the newest,
+        # on every pull request and push. isis is public since 2026-11-15,
+        # so its runs are free; while it was private a pull request ran
+        # 3.4 alone to save billed minutes (#81).
+        ruby: ["3.1", "3.2", "3.3", "3.4", "4.0"]
     steps:
       - uses: actions/checkout@v6
         with:
