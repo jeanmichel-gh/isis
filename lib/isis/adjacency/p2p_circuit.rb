@@ -67,6 +67,15 @@ module ISIS
 
     attr_reader :name, :system_id, :neighbor, :log, :scheduler, :transport, :levels, :local_circuit_id
     attr_accessor :areas, :hello_interval, :hello_multiplier, :metric, :hello_key
+    # This end's IPv4 addresses on the link, sent in the hellos' TLV 132.
+    attr_reader :ip_addresses
+
+    # New addresses go in the next hello, and in sub-TLV 6 of each level's
+    # TLV 22 entry for this circuit, a change of content (RFC 1142 7.3.6).
+    def ip_addresses=(list)
+      @ip_addresses = list
+      @levels.each_value { |l| l.originator&.changed("addresses on #{@name} changed") }
+    end
 
     # +levels+ is the levels this circuit runs, each with its database,
     # originator and key: { 1 => { database:, originator:, area_key: } }.
@@ -290,7 +299,7 @@ module ISIS
     private
 
     # The IPv4 addresses a hello carries in TLV 132, as strings.
-    def ip_addresses(hello)
+    def hello_ip_addresses(hello)
       hello.tlvs.select { |t| t.is_a?(Tlv::IpInterfaceAddresses) }.flat_map { |t| t.addresses.map(&:to_s) }
     end
 
@@ -332,7 +341,7 @@ module ISIS
       addresses = [@neighbor.ip_addresses, @neighbor.ipv6_addresses]
       @neighbor.holding_time = hello.holding_time
       @neighbor.areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
-      @neighbor.ip_addresses = ip_addresses(hello)
+      @neighbor.ip_addresses = hello_ip_addresses(hello)
       @neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
                                       .flat_map { |t| t.addresses.map(&:to_s) }
       @neighbor.extended_circuit_id = three_way&.extended_circuit_id

@@ -60,8 +60,18 @@ module ISIS
       # neighbour's System ID with "an appended zero octet (indicating
       # non-pseudonode)" and the circuit's metric, from an adjacency Up at
       # this level (RFC 1142 7.3.7, 7.3.9). Nil without.
+      #
+      # The third element is the link's IPv4 addresses for TLV 22's sub-TLVs:
+      # this end's first TLV 132 address, for sub-TLV 6, and the
+      # neighbour's, from its hellos, for sub-TLV 8. RFC 5305 sections 3.2
+      # and 3.3 make both optional without traffic engineering ("MAY add or
+      # omit"); isis4r sends them so a reader of the LSP can tell the link's
+      # two ends apart, as BGP-LS link descriptors need.
       def is_neighbor
-        [(@circuit.neighbor.system_id + "\x00".b).b, @circuit.metric] if up?
+        return unless up?
+
+        addresses = { interface: @circuit.ip_addresses.first, neighbor: @circuit.neighbor.ip_addresses&.first }
+        [(@circuit.neighbor.system_id + "\x00".b).b, @circuit.metric, addresses.compact]
       end
 
       # The first hop for the Decision Process: the neighbour, at the
@@ -98,8 +108,10 @@ module ISIS
       end
 
       # The neighbour's hellos gave it other interface addresses, which are
-      # the next hops' addresses.
+      # the next hops' addresses, and the one in sub-TLV 8 of its TLV 22
+      # entry.
       def addresses_changed(neighbor)
+        @originator&.changed("addresses of #{neighbor} on #{@name} changed (RFC 1142 7.3.6)")
         @decision&.changed("addresses of #{neighbor} on #{@name} changed")
       end
 

@@ -24,12 +24,13 @@ class TestOriginator < Minitest::Test
     @orig_b, @b = node(B_ID, "00:00:00:00:00:0b", @log_b, "b-eth1", prefixes: [{ prefix: "192.0.2.1/32", metric: 1 }])
   end
 
-  def node(id, mac, log, name, minimum_interval: 5, **opts)
+  def node(id, mac, log, name, minimum_interval: 5, circuit_ip: [], **opts)
     db = ISIS::Database.new(level: 1, clock: @clock)
     orig = ISIS::Originator.new(system_id: id, database: db, scheduler: @scheduler, log: log,
                                 minimum_interval: minimum_interval, **opts)
     circuit = ISIS::P2pCircuit.new(transport: ISIS::Link::SimulatedTransport.new(@wire), scheduler: @scheduler,
-                                   log: log, name: name, system_id: id, snpa: mac, database: db, originator: orig)
+                                   log: log, name: name, system_id: id, snpa: mac, database: db, originator: orig,
+                                   ip_addresses: circuit_ip)
     [orig, circuit]
   end
 
@@ -112,6 +113,49 @@ class TestOriginator < Minitest::Test
     tlv22 = own(@orig_a).tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
     assert_equal "160b" "00000000000b00" "00000a" "00", tlv22.to_shex
     assert_equal [1, 2], generated(@log_a)
+  end
+
+  # With addresses on the link, the entry carries this end's in sub-TLV 6
+  # and the neighbour's, from its hellos' TLV 132, in sub-TLV 8 (RFC 5305
+  # sections 3.2 and 3.3):
+  #   16 17               TLV 22, 23 octets
+  #   00000000000b00      the neighbour
+  #   00000a              metric 10
+  #   0c                  12 octets of sub-TLVs
+  #   06 04 0a000c01      interface address 10.0.12.1
+  #   08 04 0a000c02      neighbor address 10.0.12.2
+  def test_link_addresses_in_tlv_22_sub_tlvs
+    link_nodes
+    start_both
+    run_for(10)
+    tlv22 = own(@orig_a).tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
+    assert_equal "1617" "00000000000b00" "00000a" "0c" "06040a000c01" "08040a000c02", tlv22.to_shex
+  end
+
+  # The neighbour's hellos change its address: the LSP is generated again
+  # with the new sub-TLV 8 (RFC 1142 7.3.6, a change of content).
+  def test_a_new_neighbor_address_regenerates
+    link_nodes
+    start_both
+    run_for(10)
+    @b.ip_addresses = ["10.0.12.3"]
+    run_for(20)
+    tlv22 = own(@orig_a).tlvs.find { |t| t.is_a?(ISIS::Tlv::ExtendedIsReachability) }
+    assert_equal "1617" "00000000000b00" "00000a" "0c" "06040a000c01" "08040a000c03", tlv22.to_shex
+  end
+
+  # The narrow style has no sub-TLVs to carry them: TLV 2 is unchanged.
+  def test_narrow_carries_no_link_addresses
+    link_nodes(metric_style: :narrow)
+    start_both
+    run_for(10)
+    tlv2 = own(@orig_a).tlvs.find { |t| t.type == 2 }
+    assert_equal "020c" "00" "0a808080" "00000000000b00", tlv2.to_shex
+  end
+
+  def link_nodes(**opts)
+    @orig_a, @a = node(A_ID, "00:00:00:00:00:0a", @log_a, "a-eth1", circuit_ip: ["10.0.12.1"], **opts)
+    @orig_b, @b = node(B_ID, "00:00:00:00:00:0b", @log_b, "b-eth1", circuit_ip: ["10.0.12.2"], **opts)
   end
 
   # The adjacency leaves Up by the neighbour's TLV 240, not by A's own

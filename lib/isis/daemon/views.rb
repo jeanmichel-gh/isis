@@ -178,8 +178,20 @@ module ISIS
             { id: e.neighbor_s, metric: e.metrics.default, style: "narrow" }
           end
         else
-          wide.flat_map(&:entries).map { |e| { id: e.neighbor_s, metric: e.metric, style: "wide" } }
+          wide.flat_map(&:entries).map { |e| wide_neighbor(e) }
         end
+      end
+
+      # A TLV 22 entry, with the first of its sub-TLVs 6 and 8 when it has
+      # them (RFC 5305 sections 3.2 and 3.3).
+      def wide_neighbor(entry)
+        h = { id: entry.neighbor_s, metric: entry.metric, style: "wide" }
+        { interface_address: SubTlv::Ipv4InterfaceAddress,
+          neighbor_address: SubTlv::Ipv4NeighborAddress }.each do |key, klass|
+          address = entry.subtlvs.grep(klass).filter_map(&:address).first
+          h[key] = address.to_s if address
+        end
+        h
       end
 
       # TLV 135's entries, or TLV 128's and 130's when no LSP of the node

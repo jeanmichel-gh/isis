@@ -19,7 +19,10 @@ module ISIS
   #            circuit with an adjacency Up, the neighbour's System ID
   #            with "an appended zero octet (indicating non-pseudonode)",
   #            and on a LAN with a DIS, the DIS's LAN ID, the pseudonode
-  #            (7.3.7); at the circuit's metric
+  #            (7.3.7); at the circuit's metric. With addresses on the
+  #            link, sub-TLV 6 carries this end's and, on a point to
+  #            point circuit, sub-TLV 8 the neighbour's (RFC 5305
+  #            sections 3.2 and 3.3)
   #   TLV 135  the configured prefixes, then the external prefixes
   #   TLV 232  the IPv6 interface addresses, non-link-local, when there are
   #            any (RFC 5308 section 3: in LSPs, "only the non-link-local
@@ -172,7 +175,8 @@ module ISIS
     end
 
     # A circuit whose adjacency goes into TLV 22 and which floods the LSP.
-    # It answers is_neighbor (nil, or the neighbour ID and metric) and
+    # It answers is_neighbor (nil, or the neighbour ID, the metric and,
+    # optionally, the link's addresses { interface:, neighbor: }) and
     # flood(entry).
     def attach(circuit)
       @circuits << circuit unless @circuits.include?(circuit)
@@ -462,7 +466,9 @@ module ISIS
         list.concat(pack(Tlv::IpExternalReachability, reach))
       end
       if @metric_style != :narrow
-        wide = neighbors.map { |id, metric| Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric) }
+        wide = neighbors.map do |id, metric, addresses|
+          Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric, subtlvs: link_subtlvs(addresses))
+        end
         list.concat(pack(Tlv::ExtendedIsReachability, wide))
         reach = (prefixes + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down) +
                  area4.map { |p| p.slice(:prefix, :metric) }).map do |p|
@@ -475,6 +481,17 @@ module ISIS
         Tlv::Ipv6Reachability.new(p).entries.first
       end
       list.concat(pack(Tlv::Ipv6Reachability, reach6))
+      list
+    end
+
+    # TLV 22 sub-TLVs 6 and 8 for a circuit's link addresses, { interface:,
+    # neighbor: }, either may be absent (RFC 5305 sections 3.2 and 3.3).
+    def link_subtlvs(addresses)
+      list = SubTlv::List.new(Tlv::ExtendedIsReachability::TYPE)
+      return list unless addresses
+
+      list << SubTlv::Ipv4InterfaceAddress.new(addresses[:interface]) if addresses[:interface]
+      list << SubTlv::Ipv4NeighborAddress.new(addresses[:neighbor]) if addresses[:neighbor]
       list
     end
 
