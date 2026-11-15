@@ -2511,10 +2511,12 @@ looking at, in routescope's repository.
 
 * Work on a branch named `claude/<short-topic>`. Never push to master.
 * One topic per pull request. Small diffs.
-* Run the full unit suite before opening a pull request. CI runs it again
-  on every supported Ruby, in `.github/workflows/ci.yml`, and the one check
-  a merge waits for is `ci`. It passes only when every matrix job passed.
-  Add a Ruby version to the matrix, not to the branch rules.
+* Run the full unit suite before opening a pull request. CI runs it again,
+  in `.github/workflows/ci.yml`: on Ruby 3.4 for a pull request, and on
+  every supported Ruby for a push to master, since each job is billed. The
+  one check a merge waits for is `ci`. It passes only when every matrix
+  job passed. Add a Ruby version to the master list, not to the branch
+  rules. A merge that breaks an older Ruby shows on master's run.
 * New behaviour needs a test. A fix needs a test that failed before it.
 * If you find a bug you are not fixing, say so in the pull request.
 * **Work out what the code was built to do before concluding it is wrong.**
