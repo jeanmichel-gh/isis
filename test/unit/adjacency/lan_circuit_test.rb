@@ -360,6 +360,20 @@ class TestLanUpdate < Minitest::Test
     end
   end
 
+  # On a LAN the entry names the pseudonode, so it carries this end's
+  # address in sub-TLV 6 and no sub-TLV 8: RFC 5305 section 3.3 asks for
+  # the neighbor address "on point-to-point adjacencies", and a pseudonode
+  # has no address of its own.
+  #   16 11 00000000000b01 00000a 06 0604 0a000001
+  def test_the_pseudonode_entry_carries_the_interface_address
+    node(:a, ip_addresses: ["10.0.0.1"])
+    node(:b, ip_addresses: ["10.0.0.2"])
+    up(:a, :b)
+    run_for(2)
+    assert_equal "1611" "00000000000b01" "00000a" "06" "06040a000001",
+                 stored_is_reachability(:a, "#{IDS[:a]}.00-00").map(&:to_shex).join
+  end
+
   # A DIS whose hellos carry a LAN ID with a zero circuit octet names no
   # pseudonode, so a's LSP names none until the DIS reports a real one.
   # Measured on FRR 8.4.4, whose first hellos carry a LAN ID of zeros.

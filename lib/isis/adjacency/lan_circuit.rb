@@ -194,10 +194,14 @@ module ISIS
     # Nil with no DIS, and nil while the DIS reports a LAN ID whose circuit
     # octet is zero, which names no pseudonode: measured on FRR 8.4.4, whose
     # first hellos carry a LAN ID of zeros until its own election.
+    #
+    # The third element is this end's first TLV 132 address, for sub-TLV 6
+    # (RFC 5305 section 3.2). No sub-TLV 8: section 3.3 asks for it "on
+    # point-to-point adjacencies", and the pseudonode has no address.
     def is_neighbor
       return nil if @dis.nil? || lan_id.getbyte(-1).zero?
 
-      [lan_id, @metric]
+      [lan_id, @metric, { interface: @ip_addresses.first }.compact]
     end
 
     # The first hops for the Decision Process: each neighbour Up, at the

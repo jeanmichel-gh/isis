@@ -84,6 +84,35 @@ class TestFrrIsisd < Minitest::Test
     assert_match(/^veth0\s+1\s+point-to-point\s+#{Regexp.escape(FrrLab::FRR_ID)}\s+#{@lab.name}\s+up/, table)
   end
 
+  # TLV 22's link addresses, RFC 5305 sections 3.2 and 3.3, both ways.
+  # FRR shows isisd's entry with sub-TLV 6, 10.0.12.1, and sub-TLV 8,
+  # 10.0.12.2, and isisd's show.topology gives both. Measured 2026-11-15 on
+  # FRR 10.5.1: without MPLS-TE its entry carries no sub-TLVs; with
+  # "mpls-te on" it carries sub-TLV 8 alone, link-params enabled on veth0
+  # or not. So FRR runs MPLS-TE here, and isisd reads its sub-TLV 8.
+  def test_link_addresses_both_ways
+    @lab.start(daemon: true, isis4r: { hostname: "isis4r-a" }, frr_loopback: "198.51.100.2/32",
+               frr_router: ["mpls-te on", "mpls-te router-address 198.51.100.2"])
+    own = "#{FrrLab::ISIS4R_ID}.00-00"
+    assert_eventually("FRR does not show isisd's TLV 22 sub-TLVs", 40) do
+      @lab.frr_database_detail(1)[own].to_s.include?("Remote Interface IP Address(es): 10.0.12.2")
+    end
+    detail = @lab.frr_database_detail(1).fetch(own)
+    assert_match(/Extended Reachability: #{Regexp.escape(FrrLab::FRR_ID)}\.00 \(Metric: 10\)\n\s+Local Interface IP Address\(es\): 10\.0\.12\.1\n\s+Remote Interface IP Address\(es\): 10\.0\.12\.2\n/, detail)
+
+    neighbors = lambda do |id|
+      @lab.isisd("show.topology", level: 1)["nodes"].find { _1["id"] == id }&.fetch("neighbors")
+    end
+    assert_equal [{ "id" => "#{FrrLab::FRR_ID}.00", "metric" => 10, "style" => "wide",
+                    "interface_address" => "10.0.12.1", "neighbor_address" => "10.0.12.2" }],
+                 neighbors.call("#{FrrLab::ISIS4R_ID}.00")
+    assert_eventually("isisd does not read FRR's sub-TLV 8", 40) do
+      neighbors.call("#{FrrLab::FRR_ID}.00")&.any? { _1["neighbor_address"] == "10.0.12.1" }
+    end
+    assert_equal [{ "id" => "#{FrrLab::ISIS4R_ID}.00", "metric" => 10, "style" => "wide",
+                    "neighbor_address" => "10.0.12.1" }], neighbors.call("#{FrrLab::FRR_ID}.00")
+  end
+
   # The log on standard output says what isisd started as, and the API
   # stops answering once it is stopped, its socket removed.
   def test_starts_and_stops

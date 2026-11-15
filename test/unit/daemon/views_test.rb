@@ -156,7 +156,9 @@ class TestDaemonViews < Minitest::Test
     views, a, = p2p_pair
     store_lsp(a, "0000.0000.000c.00-00",
               [ISIS::Tlv::AreaAddresses.new("49.0001"), ISIS::Tlv::DynamicHostname.new("c"),
-               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 10 }),
+               ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000a.00", metric: 10,
+                                                       subtlvs: [{ ipv4_interface_address: "10.0.12.3" },
+                                                                 { ipv4_neighbor_address: "10.0.12.1" }] }),
                ISIS::Tlv::IpInterfaceAddresses.new("10.0.12.3")])
     store_lsp(a, "0000.0000.000c.00-01",
               [ISIS::Tlv::ExtendedIsReachability.new({ neighbor: "0000.0000.000c.01", metric: 20 }),
@@ -211,7 +213,8 @@ class TestDaemonViews < Minitest::Test
     c = topology_node(views.topology(level: 1), "0000.0000.000c.00")
     assert_equal({ id: "0000.0000.000c.00", hostname: "c", areas: ["49.0001"], overload: false, attached: false,
                    reachable: false,
-                   neighbors: [{ id: "0000.0000.000a.00", metric: 10, style: "wide" },
+                   neighbors: [{ id: "0000.0000.000a.00", metric: 10, style: "wide",
+                                 interface_address: "10.0.12.3", neighbor_address: "10.0.12.1" },
                                { id: "0000.0000.000c.01", metric: 20, style: "wide" }],
                    prefixes: [{ prefix: "192.0.2.12/32", metric: 3, up_down: true, style: "wide" }],
                    interface_addresses: ["10.0.12.3", "10.0.13.3"],
@@ -268,7 +271,10 @@ class TestDaemonViews < Minitest::Test
                    "0000.0000.000c.01" => false, "0000.0000.000d.00" => false, "0000.0000.000f.00" => false },
                  t[:nodes].to_h { [_1[:id], _1[:reachable]] })
     b = topology_node(t, "0000.0000.000b.00")
-    assert_equal [{ id: "0000.0000.000a.00", metric: 10, style: "wide" }], b[:neighbors]
+    # B's own LSP, from the running pair: its address in sub-TLV 6 and A's,
+    # from A's hellos, in sub-TLV 8.
+    assert_equal [{ id: "0000.0000.000a.00", metric: 10, style: "wide",
+                    interface_address: "10.0.12.2", neighbor_address: "10.0.12.1" }], b[:neighbors]
     assert_includes b[:prefixes], { prefix: "192.0.2.11/32", metric: 1, up_down: false, style: "wide" }
   end
 

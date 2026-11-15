@@ -87,7 +87,9 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
   {"id": "0000.0001.0101.00", "hostname": "r1c1",
    "areas": ["49.0001"], "overload": false, "attached": false,
    "reachable": true,
-   "neighbors": [{"id": "0000.0001.0102.00", "metric": 10, "style": "wide"}],
+   "neighbors": [{"id": "0000.0001.0102.00", "metric": 10, "style": "wide",
+                  "interface_address": "10.0.12.1",
+                  "neighbor_address": "10.0.12.2"}],
    "prefixes": [{"prefix": "10.200.0.1/32", "metric": 0, "up_down": false,
                  "style": "wide"}],
    "interface_addresses": ["10.200.0.1"],
@@ -102,6 +104,11 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
   (RFC 1142 7.2.5).
 - `neighbors` come from TLV 22. When no fragment of the node has TLV 22,
   they come from TLV 2, with `style: "narrow"`.
+- A TLV 22 neighbor has `interface_address` from sub-TLV 6 and
+  `neighbor_address` from sub-TLV 8 (RFC 5305 sections 3.2 and 3.3),
+  each only when the entry carries it, the first when it carries
+  several. isisd sends both on a point to point circuit with IPv4
+  addresses, and only `interface_address` toward a pseudonode.
 - `prefixes` come from TLV 135. When no fragment has TLV 135, they come
   from TLV 128 and 130, with `style: "narrow"`.
 - `interface_addresses` come from TLV 132 and `ipv6_interface_addresses`
@@ -112,7 +119,7 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
   is true when any ATT bit is set.
 - `reachable` is true when the last SPF run at that level reached the
   node. `run` is that run's number.
-- Sub-TLVs and IPv6 prefixes are not given.
+- Other sub-TLVs and IPv6 prefixes are not given.
 - A level the router does not run answers no nodes.
 
 To follow changes, subscribe to events and read `show.topology` again

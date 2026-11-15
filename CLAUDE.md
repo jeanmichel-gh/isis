@@ -1761,11 +1761,13 @@ request that moves a gate. The paragraph after it has the detail.
 | | 4 routes installed | Done, FRR 8.4.4, 2026-11-01 |
 | 3, enhanced router | 1 policy | Done, FRR 8.4.4, 2026-11-02 |
 | | 2 failure handling (BFD, RFC 8706) | Not started |
-| | 3 topologies and TE | Not started |
+| | 3 topologies and TE | Not started; TLV 22 sub-TLVs 6 and 8 only, 2026-11-15 |
 | 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | Not started |
 
 Not started was measured by searching `lib/` and `exe/`: nothing for BFD,
-RFC 8706, multi topology, TLVs 222 or 229, or TE.
+RFC 8706, multi topology, TLVs 222 or 229, or TE. The TE gate is not
+met by the link addresses below: they are two of RFC 5305's sub-TLVs,
+sent without traffic engineering, and no TE attribute is carried.
 
 **Left in the core**, found in the code's own comments:
 
@@ -1813,6 +1815,22 @@ from TLV 232, from every LSP of the node (`docs/isisd.md`). That was the
 open question of `docs/design/bgp-ls-export.md`, which blocked BGP-LS
 TLVs 259 and 260 for IS-IS in bgp4r's Producer; reading them there is
 bgp4r's change.
+
+**Done around it, 2026-11-15, later:** BGP-LS TLVs 259 and 260 come from
+TLV 22 sub-TLVs 6 and 8, not from TLV 132 (RFC 9552, read by the bgp4r
+session). `lib/isis/subtlv/extended_is_reachability.rb` has both, under
+TLV 22 only. The originator sends them in each wide entry: on a point
+to point circuit, this end's first TLV 132 address in sub-TLV 6 and the
+neighbour's, from its hellos, in sub-TLV 8; toward a pseudonode, sub-TLV
+6 alone, since RFC 5305 section 3.3 asks for sub-TLV 8 "on
+point-to-point adjacencies". A change in the neighbour's hello
+addresses regenerates the LSP. `show.topology` gives each neighbour
+`interface_address` and `neighbor_address` when the entry has them.
+Measured on FRR 10.5.1: without MPLS-TE it sends no sub-TLV in TLV 22;
+with `mpls-te on` it sends sub-TLV 8 alone, with or without
+`link-params enable` on the interface; and it shows isisd's two as
+"Local" and "Remote Interface IP Address(es)"
+(`test_link_addresses_both_ways`).
 
 **Noted for later, from the owner, 2026-11-13.** Not designed yet;
 routescope's `CLAUDE.md`, "Where the work is going", holds the full note.

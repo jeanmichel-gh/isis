@@ -124,6 +124,7 @@ class FrrLab
             ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil,
             frr_lsp_gen_interval: 1)
     cleanup
+    @isis4r_hostname = isis4r[:hostname]
     @frr_lsp_gen_interval = frr_lsp_gen_interval
     @daemon = daemon
     @sim = sim
@@ -375,10 +376,11 @@ class FrrLab
   def frr2_name = @name2
 
   # A hostname FRR prints in place of a System ID, as the System ID. FRR
-  # learns the other FRR's name from its Dynamic Hostname TLV; isis4r sends
-  # none, so it prints as its System ID.
+  # learns the other FRR's name from its Dynamic Hostname TLV, and
+  # isis4r's when isis4r is given a hostname; without one isis4r prints as
+  # its System ID.
   def system_for(host)
-    { @name => FRR_ID, @name2 => FRR2_ID }.fetch(host, host)
+    { @name => FRR_ID, @name2 => FRR2_ID, @isis4r_hostname => ISIS4R_ID }.fetch(host, host)
   end
 
   # Configuration lines for FRR's running daemon, under "configure".

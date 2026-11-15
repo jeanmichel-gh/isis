@@ -65,6 +65,9 @@ them and fails if one is missing.
 - `ISIS::Pdu::Truncated`
 - `ISIS::Pdu::Unknown`
 - `ISIS::SubTlv`
+- `ISIS::SubTlv::Ipv4Address`
+- `ISIS::SubTlv::Ipv4InterfaceAddress`
+- `ISIS::SubTlv::Ipv4NeighborAddress`
 - `ISIS::SubTlv::List`
 - `ISIS::SubTlv::Unknown`
 - `ISIS::Tlv`
