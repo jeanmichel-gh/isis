@@ -329,6 +329,7 @@ module ISIS
       # RFC 1142 clause 8.2.4.2 e: on Up or Accept, take the holding time
       # and areas from the PDU.
       @neighbor.snpa = snpa
+      addresses = [@neighbor.ip_addresses, @neighbor.ipv6_addresses]
       @neighbor.holding_time = hello.holding_time
       @neighbor.areas = hello.tlvs.select { |t| t.is_a?(Tlv::AreaAddresses) }.flat_map { |t| t.areas.map(&:to_s) }
       @neighbor.ip_addresses = ip_addresses(hello)
@@ -357,6 +358,13 @@ module ISIS
       lost = before == :up ? was - usage : []
       lost.each { |n| level(n).adjacency_down }
       gained.each { |n| level(n).adjacency_up(@neighbor.system_id_s) }
+      # The next hop's address comes from the hellos' TLVs 132 and 232, so a
+      # route through this neighbour moves when they do. Measured on FRR
+      # 10.5.1: its first hellos carry no TLV 232, which it adds once the
+      # kernel gives veth0 its link-local address, after the adjacency is Up.
+      return unless before == :up && addresses != [@neighbor.ip_addresses, @neighbor.ipv6_addresses]
+
+      (usage & was).each { |n| level(n).addresses_changed(@neighbor.system_id_s) }
     end
 
     # An LSP or SNP goes to its level, when the circuit runs that level

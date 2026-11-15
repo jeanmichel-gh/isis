@@ -1891,8 +1891,8 @@ began**: the LSP and CSNP layouts parse, replay and rebuild an LSP and a
 CSNP captured from FRR 8.4.4 byte for byte, the LSP's checksum included,
 and TLV 9 reads the CSNP's entries at the PDU's ID Length. TLV 135
 parses, replays and rebuilds FRR's, from an LSP FRR 8.4.4 regenerated
-about 30 seconds after the adjacency came up with TLV 22 and TLV 135 in
-it. Its control octet's two flags are 0x80 and 0x40 by the order RFC 5305
+about 30 seconds after the adjacency came up, under its default
+lsp-gen-interval of 30 s, with TLV 22 and TLV 135 in it. Its control octet's two flags are 0x80 and 0x40 by the order RFC 5305
 section 4 lists them in; FRR's LSP has both clear, so no capture has
 confirmed those two yet. TLV 22 parses, replays and rebuilds FRR's
 from the same LSP; its neighbour ID is seven octets as RFC 5305 section 3
@@ -1903,10 +1903,14 @@ LSP at FRR's sequence and checksum and acknowledge it, after which FRR
 stops sending it. **So is the sending half**:
 `test_frr_learns_isis4rs_prefix` has FRR hold isis4r's LSP at isis4r's
 sequence and checksum and install 192.0.2.1/32 through isis4r, a prefix
-that exists only in isis4r's TLV 135. Measured on FRR 8.4.4: FRR holds
-isis4r's LSP within a second of the adjacency, but installs the route
-about 30 seconds later, when it regenerates its own LSP with isis4r in
-its TLV 22, since its SPF needs the link in both LSPs.
+that exists only in isis4r's TLV 135. Measured on FRR 8.4.4, and on
+10.5.1 on 2026-11-15, under FRR's default lsp-gen-interval of 30 s: FRR
+holds isis4r's LSP within a second of the adjacency, but installs the
+route about 30 seconds later, when it regenerates its own LSP with isis4r
+in its TLV 22, since its SPF needs the link in both LSPs. The lab now
+sets lsp-gen-interval 1 on FRR, and the route comes within a second of
+the adjacency; that test alone keeps FRR's default
+(`frr_lsp_gen_interval: nil`), so the 30 s case is still run.
 `test_frr_learns_isis4rs_prefix_with_narrow_metrics` does the same with
 FRR on `metric-style narrow` and isis4r sending TLVs 2 and 128, and fails
 when isis4r sends wide. TLVs 2 and 128 parse, replay and rebuild FRR's,
@@ -2057,7 +2061,13 @@ metric style; the calculation reads TLV 236 into the same tree, and an
 IPv6 route goes through the neighbour's link-local address. The interop
 test `test_ipv6_routes_both_ways` needs a kernel with IPv6, which the
 sandbox it was written in lacks, so it was first run in CI; there
-`ISIS_SKIP_IPV6=1` is not set and the test must pass. **isis4r sets
+`ISIS_SKIP_IPV6=1` is not set and the test must pass. Fixed on the way,
+2026-11-15, once FRR's LSPs came within a second: FRR 10.5.1's first
+hellos carry no TLV 232, which it adds when veth0 gets its link-local
+address, after the adjacency is Up, and isis4r ran SPF only on an LSP
+or an adjacency change, so its IPv6 next hop had no address until FRR's
+next LSP. A circuit now tells the Decision Process when an Up
+neighbour's hellos change TLV 132 or 232. **isis4r sets
 ATT itself** (7.2.9.2): at both levels, its Level 2 Decision Process
 sets the Level 1 originator's AttachedFlag after each run, true when it
 reaches a system whose LSP Number 0 lists no area address of its own
@@ -2349,8 +2359,20 @@ decisions here as they are made.
    namespace on the real clock, writing its state as JSON and its log at
    debug with a PDU trace, and reading a control file a test writes to
    change policy while it runs. A failing test prints both sides' logs.
-   `sudo env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them. Newer sudo
-   ignores `-E` with a warning, and `env` passes what the tests need.
+   `sudo env "PATH=$PATH" ISIS_FRR=1 rake interop` runs them, each file
+   in a process of its own, `ISIS_INTEROP_JOBS` at a time (all by
+   default). Newer sudo ignores `-E` with a warning, and `env` passes
+   what the tests need. **The lab sets FRR's `lsp-gen-interval` to 1 s**,
+   as isis4r's `minimum_lsp_interval` is there. FRR's default is 30 s
+   (`frr-isisd.yang`, 10.5.1), under which FRR names a new neighbour in
+   its LSP up to 30 s after the adjacency, and most tests waited for
+   that. The line goes before `net`: FRR schedules its first LSP when it
+   reads `net`, at the interval it has then. `frr_lsp_gen_interval: nil`
+   keeps FRR's default, which `test_frr_learns_isis4rs_prefix` does.
+   Measured 2026-11-15 on FRR 10.5.1, one machine, per file before and
+   after: isisd 32 to 4 s, LAN 232 to 59 s, point to point 535 to 187
+   s, simulator 106 to 63 s, two routers 349 to 84 s; the suite 1253 s
+   one file after another before, 187 s five at a time after.
 
 2. **routescope, for labs a person watches and drives.** routescope does
    not build labs. It is a web console over labs that docker compose or

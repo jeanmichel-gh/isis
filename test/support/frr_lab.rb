@@ -91,6 +91,11 @@ class FrrLab
   # and into IS-IS as a passive circuit.
   # +frr_is_type+ overrides the first FRR's is-type, which is otherwise
   # the lab's level.
+  # +frr_lsp_gen_interval+ is FRR's lsp-gen-interval on both FRRs, the
+  # least time between two generations of one LSP: 1 s by default, as
+  # isis4r's minimum_lsp_interval is in the lab. nil leaves FRR's own
+  # default, 30 s in FRR 10.5.1's frr-isisd.yang, under which FRR names a
+  # new neighbour in its LSP up to 30 s after the adjacency comes up.
   # +frr2+ adds a second FRR behind the first, on a point to point link:
   # { is_type: "level-2-only", area: "49.0002", loopback: "198.51.100.3/32",
   # interface: [lines], link_metric:, isis4r_link: { frr_metric:,
@@ -116,8 +121,10 @@ class FrrLab
   # both run at once: FRR as level-1-2, isis4r with a circuit per level.
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
-            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil)
+            ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil,
+            frr_lsp_gen_interval: 1)
     cleanup
+    @frr_lsp_gen_interval = frr_lsp_gen_interval
     @daemon = daemon
     @sim = sim
     sh "ip netns add #{@frr_ns}"
@@ -572,6 +579,7 @@ class FrrLab
         end}
       #{@frr2 ? frr2_link_stanza("veth1", hello_interval, hello_multiplier, frr2_metric_lines) : ''}
       router isis LAB
+      #{frr_timer_lines}
        net 49.0001.#{FRR_ID}.00
        is-type #{@frr_is_type || frr_level}
       #{router_lines.map { |l| " #{l}" }.join("\n")}
@@ -610,6 +618,13 @@ class FrrLab
       " isis hello-multiplier #{hello_multiplier}"] + lines.map { |l| " #{l}" }).join("\n")
   end
 
+  # Lines under router isis for the lab's FRR timers. They go before net:
+  # FRR schedules its first LSP when it reads net, at the interval it has
+  # then, so a timer after net leaves that first regeneration 30 s out.
+  def frr_timer_lines
+    @frr_lsp_gen_interval ? " lsp-gen-interval #{@frr_lsp_gen_interval}" : ""
+  end
+
   def frr2_metric_lines
     @frr2[:link_metric] ? ["isis metric #{@frr2[:link_metric]}"] : []
   end
@@ -626,6 +641,7 @@ class FrrLab
           frr2_link_stanza('veth1', hello_interval, hello_multiplier, ["isis metric #{link.fetch(:frr_metric, 10)}"])
         end}
       router isis LAB
+      #{frr_timer_lines}
        net #{@frr2.fetch(:area, '49.0001')}.#{FRR2_ID}.00
        is-type #{@frr2.fetch(:is_type)}
     CONF

@@ -392,11 +392,17 @@ module ISIS
       neighbor.holding_time = hello.holding_time
       neighbor.lan_id = hello.lan_id
       neighbor.areas = their_areas
+      addresses = [neighbor.ip_addresses, neighbor.ipv6_addresses]
       neighbor.ip_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::IpInterfaceAddresses) }
                                    .flat_map { |t| t.addresses.map(&:to_s) }
       neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
                                      .flat_map { |t| t.addresses.map(&:to_s) }
       restart_holding_timer(key, neighbor)
+      # The next hop's address comes from TLVs 132 and 232, so a route
+      # through a neighbour Up moves when they do.
+      if neighbor.state == :up && addresses != [neighbor.ip_addresses, neighbor.ipv6_addresses]
+        @decision&.changed("addresses of #{neighbor.system_id_s} on #{@name} changed")
+      end
 
       listed = hello.neighbors.any? { |n| n.to_s == @snpa.to_s }
       if listed && neighbor.state != :up
