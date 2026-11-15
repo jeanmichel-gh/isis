@@ -17,11 +17,17 @@ jobs:
   test:
     name: test (Ruby ${{ matrix.ruby }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
-        # From the gemspec's required_ruby_version (>= 3.1) to the newest.
-        ruby: ["3.1", "3.2", "3.3", "3.4", "4.0"]
+        # A pull request runs one Ruby; master runs from the gemspec's
+        # required_ruby_version (>= 3.1) to the newest. isis is private,
+        # so each job is billed, rounded up to a whole minute, and the
+        # unit tests take under one: five versions cost five minutes a
+        # run (routescope docs/design/ci-cost.md). A pull request that
+        # breaks an older Ruby shows on master's run after the merge.
+        ruby: ${{ github.event_name == 'pull_request' && fromJSON('["3.4"]') || fromJSON('["3.1", "3.2", "3.3", "3.4", "4.0"]') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -59,6 +65,9 @@ jobs:
   interop-frr:
     name: interop (FRR)
     runs-on: ubuntu-latest
+    # 4 minutes since #79. Before it, 22; one run took 62. Without a
+    # timeout a hung run is billed for up to six hours.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -136,7 +145,7 @@ jobs:
   lab-containerlab:
     name: lab (containerlab)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -168,6 +177,7 @@ jobs:
     if: always()
     needs: [test, interop-frr, interop-srl, lab-containerlab]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: All test jobs passed
         run: |
