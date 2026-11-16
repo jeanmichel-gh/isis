@@ -38,7 +38,23 @@ Measured on the VM, 2026-11-16, isis4r at isis 7ad1b77:
 - FRR f1 lists the nine simulated systems in `show isis segment-routing node`, r3c3 with its own block 21000-28999, and s1 with 19000-26999.
 - s1 itself has no label toward the grid: it has no real adjacency to a simulated system, so the path ends at s1. Simulated systems forward nothing, so pings stay between f1 and f2.
 
-Not measured yet: routescope's SR nodes table listing the grid, and the grid's `sim` actions (a link down, a router overloaded) moving these labels. Both should follow from the above; watch r2's MPLS labels.
+routescope's SR nodes table lists all 14 systems on r1 as on f1, each with its Router ID, SRGB, SRLB and Node-SID (isis 880bf1f, routescope 0da2b43).
+
+### The grid's sim actions move the labels
+
+Measured on the VM, 2026-11-16, isis4r at isis 880bf1f. r2 holds 9 label routes toward the grid, 18101 to 19101 through 18109 to 19109, all toward s1. Each action was run on s1 with `isis-cli sim ACTION KEY=VALUE`, then undone:
+
+| Action | r2's grid labels |
+| --- | --- |
+| `link.down link=s1--r1c1`, the grid's only way in | all 9 withdrawn |
+| `link.down` on `r1c1--r1c2` and `r1c1--r2c1` | only 18101 (r1c1) left |
+| `router.overload router=r1c1 on=true` | only 18101 left: no transit through r1c1 |
+| `prefixes.withdraw router=r3c3 prefix=10.200.0.9/32` | 18109 withdrawn, 8 left |
+| `link.metric link=r1c1--r1c2 metric=40` | unchanged; r2's metric to r1c2 goes from 30 to 50 |
+
+Each undo brings the 9 back. The out-labels stay in s1's block (19xxx), since s1 is r2's next hop for every grid prefix; r3c3's own block, 21000, is used only by the router before it. FRR f1 follows the same way: with `s1--r1c1` down its nine 161xx labels go, and come back as 16101 to 17101 and so on.
+
+How fast: a change reaches r2's kernel in 30 to 300 ms. A change to an LSP that s1 sent less than 5 s before waits until those 5 s are up: s1's point-to-point link to r2 sends the same LSP at most every 5 s (`MINIMUM_LSP_TRANSMISSION_INTERVAL` in `lib/isis/adjacency/p2p_circuit.rb`). `s1--r1c1` up after a 10 s gap showed in 147 ms; after a 2 s gap, in 2.9 s. Actions run one after the other each took about 4.8 s for this reason.
 
 ## Scenario
 
