@@ -127,10 +127,16 @@ module ISIS
           end,
           levels: @router.levels.to_h do |l|
             table = @router.decisions[l].labels
+            own = sr.srgb.map { |f, s| [f, f + s - 1] }
             nodes = (table&.nodes || {}).map do |node, n|
               id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
-              { system_id: id, hostname: names[id], srgb: n.srgb&.map { |a, b| "#{a}-#{b}" },
-                algorithms: n.algorithms }
+              row = { system_id: id, hostname: names[id], srgb: n.srgb&.map { |a, b| "#{a}-#{b}" },
+                      algorithms: n.algorithms }
+              row[:router_id] = n.router_id if n.router_id
+              row[:srlb] = n.srlb.map { |a, b| "#{a}-#{b}" } if n.srlb
+              # The Node-SID, and the label this system takes it in.
+              row.merge!(sid: n.sid, prefix: n.prefix, label: Spf::Labels.label_at(own, n.sid)) if n.sid
+              row
             end
             [l, { nodes: nodes, problems: table&.problems || [] }]
           end }

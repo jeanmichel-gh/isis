@@ -4,8 +4,9 @@
 # routescope, so this repository's tests hold its API to it with no
 # routescope here (routescope docs/design/api-contract.md, part 3).
 #
-# Written by `rake vocabulary` in routescope at be270f3
-# (jeanmichel-gh/routescope#129) on 2026-11-14: each method routescope's
+# Written by `rake vocabulary` in routescope on 2026-11-16, at e20935b
+# with branch claude/sr-nodes-all on it (its SR nodes read each node's
+# Router ID, SRLB and Node-SID): each method routescope's
 # Isis4r and Isis4rSim drivers call, with the keys they read from its
 # answer. "a.b" is key b of a; "[]" is each element of an array. A method
 # with no keys is one whose answer routescope passes on whole, or whose
@@ -22,8 +23,10 @@ module RoutescopeVocabulary
     "policy.summaries" => %w[],
     "show.adjacencies" => %w[[].address [].areas [].hold [].hostname [].interface [].level [].state],
     "show.database" => %w[[].att [].checksum [].hostname [].length [].level [].lifetime [].lsp_id [].ol [].p [].purged [].self [].sequence],
+    "show.labels" => %w[[].fec [].kind [].label [].level [].next_hops [].next_hops[].address [].next_hops[].interface [].next_hops[].label [].op],
     "show.overview" => %w[areas hostname lsps spf_runs system_id],
-    "show.routes" => %w[[].level [].metric [].next_hops [].next_hops[].address [].next_hops[].interface [].prefix [].up_down],
+    "show.routes" => %w[[].level [].metric [].next_hops [].next_hops[].address [].next_hops[].interface [].next_hops[].label [].prefix [].sid [].up_down],
+    "show.segment_routing" => %w[adj_sids adj_sids[].family adj_sids[].interface adj_sids[].label adj_sids[].neighbor enabled levels levels.2.nodes levels.2.nodes[].algorithms levels.2.nodes[].hostname levels.2.nodes[].label levels.2.nodes[].router_id levels.2.nodes[].sid levels.2.nodes[].srgb levels.2.nodes[].srlb levels.2.nodes[].system_id router_id srgb srlb],
     "show.topology" => %w[level nodes nodes[].attached nodes[].hostname nodes[].id nodes[].neighbors nodes[].neighbors[].id nodes[].neighbors[].metric nodes[].overload nodes[].prefixes nodes[].prefixes[].metric nodes[].prefixes[].prefix nodes[].reachable run]
   }.freeze
 
@@ -34,8 +37,10 @@ module RoutescopeVocabulary
     "policy.summaries" => %w[],
     "show.adjacencies" => %w[[].address [].areas [].hold [].hostname [].interface [].level [].state],
     "show.database" => %w[[].att [].checksum [].hostname [].length [].level [].lifetime [].lsp_id [].ol [].p [].purged [].self [].sequence],
+    "show.labels" => %w[],
     "show.overview" => %w[areas hostname lsps spf_runs system_id],
     "show.routes" => %w[[].level [].metric [].next_hops [].next_hops[].address [].next_hops[].interface [].prefix [].up_down],
+    "show.segment_routing" => %w[],
     "show.topology" => %w[],
     "sim.aging" => %w[],
     "sim.flush" => %w[],

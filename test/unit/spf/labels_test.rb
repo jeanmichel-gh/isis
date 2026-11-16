@@ -50,8 +50,9 @@ class TestSpfLabels < Minitest::Test
   end
 
   # a ---- b ---- c. +sr+ maps a router to its segment_routing block, or
-  # nil for none; +sids+ to its loopback's prefix entry extras.
-  def line(sr: {}, sids: {}, extra: {})
+  # nil for none; +sids+ to its loopback's prefix entry extras; +own+ to
+  # more configuration for that router alone.
+  def line(sr: {}, sids: {}, extra: {}, own: {})
     base = { "a" => 16_000, "b" => 18_000, "c" => 20_000 }
     conf = lambda do |id, ifaces|
       n = id.ord - 96
@@ -59,7 +60,7 @@ class TestSpfLabels < Minitest::Test
       prefix = { prefix: "10.255.0.#{n}/32", metric: 0 }
       prefix = prefix.merge(sid: n).merge(sids.fetch(id, {})) if block
       { system_id: "0000.0000.000#{id}", hostname: id, minimum_lsp_interval: 1, prefixes: [prefix],
-        interfaces: ifaces }.merge(block ? { segment_routing: block } : {}).merge(extra)
+        interfaces: ifaces }.merge(block ? { segment_routing: block } : {}).merge(extra).merge(own.fetch(id, {}))
     end
     a = router(conf.("a", [p2p("ab", "10.0.12.1")]), { "ab" => "00:00:00:00:00:0a" })
     b = router(conf.("b", [p2p("ab", "10.0.12.2"), p2p("bc", "10.0.23.1")]),
@@ -160,7 +161,23 @@ class TestSpfLabels < Minitest::Test
     assert_equal [{ interface: "ab", neighbor: "b", family: "ipv4", label: 15_000 }], sr[:adj_sids]
     nodes = sr[:levels][1][:nodes].to_h { [_1[:hostname], _1[:srgb]] }
     assert_equal({ "a" => ["16000-23999"], "b" => ["18000-25999"], "c" => ["20000-27999"] }, nodes)
+    # Every system's Router ID, SRLB and Node-SID, as FRR's
+    # "show isis segment-routing node" gives them, with the label a takes
+    # each in: its own SRGB from 16000.
+    rows = sr[:levels][1][:nodes].to_h { [_1[:hostname], _1.values_at(:router_id, :srlb, :sid, :prefix, :label)] }
+    assert_equal({ "a" => ["10.255.0.1", ["15000-15999"], 1, "10.255.0.1/32", 16_001],
+                   "b" => ["10.255.0.2", ["15000-15999"], 2, "10.255.0.2/32", 16_002],
+                   "c" => ["10.255.0.3", ["15000-15999"], 3, "10.255.0.3/32", 16_003] }, rows)
     assert_equal [], sr[:levels][1][:problems]
+  end
+
+  # A Prefix-SID without the N flag is not a Node-SID: c's SID on a /24,
+  # which gets no N (SegmentRouting.prefix_sid), gives c no sid in the view.
+  def test_a_prefix_sid_without_n_is_no_node_sid
+    a, = line(sids: { "c" => { prefix: "10.255.3.0/24" } }, own: { "c" => { router_id: "10.255.0.3" } })
+    c = ISIS::Daemon::Views.new(a).segment_routing[:levels][1][:nodes].find { _1[:hostname] == "c" }
+    refute c.key?(:sid)
+    assert_equal "10.255.0.3", c[:router_id]
   end
 
   def test_the_views_without_segment_routing

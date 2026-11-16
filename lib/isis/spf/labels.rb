@@ -43,8 +43,11 @@ module ISIS
       Entry = Struct.new(:label, :op, :kind, :fec, :hops)
 
       # A node's SR state as its LSPs give it: the SRGB as [first, last]
-      # ranges, in order, and the algorithms it runs.
-      Node = Struct.new(:srgb, :algorithms) do
+      # ranges, in order, and the algorithms it runs. For the views, also
+      # its Router ID and SRLB from TLV 242, and its Node-SID: +sid+ the
+      # index, +prefix+ the prefix it is on. Each is nil when not
+      # advertised.
+      Node = Struct.new(:srgb, :algorithms, :router_id, :srlb, :sid, :prefix) do
         # RFC 8660 section 2.4: index I across the ranges, or nil past the
         # end.
         def label(index)
@@ -135,8 +138,28 @@ module ISIS
           algos = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrAlgorithm) } }.first&.algorithms || [0]
           srgb = valid_srgb(gb.ranges) ? gb.ranges : nil
           problem("#{SystemId.from_bytes(node.byteslice(0, 6))}: its SRGB #{gb.ranges.inspect} is not valid, ignored") unless srgb
-          @nodes[node] = Node.new(srgb, algos)
+          srlb = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrLocalBlock) } }.first&.ranges
+          sid, prefix = node_sid(lsps)
+          @nodes[node] = Node.new(srgb, algos, caps.first.router_id&.to_s, srlb, sid, prefix)
         end
+      end
+
+      # The node's Node-SID: the first Prefix-SID for algorithm 0 with the
+      # N flag and an index, in its lowest-numbered LSP first. [index,
+      # prefix], or nil. RFC 8667 section 2.1.1.1: N marks the prefix as
+      # one that identifies the node.
+      def node_sid(lsps)
+        lsps.each do |lsp|
+          lsp.tlvs.each do |t|
+            next unless t.is_a?(Tlv::ExtendedIpReachability) || t.is_a?(Tlv::Ipv6Reachability)
+
+            t.entries.each do |e|
+              s = e.subtlvs&.find { _1.is_a?(SubTlv::PrefixSid) && _1.algorithm.zero? }
+              return [s.index, e.prefix] if s&.index && s.flag?("N") && e.prefix
+            end
+          end
+        end
+        nil
       end
 
       def valid_srgb(ranges)
