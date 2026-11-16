@@ -18,8 +18,13 @@ Phases 1 and 2 of the plan, and the first gate of phase 3:
   through netlink.
 - Route leaking, summaries and redistribution.
 
-Not yet: BFD, graceful restart, multi topology, TE, segment routing and
-Flex-Algo. `CLAUDE.md`, "Where to start", has the phases and their status.
+Segment routing (RFC 8667) is decoded and built, not yet run: TLV 242
+with SR-Capabilities, SR-Algorithm and SR Local Block, the Prefix-SID,
+the Adj-SID and the LAN-Adj-SID read FRR's LSPs and replay them
+(`docs/design/sr-mpls.md`, PR 1 of 5).
+
+Not yet: BFD, graceful restart, multi topology, TE, segment routing as
+a router, and Flex-Algo. `CLAUDE.md`, "Where to start", has the phases and their status.
 
 ## Run it as a router
 

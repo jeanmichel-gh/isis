@@ -65,10 +65,18 @@ them and fails if one is missing.
 - `ISIS::Pdu::Truncated`
 - `ISIS::Pdu::Unknown`
 - `ISIS::SubTlv`
+- `ISIS::SubTlv::AdjSid`
 - `ISIS::SubTlv::Ipv4Address`
 - `ISIS::SubTlv::Ipv4InterfaceAddress`
 - `ISIS::SubTlv::Ipv4NeighborAddress`
+- `ISIS::SubTlv::LabelBlock`
+- `ISIS::SubTlv::LanAdjSid`
 - `ISIS::SubTlv::List`
+- `ISIS::SubTlv::PrefixSid`
+- `ISIS::SubTlv::SidLabel`
+- `ISIS::SubTlv::SrAlgorithm`
+- `ISIS::SubTlv::SrCapabilities`
+- `ISIS::SubTlv::SrLocalBlock`
 - `ISIS::SubTlv::Unknown`
 - `ISIS::Tlv`
 - `ISIS::Tlv::ExtendedIpReachability`
@@ -87,5 +95,6 @@ them and fails if one is missing.
 - `ISIS::Tlv::LspEntries`
 - `ISIS::Tlv::Padding`
 - `ISIS::Tlv::ProtocolsSupported`
+- `ISIS::Tlv::RouterCapability`
 - `ISIS::Tlv::ThreeWayAdjacency`
 - `ISIS::Tlv::Unknown`

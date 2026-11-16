@@ -102,5 +102,116 @@ module ISIS
         super
       end
     end
+
+    # A flags octet whose bits RFC 8667 names by letter, drawn as
+    #
+    #   0 1 2 3 4 5 6 7
+    #   +-+-+-+-+-+-+-+-+
+    #   |R|N|P|E|V|L|   |
+    #
+    # so the first letter is the most significant bit, 0x80. A class lists
+    # its letters in FLAGS. Bits no letter names are kept as they arrived
+    # and written back: zero when built from fields, echoed when replayed.
+    module FlagOctet
+      # The bit of +letter+ in this class's octet.
+      def flag_bit(letter)
+        i = self.class::FLAGS.index(letter.to_s.upcase) or
+          raise ArgumentError, "no #{letter.inspect} flag in #{self.class::FLAGS.join}"
+        0x80 >> i
+      end
+
+      def flag?(letter)
+        (@flags & flag_bit(letter)).positive?
+      end
+
+      # The letters set, in the RFC's order.
+      def flag_letters
+        self.class::FLAGS.select { |l| flag?(l) }
+      end
+
+      # The bits no letter names.
+      def reserved_bits
+        named = self.class::FLAGS.each_index.sum { |i| 0x80 >> i }
+        @flags & ~named & 0xff
+      end
+
+      private
+
+      # The octet from a list of letters and the unnamed bits.
+      def flags_from(letters, reserved = 0)
+        Array(letters).sum(0) { |l| flag_bit(l) } | (Integer(reserved) & 0xff)
+      end
+
+      def flags_hash(h)
+        h[:flags] = flag_letters unless flag_letters.empty?
+        h[:reserved] = reserved_bits unless reserved_bits.zero?
+        h
+      end
+    end
+
+    # A SID or label field as RFC 8667 section 2.1.1.1 gives it: "a 4-octet
+    # index" when the V and L flags are clear, "a 3-octet local label where
+    # the 20 rightmost bits are used for encoding the label value" when
+    # both are set. Prefix-SID, Adj-SID and LAN-Adj-SID end with one.
+    #
+    # It is read by its length, which the octets carry, and not by the
+    # flags, which may disagree: section 2.1.1.1 says an invalid V and L
+    # pair "MUST be ignored", which is the receiver's decision. The octets
+    # replay either way. Past four octets the flags choose, and the rest is
+    # a tail. The high four bits of a 3-octet label are kept.
+    module SidField
+      attr_reader :index, :label, :tail
+
+      private
+
+      def sid_octets
+        if @index then [@index].pack("N")
+        elsif @label then [@label].pack("N").byteslice(1, 3)
+        else "".b
+        end
+      end
+
+      def read_sid(rest, label_first)
+        @index = @label = nil
+        width = case rest.bytesize
+                when 3 then 3
+                when 4 then 4
+                when 0..2 then 0
+                else label_first ? 3 : 4
+                end
+        @tail = rest.byteslice(width..).b
+        case width
+        when 3 then @label = ("\x00".b + rest.byteslice(0, 3)).unpack1("N")
+        when 4 then @index = rest.byteslice(0, 4).unpack1("N")
+        end
+      end
+
+      def sid_hash(h)
+        h[:index] = @index if @index
+        if @label
+          h[:label] = @label & 0xfffff
+          h[:label_high] = @label >> 20 unless (@label >> 20).zero?
+        end
+        h[:tail] = @tail.unpack1("H*") unless @tail.empty?
+        h
+      end
+
+      def sid_from(index: nil, label: nil, label_high: 0, tail: "")
+        raise ArgumentError, "a SID is an index or a label, not both" if index && label
+        raise ArgumentError, "index #{index} does not fit in 4 octets" if index && !(0..0xffff_ffff).cover?(index)
+        raise ArgumentError, "label #{label} does not fit in 20 bits" if label && !(0..0xfffff).cover?(label)
+
+        @index = index
+        @label = label && (label | (Integer(label_high) << 20))
+        @tail = [tail].pack("H*")
+      end
+
+      def sid_text
+        if @index then "index #{@index}"
+        elsif @label then "label #{@label & 0xfffff}"
+        else "no SID"
+        end
+      end
+    end
   end
 end

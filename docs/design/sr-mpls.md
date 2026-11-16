@@ -1,6 +1,8 @@
 # SR-MPLS in isis4rd
 
-Status: draft, 2026-11-16. Waiting for the owner's approval. No code yet.
+Status: approved by the owner 2026-11-16, merged in #84. No code yet.
+The open questions at the end keep the answers this document gives
+until the owner changes them.
 
 This is P1 in routescope's `docs/protocol-coverage.md` and the SR-MPLS
 part of Phase 4 here. It gives the L3VPN lab (P2) its transport labels.
@@ -271,7 +273,22 @@ One topic each, in this order, in isis:
 
 1. **Codec.** TLV 242, its sub-TLVs, Prefix-SID, Adj-SID and
    LAN-Adj-SID. Hex tests from the RFC layouts and from an FRR 10.2.1
-   capture. The TLV document test picks them up.
+   capture. The TLV document test picks them up. **Built 2026-11-16.**
+   As built:
+   - `tlv/router_capability.rb` holds TLV 242. Its sub-TLVs are in
+     `subtlv/router_capability.rb`, the Prefix-SID in
+     `subtlv/extended_ip_reachability.rb` (under 135 and 236), the
+     Adj-SIDs beside TLV 22's other sub-TLVs. The flags octet and SID
+     field they share are in `subtlv/subtlv.rb`.
+   - SID/Label is registered under 149, the registry RFC 8667 section
+     2.3 names, and the SRGB and SRLB descriptors read it there.
+   - A SID field is read by its length, not by V and L, so an invalid
+     pair replays (section 2.1.1.1 leaves ignoring it to the receiver).
+   - Flags hash as the RFC's letters, `flags: ["N"]`, with `reserved:`
+     only when an unnamed bit arrived set.
+   - The test LSP is router a of routescope's `frr-sr` lab,
+     `test/fixtures/frr-10.2.1-l2-lsp-sr.hex`. Every SR sub-TLV in it is
+     read; TLV 134 stays unknown.
 2. **Origination and config.** `router_id`, `segment_routing`, `sid`;
    TLV 242 and the sub-TLVs in our LSPs; leaking rules. Gate: FRR shows
    our SRGB, Node-SID and Adj-SIDs (`show isis segment-routing node`,
