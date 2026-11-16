@@ -341,6 +341,21 @@ The gate passes against FRR 10.2.1, the version on the VM.
    `netlink.rb` already does for IP, with a lower kernel metric). Whether
    the kernel orders `AF_MPLS` routes by metric too is not checked. If
    not, isisd picks the level itself.
-4. **SRLB use.** The draft takes Adj-SID labels from the SRLB. FRR
-   does too, as far as its `local-block` command suggests. Check it in
-   PR 2's capture.
+4. ~~SRLB use.~~ Answered 2026-11-16: FRR 10.2.1 takes Adj-SIDs from
+   its SRLB (15000 and up with `local-block 15000 15999`). Recorded in
+   routescope `test/fixtures/frr/sr-mpls/`.
+
+## Measured on FRR 10.2.1
+
+Three FRR routers in a line, a, b and c, with SRGBs 16000, 18000 and
+20000 (routescope `test/fixtures/frr/sr-mpls/`, 2026-11-16):
+
+- a pushes 18003 toward c: c's index 3 in b's SRGB. b pops it (PHP). A
+  ping from a's loopback to c's passes. This is the calculation above.
+- FRR does not install a label for its own Node-SID. With PHP, no
+  neighbor sends it one. Step 4 of the calculation may be dropped to
+  match; it matters only when a neighbor sets P.
+- FRR sets both I and V in SR-Capabilities on an IPv4-only router, and
+  advertises a TE Router ID (TLV 134) equal to TLV 242's Router ID.
+- FRR's kernel routes use next-hop objects (`nhid`). The label sits on
+  the next hop, and `ip -j route` still shows it as `encap`.
