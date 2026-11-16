@@ -1,6 +1,8 @@
 # SR-MPLS in isis4rd
 
-Status: draft, 2026-11-16. Waiting for the owner's approval. No code yet.
+Status: approved by the owner 2026-11-16, merged in #84. No code yet.
+The open questions at the end keep the answers this document gives
+until the owner changes them.
 
 This is P1 in routescope's `docs/protocol-coverage.md` and the SR-MPLS
 part of Phase 4 here. It gives the L3VPN lab (P2) its transport labels.
