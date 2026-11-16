@@ -36,6 +36,9 @@ module ISIS
           [(@neighbor + "\x00".b).b, @link.metric] if @link.up?
         end
 
+        # The link's name, which keys this end's Adj-SID.
+        def name = @link.name
+
         def flood(_entry) = nil
       end
 
@@ -271,6 +274,7 @@ module ISIS
       private
 
       def build_originators(sys)
+        sr = segment_routing(sys)
         (sys.levels & levels).to_h do |level|
           v4, v6 = sys.prefixes.partition { |p| IPAddr.new(p.prefix).ipv4? }
           lo = sys.loopback && IPAddr.new(sys.loopback)
@@ -285,13 +289,24 @@ module ISIS
             is_type: sys.levels == [1, 2] ? 3 : nil,
             level1_database: level == 2 && levels.include?(1) ? @router.databases[1] : nil,
             overload: sys.overload ? true : false, lifetime: @topology.lsp_lifetime,
-            refresh_interval: refresh_interval
+            refresh_interval: refresh_interval, segment_routing: sr
           )
           o.attached = true if level == 1 && sys.attached
           o.attach(Flooder.new(@router.databases[level]))
           @router.databases[level].add_generator(Generator.new(self, o))
           [level, o]
         end
+      end
+
+      # A simulated system's SegmentRouting, shared by its levels: with the
+      # file's segment_routing, for a system with an IPv4 loopback, its
+      # Router ID. Its own srgb, else the file's. Nil otherwise.
+      def segment_routing(sys)
+        sr = @topology.segment_routing or return nil
+        lo = sys.loopback && IPAddr.new(sys.loopback)
+        return nil unless lo&.ipv4?
+
+        SegmentRouting.new(router_id: lo.to_s, srgb: sys.srgb || sr[:srgb], srlb: sr[:srlb])
       end
 
       # Refreshed before the lifetime runs out (7.3.16.3): the usual

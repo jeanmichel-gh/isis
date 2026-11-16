@@ -355,7 +355,19 @@ One topic each, in this order, in isis:
      with IP routes only.
    - The adapter's route dump now skips MPLS routes, which would have
      read as IPv4 prefixes for Redistribution.
-5. **Simulator.** SIDs and SRGBs in the topology file.
+5. **Simulator.** SIDs and SRGBs in the topology file. **Built
+   2026-11-16.** A top-level `segment_routing` block turns SR on for
+   every simulated system with an IPv4 loopback; `grid.sids` numbers the
+   grid's loopbacks from r1c1; a router takes `sid` and its own `srgb`
+   (`docs/simulator.md`). Each simulated system advertises TLV 242, its
+   Prefix-SID and an Adj-SID per link, and installs nothing. Checked
+   against FRR 10.2.1 beside isis4r-sim with a 2x2 SR grid: FRR listed
+   the four simulated systems with their SRGBs, r2c2 its own
+   20000-27999, and labelled every grid SID through s1 from s1's block
+   (16101 to 17101 and on). Found on the way: with SR on, the originator
+   took a neighbour's answer to have three elements, and a simulated
+   link answers with two; fixed, with a simulator test that failed
+   before.
 
 Then routescope's views, and a lab, `isis4r-sr`, in this repository's
 `routescope/labs/`.

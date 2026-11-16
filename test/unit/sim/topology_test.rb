@@ -206,4 +206,57 @@ class TestSimTopology < Minitest::Test
     e = assert_raises(ISIS::Sim::Topology::Error) { ISIS::Sim::Topology.load("/nonexistent/sim.yml") }
     assert_match(%r{/nonexistent/sim.yml|No such file}, e.message)
   end
+
+  # --- segment routing
+
+  # The grid's sids run row by row from r1c1, on each loopback; a router
+  # may set its own sid and srgb.
+  def test_sids_and_srgbs
+    t = grid("segment_routing" => {}, "grid" => { "columns" => 3, "rows" => 2, "loopbacks" => "10.200.0.0/24", "sids" => 101 },
+             "routers" => [{ "name" => "r2c3", "sid" => 7, "srgb" => [{ "start" => 20_000, "size" => 100 }] }])
+    assert_equal({ srgb: [[16_000, 8_000]], srlb: [15_000, 1_000] }, t.segment_routing)
+    assert_equal [101, 102, 103, 104, 105, 7], t.systems.map(&:sid)
+    assert_equal({ prefix: "10.200.0.1/32", metric: 0, sid: 101 }, t.system("r1c1").prefixes.first.to_h)
+    assert_equal [[20_000, 100]], t.system("r2c3").srgb
+  end
+
+  # Without segment_routing nothing changes, and the prefixes carry no sid.
+  def test_no_segment_routing
+    assert_nil grid.segment_routing
+    assert_equal [nil], grid.systems.map(&:sid).uniq
+    assert_equal({ prefix: "10.200.0.1/32", metric: 0 }, grid.system("r1c1").prefixes.first.to_h)
+  end
+
+  # What cannot be advertised is refused, every problem at once.
+  def test_segment_routing_refusals
+    base = { "simulator" => SIM, "links" => [{ "from" => "s1", "to" => "a" }] }
+    m = refused(base.merge("routers" => [{ "name" => "a", "system_id" => "0000.0000.0001", "loopback" => "10.1.1.1", "sid" => 1 }]))
+    assert_match(/a.sid: needs a segment_routing section/, m)
+    m = refused(base.merge("segment_routing" => {}, "routers" => [{ "name" => "a", "system_id" => "0000.0000.0001", "sid" => 1 }]))
+    assert_match(/a.sid: needs an IPv4 loopback/, m)
+    m = refused(base.merge("segment_routing" => { "srgb" => [{ "start" => 15_500, "size" => 100 }] }))
+    assert_match(/segment_routing: label blocks .* overlap/, m)
+    m = refused(base.merge("segment_routing" => {}, "grid" => { "rows" => 1, "columns" => 2, "sids" => 1 }))
+    assert_match(/grid.sids: needs grid.loopbacks/, m)
+    m = refused(base.merge("segment_routing" => {}, "routers" => [{ "name" => "a", "system_id" => "0000.0000.0001",
+                                                                    "srgb" => [{ "start" => 15_000, "size" => 10 }] }]))
+    assert_match(/routers\[0\].srgb: label blocks/, m)
+  end
+
+  # One index on two systems is sendable, so it is kept, and warned of.
+  def test_an_index_twice_is_warned_of
+    t = grid("segment_routing" => {}, "routers" => [{ "name" => "r1c1", "sid" => 9 }, { "name" => "r1c2", "sid" => 9 }])
+    assert_includes t.warnings, "index 9 is the Prefix-SID of r1c1 and r1c2"
+  end
+
+  # to_h writes the SR keys, so the file reads again the same.
+  def test_to_h_keeps_segment_routing
+    t = grid("segment_routing" => { "srlb" => { "start" => 30_000, "size" => 10 } },
+             "grid" => { "columns" => 2, "rows" => 1, "loopbacks" => "10.200.0.0/24", "sids" => 1 },
+             "routers" => [{ "name" => "r1c2", "srgb" => [{ "start" => 20_000, "size" => 50 }] }])
+    again = ISIS::Sim::Topology.from_hash(t.to_h)
+    assert_equal t.segment_routing, again.segment_routing
+    assert_equal t.systems.map { [_1.sid, _1.srgb, _1.loopback, _1.prefixes.map(&:to_h)] },
+                 again.systems.map { [_1.sid, _1.srgb, _1.loopback, _1.prefixes.map(&:to_h)] }
+  end
 end

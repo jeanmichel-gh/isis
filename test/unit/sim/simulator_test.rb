@@ -40,8 +40,9 @@ class TestSimSimulator < Minitest::Test
   def start(topo = topology)
     @sim = ISIS::Sim::Simulator.new(topo, clock: @clock, scheduler: @scheduler, log: @log,
                                           host: SimHost.new(@wires, { "a" => "00:00:00:00:00:09" }))
+    sr = @dut_sr ? { segment_routing: {}, router_id: "10.0.14.1" } : {}
     @dut = ISIS::Router.new({ system_id: "0000.0000.0001", hostname: "dut", minimum_lsp_interval: 1,
-                              interfaces: [{ name: "a", ip_addresses: ["10.0.14.1"], **HELLO }] },
+                              interfaces: [{ name: "a", ip_addresses: ["10.0.14.1"], **HELLO }], **sr },
                             clock: @clock, scheduler: @scheduler, log: @log,
                             host: SimHost.new(@wires, { "a" => "00:00:00:00:00:01" }))
     @sim.start
@@ -270,5 +271,37 @@ class TestSimSimulator < Minitest::Test
     assert_raises(ArgumentError) { @sim.restore }
     @sim.flush
     assert_raises(ArgumentError) { @sim.refresh }
+  end
+
+  # Segment routing: the simulator (SRGB 17000) with an SR grid behind it,
+  # sids from 101, r2c3 with its own SRGB, and a dut running SR too (16000).
+  # The dut learns every system's block and SID, and builds its labels
+  # through s1 from s1's block.
+  def test_segment_routing
+    topo = topology("segment_routing" => {},
+                    "grid" => { "rows" => 2, "columns" => 3, "metric" => 10, "loopbacks" => "10.200.0.0/24", "sids" => 101 },
+                    "routers" => [{ "name" => "r2c3", "srgb" => [{ "start" => 20_000, "size" => 8000 }] }])
+    topo.router_config[:segment_routing] = { srgb: [{ start: 17_000, size: 8000 }] }
+    topo.router_config[:router_id] = "10.0.14.2"
+    @dut_sr = true
+    start(topo)
+    labels = @dut.decisions[1].labels
+    srgbs = labels.nodes.to_h { |node, n| [ISIS::SystemId.from_bytes(node.byteslice(0, 6)).to_s, n.srgb] }
+    assert_equal [[20_000, 27_999]], srgbs["0000.0001.0203"], "r2c3's own block"
+    assert_equal [[16_000, 23_999]], srgbs["0000.0001.0101"]
+    assert_equal [[17_000, 24_999]], srgbs["0000.0000.0009"], "s1"
+    # r2c3, index 106: in at 16106, out to s1 at 17106.
+    e = labels.entries[16_106]
+    assert_equal [:swap, "10.200.0.6/32", [17_106]], [e.op, e.fec, e.hops.map(&:last)]
+    assert_empty labels.problems
+
+    # A simulated LSP carries TLV 242, the Prefix-SID, and an Adj-SID per link.
+    lsp = held("0000.0001.0101.00-00").lsp
+    cap = lsp.tlvs.find { _1.is_a?(ISIS::Tlv::RouterCapability) }
+    assert_equal "10.200.0.1", cap.router_id.to_s
+    sid = lsp.tlvs.grep(ISIS::Tlv::ExtendedIpReachability).flat_map(&:entries).find { _1.prefix == "10.200.0.1/32" }.subtlvs.first
+    assert_equal({ flags: %w[N], algorithm: 0, index: 101 }, sid.to_hash)
+    adj = lsp.tlvs.grep(ISIS::Tlv::ExtendedIsReachability).flat_map(&:entries).map { |en| en.subtlvs.to_a.grep(ISIS::SubTlv::AdjSid).size }
+    assert_equal [1, 1, 1], adj, "r1c1 has three links: s1, r1c2, r2c1"
   end
 end

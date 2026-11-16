@@ -24,6 +24,8 @@ phase 4:
   (`isis-cli show labels`); and with `forwarding: true` installs it, label
   routes and labels pushed on IP routes. Traffic crosses FRR and isis4r
   routers on labels in the `isis4r-sr` lab (`docs/design/sr-mpls.md`).
+  isis4r-sim simulates an SR area: SIDs and SRGBs in its topology file
+  (`docs/simulator.md`).
 
 Not yet: BFD, graceful restart, multi topology, TE, SRv6 and Flex-Algo.
 `CLAUDE.md`, "Where to start", has the phases and their status.

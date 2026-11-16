@@ -94,6 +94,7 @@ links:
 | `grid` | rows by columns of systems, `r1c1` to `rRcC`, linked right and down |
 | `routers` | more systems, or more on a grid one by its name |
 | `links` | links between any two systems, the simulator included by its hostname or `sim` |
+| `segment_routing` | SR-MPLS (RFC 8667) for the simulated systems, and their blocks by default |
 
 ### grid
 
@@ -106,6 +107,7 @@ links:
 | `loopbacks` | a block: a /32 (or /128) per system, row by row, metric 0 |
 | `level` | the grid's levels, the simulator's by default |
 | `areas` | the grid's areas, the simulator's by default |
+| `sids` | with `segment_routing`: r1c1's Prefix-SID index on its loopback, each next system the next, row by row; needs `loopbacks` |
 
 ### routers
 
@@ -122,6 +124,29 @@ links:
 | `prefixes` | internal prefixes, each `{ prefix, count, metric }` |
 | `externals` | external prefixes, the same shape |
 | `lsp_buffer_size` | its LSP size budget, to spread prefixes over LSP Numbers |
+| `sid` | with `segment_routing`: its loopback's Prefix-SID index; needs an IPv4 `loopback` |
+| `srgb` | its own SRGB, a list of `{ start, size }`, in place of the file's |
+
+### segment_routing
+
+With it, every simulated system with an IPv4 loopback advertises SR-MPLS
+as isisd does (`docs/isisd.md`): TLV 242 with its SRGB and SRLB, its
+loopback's Prefix-SID when it has a `sid`, and an Adj-SID on each of its
+links. The simulator's own system takes `segment_routing` under
+`simulator:`, as isisd. No label is installed for a simulated system.
+
+| Key | Meaning |
+|---|---|
+| `srgb` | a list of `{ start, size }`, 16000 and 8000 by default |
+| `srlb` | one `{ start, size }`, 15000 and 1000 by default |
+
+```yaml
+segment_routing:
+  srgb: [{ start: 16000, size: 8000 }]
+grid: { rows: 4, columns: 4, loopbacks: 10.200.0.0/24, sids: 101 }
+routers:
+  - { name: r4c4, srgb: [{ start: 20000, size: 8000 }] }
+```
 
 ### prefixes and externals
 

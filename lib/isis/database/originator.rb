@@ -448,7 +448,8 @@ module ISIS
     def variable_tlvs
       neighbors = @circuits.filter_map do |c|
         n = c.is_neighbor or next
-        @segment_routing ? [*n.first(3), adj_sids(c, n.first)] : n
+        # [ID, metric, addresses]; a simulated link answers without addresses.
+        @segment_routing ? [n[0], n[1], n[2], adj_sids(c, n.first)] : n
       end
       reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes)
     end
