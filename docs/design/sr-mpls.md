@@ -292,7 +292,25 @@ One topic each, in this order, in isis:
 2. **Origination and config.** `router_id`, `segment_routing`, `sid`;
    TLV 242 and the sub-TLVs in our LSPs; leaking rules. Gate: FRR shows
    our SRGB, Node-SID and Adj-SIDs (`show isis segment-routing node`,
-   `show isis database detail`).
+   `show isis database detail`). **Built 2026-11-16; gate met** on a
+   line FRR f1, isis4r r1, FRR f2 at Level 2, SRGBs 16000, 17000 and
+   18000. FRR f1 listed r1 in `show isis segment-routing node` with
+   17000-24999 and 15000-15999; decoded r1's TLV 242 (I set, Router ID
+   10.255.0.2), its Adj-SIDs 15001 and 15000 (V and L), and its
+   Prefix-SID index 2 with N; and swapped 16003 to 17003 toward f2
+   through r1. As built:
+   - `ISIS::SegmentRouting` (`database/segment_routing.rb`) holds the
+     blocks, builds TLV 242, and gives Adj-SID labels from the SRLB,
+     one per circuit and neighbor, kept while isisd runs. Both levels
+     share it, so a point to point adjacency at both has one label.
+   - A configuration that cannot be advertised is refused: overlapping
+     blocks, labels under 16, an empty block, no Router ID.
+   - The Decision Process keeps each route's Prefix-SID
+     (`Spf::Route#sid`). Leak and Summary pass it on, and the
+     originator writes it with R and P set and E clear. A summary
+     carries none.
+   - `adj_sid: false` on an interface turns its Adj-SIDs off.
+   - With IPv6, each adjacency gets a second Adj-SID with F.
 3. **Calculation and API.** The label table, `show.labels`,
    `show.segment_routing`. Gate: our table matches FRR's
    `show mpls table` on the same topology.

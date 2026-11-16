@@ -29,6 +29,13 @@ module ISIS
   #            IPv6 addresses assigned to the IS")
   #   TLV 236  the configured IPv6 prefixes, after the IPv4 ones, in every
   #            metric style, since TLV 236 has only a wide metric
+  #   TLV 242  with segment routing, in LSP 0: the Router Capability with
+  #            the SRGB, SR-Algorithm 0 and the SRLB (RFC 8667 section 3)
+  #
+  # With segment routing (SegmentRouting), TLV 22 entries also carry
+  # Adj-SIDs, or LAN-Adj-SIDs toward a pseudonode, and the wide TLV 135
+  # and TLV 236 entries a Prefix-SID: a configured prefix's from its sid:,
+  # a leaked or summarized one's from the route it came from.
   #
   # A system with IPv6 lists :ipv6 in protocols, which RFC 5308 section 4
   # asks of it: "it MUST advertise this in the "NLPID" TLV".
@@ -114,7 +121,7 @@ module ISIS
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
-    attr_reader :overload, :attached
+    attr_reader :overload, :attached, :segment_routing
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
@@ -122,7 +129,7 @@ module ISIS
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
-                   hostname: nil, lifetime: Database::MAX_AGE)
+                   hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -139,6 +146,8 @@ module ISIS
       @areas = areas
       @protocols = protocols
       @hostname = hostname
+      # A SegmentRouting, or nil: without it nothing of RFC 8667 is sent.
+      @segment_routing = segment_routing
       @ip_addresses = ip_addresses
       @ipv6_addresses = ipv6_addresses
       @ipv6_prefixes = ipv6_prefixes
@@ -427,14 +436,46 @@ module ISIS
       list << Tlv::DynamicHostname.new(@hostname) if @hostname
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
+      list << @segment_routing.capability if @segment_routing
       list
     end
 
-    # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
-    def variable_tlvs
-      reachability(@circuits.filter_map(&:is_neighbor), @prefixes, @external_prefixes, @leaked_prefixes,
-                   @area_prefixes)
-    end
+# The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
+# With segment routing, each neighbour carries its Adj-SIDs as a fourth
+# element: a point to point neighbour its own (RFC 8667 section 2.2.1),
+# the entry to a LAN's pseudonode one LAN-Adj-SID per neighbour Up on
+# that LAN (section 2.2.2).
+def variable_tlvs
+  neighbors = @circuits.filter_map do |c|
+    n = c.is_neighbor or next
+    @segment_routing ? [*n.first(3), adj_sids(c, n.first)] : n
+  end
+  reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes)
+end
+
+def adj_sids(circuit, id)
+  name = circuit.respond_to?(:name) ? circuit.name : circuit.circuit.name
+  if id.getbyte(-1).zero?
+    @segment_routing.adj_sids(name, id.byteslice(0, 6))
+  else
+    @segment_routing.lan_adj_sids(name, circuit.up_neighbors.map { |n| n.system_id.b })
+  end
+end
+
+# A prefix as TLV 135 or 236 takes it: its prefix and metric, and with
+# segment routing the Prefix-SID its configuration gives.
+def own_prefix(p)
+  h = p.slice(:prefix, :metric)
+  sid = @segment_routing && SegmentRouting.prefix_sid(p)
+  sid ? h.merge(subtlvs: [sid]) : h
+end
+
+# A prefix from the other level with the Prefix-SID its route came
+# with, propagated as RFC 8667 section 2.1.2 says.
+def carried(p, h)
+  sid = @segment_routing && SegmentRouting.propagated_sid(p[:sid])
+  sid ? h.merge(subtlvs: [sid]) : h
+end
 
     # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
     # and +prefixes+, then +externals+, then +leaked+, then +area+, in the
@@ -445,7 +486,8 @@ module ISIS
       area6, area4 = area.partition { |p| p.fetch(:prefix).include?(":") }
       externals6, externals = externals.partition { |p| p.fetch(:prefix).include?(":") }
       capped = ->(p) { p.slice(:prefix, :metric).merge(metric: [p.fetch(:metric), Tlv::NarrowMetrics::VALUE].min) }
-      down = ->(p) { p.slice(:prefix, :metric).merge(up_down: true) }
+      down = ->(p) { carried(p, p.slice(:prefix, :metric).merge(up_down: true)) }
+      across = ->(p) { carried(p, p.slice(:prefix, :metric)) }
       narrow_down = ->(p) { capped.call(p).merge(up_down: true) }
       if @metric_style != :wide
         # The Virtual Flag takes the first octet of each TLV 2's value, and
@@ -456,7 +498,7 @@ module ISIS
           Tlv::IsReachability::Entry.new(metrics: metrics, neighbor: id)
         end
         list.concat(pack(Tlv::IsReachability, narrow, overhead: 1))
-        internal = prefixes + leaked4.reject { |p| p[:external] }.map(&narrow_down) +
+        internal = prefixes.map { |p| p.slice(:prefix, :metric) } + leaked4.reject { |p| p[:external] }.map(&narrow_down) +
                    area4.reject { |p| p[:external] }.map(&capped)
         reach = internal.map { |p| Tlv::IpInternalReachability.new(p).entries.first }
         list.concat(pack(Tlv::IpInternalReachability, reach))
@@ -466,18 +508,18 @@ module ISIS
         list.concat(pack(Tlv::IpExternalReachability, reach))
       end
       if @metric_style != :narrow
-        wide = neighbors.map do |id, metric, addresses|
-          Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric, subtlvs: link_subtlvs(addresses))
+        wide = neighbors.map do |id, metric, addresses, sids|
+          Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric, subtlvs: link_subtlvs(addresses, sids))
         end
         list.concat(pack(Tlv::ExtendedIsReachability, wide))
-        reach = (prefixes + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down) +
-                 area4.map { |p| p.slice(:prefix, :metric) }).map do |p|
+        reach = (prefixes.map { |p| own_prefix(p) } + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down) +
+                 area4.map(&across)).map do |p|
           Tlv::ExtendedIpReachability.new(p).entries.first
         end
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
-      reach6 = (@ipv6_prefixes + externals6.map { |p| p.slice(:prefix, :metric).merge(external: true) } +
-                leaked6.map(&down) + area6.map { |p| p.slice(:prefix, :metric) }).map do |p|
+      reach6 = (@ipv6_prefixes.map { |p| own_prefix(p) } + externals6.map { |p| p.slice(:prefix, :metric).merge(external: true) } +
+                leaked6.map(&down) + area6.map(&across)).map do |p|
         Tlv::Ipv6Reachability.new(p).entries.first
       end
       list.concat(pack(Tlv::Ipv6Reachability, reach6))
@@ -485,13 +527,18 @@ module ISIS
     end
 
     # TLV 22 sub-TLVs 6 and 8 for a circuit's link addresses, { interface:,
-    # neighbor: }, either may be absent (RFC 5305 sections 3.2 and 3.3).
-    def link_subtlvs(addresses)
+    # neighbor: }, either may be absent (RFC 5305 sections 3.2 and 3.3),
+    # then the Adj-SIDs, hashes keyed as a sub-TLV list keys them.
+    def link_subtlvs(addresses, sids = nil)
       list = SubTlv::List.new(Tlv::ExtendedIsReachability::TYPE)
-      return list unless addresses
-
-      list << SubTlv::Ipv4InterfaceAddress.new(addresses[:interface]) if addresses[:interface]
-      list << SubTlv::Ipv4NeighborAddress.new(addresses[:neighbor]) if addresses[:neighbor]
+      if addresses
+        list << SubTlv::Ipv4InterfaceAddress.new(addresses[:interface]) if addresses[:interface]
+        list << SubTlv::Ipv4NeighborAddress.new(addresses[:neighbor]) if addresses[:neighbor]
+      end
+      Array(sids).each do |h|
+        key, value = h.first
+        list << SubTlv.key_under(Tlv::ExtendedIsReachability::TYPE, key).new(value)
+      end
       list
     end
 

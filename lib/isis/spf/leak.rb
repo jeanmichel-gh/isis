@@ -68,7 +68,7 @@ module ISIS
 
       def choose
         chosen = @routes.values.reject(&:local?).select { |r| @policy.call(r) }.sort_by(&:prefix).map do |r|
-          { prefix: r.prefix, metric: r.metric, external: r.external ? true : nil }.compact
+          { prefix: r.prefix, metric: r.metric, external: r.external ? true : nil, sid: r.sid&.to_hash }.compact
         end
         return if chosen == @leaked
 

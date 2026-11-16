@@ -18,10 +18,11 @@ Phases 1 and 2 of the plan, and the first gate of phase 3:
   through netlink.
 - Route leaking, summaries and redistribution.
 
-Segment routing (RFC 8667) is decoded and built, not yet run: TLV 242
-with SR-Capabilities, SR-Algorithm and SR Local Block, the Prefix-SID,
-the Adj-SID and the LAN-Adj-SID read FRR's LSPs and replay them
-(`docs/design/sr-mpls.md`, PR 1 of 5).
+Segment routing (RFC 8667), advertised but not yet forwarded: with
+`segment_routing` in its configuration isisd sends TLV 242 (SRGB, SRLB),
+a Prefix-SID per prefix with a `sid`, and Adj-SIDs, and FRR reads them.
+Labels are not computed or installed yet (`docs/design/sr-mpls.md`, PRs
+1 and 2 of 5).
 
 Not yet: BFD, graceful restart, multi topology, TE, segment routing as
 a router, and Flex-Algo. `CLAUDE.md`, "Where to start", has the phases and their status.

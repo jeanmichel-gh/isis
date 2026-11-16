@@ -1762,7 +1762,7 @@ request that moves a gate. The paragraph after it has the detail.
 | 3, enhanced router | 1 policy | Done, FRR 8.4.4, 2026-11-02 |
 | | 2 failure handling (BFD, RFC 8706) | Not started |
 | | 3 topologies and TE | Not started; TLV 22 sub-TLVs 6 and 8 only, 2026-11-15 |
-| 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | SR-MPLS designed and approved 2026-11-16 (`docs/design/sr-mpls.md`); its codec built 2026-11-16 (PR 1 of 5), against an FRR 10.2.1 LSP; origination, calculation and forwarding not started. The rest not started |
+| 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | SR-MPLS designed and approved 2026-11-16 (`docs/design/sr-mpls.md`); its codec built 2026-11-16 (PR 1 of 5), against an FRR 10.2.1 LSP; origination built the same day (PR 2), FRR 10.2.1 reading isis4r's SRGB, Prefix-SID and Adj-SIDs; calculation and forwarding not started. The rest not started |
 
 Not started was measured by searching `lib/` and `exe/`: nothing for BFD,
 RFC 8706, multi topology, TLVs 222 or 229, or TE. The TE gate is not

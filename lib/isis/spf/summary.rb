@@ -73,7 +73,7 @@ module ISIS
           summary ? covered[summary] << route : uncovered << route
         end
         chosen = uncovered.reject(&:local?).map do |r|
-          { prefix: r.prefix, metric: r.metric, external: r.external ? true : nil }.compact
+          { prefix: r.prefix, metric: r.metric, external: r.external ? true : nil, sid: r.sid&.to_hash }.compact
         end
         covered.each do |summary, routes|
           chosen << { prefix: summary.fetch(:prefix), metric: summary.fetch(:metric) { routes.map(&:metric).min } }
