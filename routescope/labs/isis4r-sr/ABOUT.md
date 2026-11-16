@@ -40,6 +40,18 @@ Measured on the VM, 2026-11-16, isis4r at isis 7ad1b77:
 
 Not measured yet: routescope's SR nodes table listing the grid, and the grid's `sim` actions (a link down, a router overloaded) moving these labels. Both should follow from the above; watch r2's MPLS labels.
 
+## Scenario
+
+`scenarios/sr-break.yml`, "Break the SR path", runs in routescope's Scenarios panel:
+
+1. It checks f2's Node-SID along the line: f1 swaps 16004 to 17004, r1 swaps 17004 to 18004, and r2 pops it. Each entry is installed in the kernel.
+2. It checks the IS-IS routes push 17004 on f1 and 18004 on r1, and that r2 swaps 18101 into s1's block, 19101.
+3. A ping from f1's loopback crosses to f2's.
+4. It takes r1's eth2 down: r1 withdraws its route and 17004, keeps 17001 toward f1, and the ping fails.
+5. It brings eth2 back up: the route, 17004 to 18004, and the ping come back.
+
+On the VM on 2026-11-16, with routescope at e20935b, it passed twice: 18 of 18 steps, in 15 s and 14 s. The route went 2.7 s after the link, and came back 1.4 s and 0.8 s after it.
+
 ## Running it
 
 The host needs the `mpls_router` and `mpls_iptunnel` modules; the lab VMs load them at boot. Each isis4r node sets `net.mpls.platform_labels` through /proc, since the isis4r image has no `sysctl`, and isisd turns on MPLS input on its own interfaces. The FRR nodes set both in `exec`.

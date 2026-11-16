@@ -1,0 +1,50 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: Break the SR path
+description: >
+  f1 pings f2's loopback from its own, on labels: f1 pushes 17004, r1
+  swaps it to 18004, r2 pops it. Each label comes from the next router's
+  SRGB. r1's link to r2 fails: r1 withdraws every label through it, and
+  f1 loses the ping. When the link comes back, the labels and the ping
+  come back.
+timeout: 180
+
+steps:
+  - expect: { isis_adjacencies: { node: r1, level: 2, up: 2 } }
+    within: 60
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.4/32, metric: 30 } }
+    within: 60
+  # The line's labels for f2's Node-SID, index 4: in each router's own
+  # block, out in the next one's.
+  - expect: { mpls_label: { node: f1, label: 16004, op: swap, out_label: 17004, next_hop: r1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 17004, op: swap, out_label: 18004, next_hop: r2, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r2, label: 18004, op: php, next_hop: f2, state: installed } }
+    within: 30
+  - expect: { isis_route: { node: f1, prefix: 10.255.0.4/32, label: 17004 } }
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.4/32, label: 18004 } }
+  # Toward the simulated grid behind s1: r2 swaps into s1's block.
+  - expect: { mpls_label: { node: r2, label: 18101, op: swap, out_label: 19101, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { ping: { node: f1, from: 10.255.0.1, to: 10.255.0.4 } }
+    within: 30
+  - interface: r1:eth2
+    state: down
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.4/32, present: false } }
+    within: 60
+    measure: lost
+  - expect: { mpls_label: { node: r1, label: 17004, present: false } }
+    within: 30
+  # What stays is toward f1.
+  - expect: { mpls_label: { node: r1, label: 17001, op: php, next_hop: f1, state: installed } }
+  - expect: { ping: { node: f1, from: 10.255.0.1, to: 10.255.0.4, count: 2, reachable: false } }
+    within: 30
+  - interface: r1:eth2
+    state: up
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.4/32, metric: 30 } }
+    within: 60
+    measure: restored
+  - expect: { mpls_label: { node: r1, label: 17004, out_label: 18004, state: installed } }
+    within: 30
+  - expect: { ping: { node: f1, from: 10.255.0.1, to: 10.255.0.4 } }
+    within: 30
