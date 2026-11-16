@@ -5,6 +5,11 @@
 #   16000   17000   18000   16000     SRGB start
 #   idx 1   idx 2   idx 3   idx 4     loopback Node-SIDs, 10.255.0.N/32
 #       10.0.12.0/30    10.0.23.0/30    10.0.34.0/30
+#                         |
+#                         s1 (isis4r-sim), 10.0.35.0/30, SRGB 19000, idx 9
+#                         |
+#                     3x3 SR grid, r1c1 .. r3c3, Node-SIDs 101 .. 109
+#                     on 10.200.0.1 .. 9; r3c3 with SRGB 21000 (s1/sim.yml)
 #
 # The SRGBs differ, so a label taken from the wrong block shows. A ping
 # from f1's loopback to f2's goes f1 -> r1 on 17004, r1 swaps it to
@@ -43,11 +48,26 @@ topology:
       binds: [r2:/etc/isis4r]
       entrypoint: sh
       cmd: >-
-        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
-        ip addr add 10.0.23.2/30 dev eth1; ip addr add 10.0.34.1/30 dev eth2;
+        -c "until ip link show eth3 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.23.2/30 dev eth1; ip addr add 10.0.34.1/30 dev eth2; ip addr add 10.0.35.1/30 dev eth3;
         ip addr add 10.255.0.3/32 dev lo; ip route del default dev eth0 2>/dev/null;
         echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
         exec isisd -c /etc/isis4r/isisd.yml -l -"
+    # s1 simulates the grid; the same image as r1 and r2, told apart by
+    # its command and its labels.
+    s1:
+      kind: linux
+      image: isis4r:latest
+      labels:
+        routescope.kind: isis4r-sim
+        routescope.protocols: isis
+      binds: [s1:/lab]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth1 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.35.2/30 dev eth1; ip addr add 10.255.0.9/32 dev lo;
+        ip route del default dev eth0 2>/dev/null;
+        exec isis4r-sim -c /lab/sim.yml -l -"
     f1:
       kind: linux
       image: quay.io/frrouting/frr:10.2.1
@@ -66,3 +86,4 @@ topology:
     - endpoints: ["f1:eth1", "r1:eth1"]
     - endpoints: ["r1:eth2", "r2:eth1"]
     - endpoints: ["r2:eth2", "f2:eth1"]
+    - endpoints: ["r2:eth3", "s1:eth1"]

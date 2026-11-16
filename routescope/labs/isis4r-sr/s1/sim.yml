@@ -1,0 +1,47 @@
+# s1, the simulator: a real IS-IS system on eth1, toward r2, with a 3x3
+# grid of simulated systems behind it, all Level 2 in 49.0001, all with
+# SR-MPLS (isis docs/simulator.md, segment_routing).
+#
+#   r2 -- s1 -- r1c1 -- r1c2 -- r1c3
+#                 |       |       |
+#                r2c1 -- r2c2 -- r2c3
+#                 |       |       |
+#                r3c1 -- r3c2 -- r3c3
+#
+# Grid System IDs from 0000.0001.0000, row then column: r1c1 is
+# 0000.0001.0101. Loopbacks 10.200.0.1 (r1c1) to 10.200.0.9 (r3c3), each
+# with its Node-SID, 101 to 109. Every simulated system's SRGB starts at
+# 16000, but r3c3's at 21000, so a label from the wrong block shows. s1's
+# own starts at 19000.
+#
+# Simulated systems forward nothing: labels toward the grid show in every
+# router's table, and traffic stops at s1.
+simulator:
+  system_id: 0000.0000.0009
+  hostname: s1
+  areas: [49.0001]
+  level: 2
+  metric_style: wide
+  minimum_lsp_interval: 1
+  router_id: 10.255.0.9
+  segment_routing:
+    srgb: [{ start: 19000, size: 8000 }]
+    srlb: { start: 15000, size: 1000 }
+  prefixes:
+    - { prefix: 10.255.0.9/32, metric: 0, sid: 9 }
+  interfaces:
+    - { name: eth1, ip_addresses: [10.0.35.2], metric: 10, hello_interval: 1, hello_multiplier: 3 }
+segment_routing:
+  srgb: [{ start: 16000, size: 8000 }]
+  srlb: { start: 15000, size: 1000 }
+grid:
+  columns: 3
+  rows: 3
+  metric: 10
+  system_id_base: 0000.0001.0000
+  loopbacks: 10.200.0.0/24
+  sids: 101
+routers:
+  - { name: r3c3, srgb: [{ start: 21000, size: 8000 }] }
+links:
+  - { from: s1, to: r1c1, metric: 10 }
