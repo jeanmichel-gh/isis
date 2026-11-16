@@ -73,8 +73,10 @@ module ISIS
     # local. +external+ is true for a route of the external metric type,
     # from an entry with I/E set (RFC 5302 section 3), and +up_down+ for one
     # whose entry had the up/down bit, an "L2->L1 inter-area" route. +sid+
-    # is the chosen entry's Prefix-SID (SubTlv::PrefixSid), or nil.
-    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down, :sid) do
+    # is the chosen entry's Prefix-SID (SubTlv::PrefixSid), or nil, and
+    # +origin+ the node ID (System ID and pseudonode octet) that advertised
+    # it, the first one at an equal key.
+    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down, :sid, :origin) do
       def local?
         adjacencies.empty?
       end
@@ -237,7 +239,7 @@ module ISIS
           held = @routes[prefix]
           if held.nil? || (key <=> @keys[prefix]).negative?
             @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil,
-                                        offer.up_down || nil, offer.sid)
+                                        offer.up_down || nil, offer.sid, node)
             @keys[prefix] = key
           elsif key == @keys[prefix] && !held.local?
             held.adjacencies = path.adjacencies.empty? ? [] : prune(held.adjacencies | path.adjacencies)

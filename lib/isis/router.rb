@@ -296,7 +296,8 @@ module ISIS
       d = Spf::Decision.new(system_id: @system_id, database: @databases[level], scheduler: @scheduler, log: @log,
                             forwarding: @adapters[level],
                             attached_flag: both? && level == 2 ? @originators[1] : nil,
-                            leak: level == 2 ? @leak : nil, summary: level == 1 ? @summary : nil)
+                            leak: level == 2 ? @leak : nil, summary: level == 1 ? @summary : nil,
+                            segment_routing: @segment_routing)
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))

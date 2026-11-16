@@ -78,12 +78,62 @@ module ISIS
 
       def routes(level: nil)
         @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
+          labels = @router.decisions[l].labels
           @router.decisions[l].routes.values.map do |r|
-            { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
-              up_down: r.up_down ? true : false,
-              next_hops: r.adjacencies.map { |a| { address: a.next_hop(r.family), interface: interface_of(a.circuit) } } }
+            row = { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
+                    up_down: r.up_down ? true : false,
+                    next_hops: r.adjacencies.map do |a|
+                      hop = { address: a.next_hop(r.family), interface: interface_of(a.circuit) }
+                      label = labels&.out_label(r.prefix, a)
+                      label ? hop.merge(label: label) : hop
+                    end }
+            r.sid&.index ? row.merge(sid: r.sid.index) : row
           end
         end
+      end
+
+      # The label table each level's last SPF run gave (Spf::Labels), one
+      # row per in-label: its kind, what it is for, what is done with it,
+      # and each next hop with the label it leaves with, 3 being implicit
+      # null, a pop. Empty without segment routing.
+      def labels(level: nil)
+        names = hostnames
+        @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
+          table = @router.decisions[l].labels or next []
+          table.entries.values.sort_by(&:label).map do |e|
+            fec = e.kind == :adj_sid ? names.fetch(SystemId.from_bytes(e.fec).to_s, SystemId.from_bytes(e.fec).to_s) : e.fec
+            { level: l, label: e.label, kind: e.kind.to_s, fec: fec, op: e.op.to_s,
+              next_hops: e.hops.map do |a, out|
+                { address: a.next_hop(e.kind == :adj_sid || !e.fec.include?(":") ? :ipv4 : :ipv6),
+                  interface: interface_of(a.circuit), label: out }
+              end }
+          end
+        end
+      end
+
+      # This system's segment routing and what it learned: its blocks and
+      # Adj-SIDs, then per level each reachable system's SRGB and
+      # algorithms, and the problems the last run met. { enabled: false }
+      # without it.
+      def segment_routing
+        sr = @router.segment_routing or return { enabled: false }
+        names = hostnames
+        span = ->(first, size) { "#{first}-#{first + size - 1}" }
+        { enabled: true, router_id: sr.router_id.to_s, srgb: sr.srgb.map { |f, s| span.(f, s) },
+          srlb: span.(*sr.srlb),
+          adj_sids: sr.adj_labels.map do |(circuit, neighbor, family), label|
+            id = SystemId.from_bytes(neighbor).to_s
+            { interface: interface_of(circuit), neighbor: names.fetch(id, id), family: family.to_s, label: label }
+          end,
+          levels: @router.levels.to_h do |l|
+            table = @router.decisions[l].labels
+            nodes = (table&.nodes || {}).map do |node, n|
+              id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
+              { system_id: id, hostname: names[id], srgb: n.srgb&.map { |a, b| "#{a}-#{b}" },
+                algorithms: n.algorithms }
+            end
+            [l, { nodes: nodes, problems: table&.problems || [] }]
+          end }
       end
 
       # One level's database as a topology, for a reader such as a BGP-LS

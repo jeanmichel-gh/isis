@@ -313,7 +313,26 @@ One topic each, in this order, in isis:
    - With IPv6, each adjacency gets a second Adj-SID with F.
 3. **Calculation and API.** The label table, `show.labels`,
    `show.segment_routing`. Gate: our table matches FRR's
-   `show mpls table` on the same topology.
+   `show mpls table` on the same topology. **Built 2026-11-16; gate
+   met** on a line FRR f1, isis4r r1, FRR f2, FRR f3 at Level 2, SRGBs
+   16000, 17000, 18000, 20000. Every label r1 sends an FRR neighbor is
+   one that neighbor holds (17004 swaps to 18004, which f2 holds; each
+   pop goes to the prefix's owner), and every label f1 and f2 send r1 is
+   one r1 holds (17003, 17004, 17001). On a line of three isis4r routers
+   with FRR's frr-sr SRGBs, isis4r's tables are FRR's, label for label
+   (`test/unit/spf/labels_test.rb`). As built:
+   - `Spf::Labels` (`spf/labels.rb`) runs after each SPF run when the
+     router runs SR. `Spf::Route#origin` names the prefix's advertiser,
+     for PHP.
+   - A local prefix gets a pop label only with P set, as FRR does.
+   - A Prefix-SID that is a label, not an index, is not used. Two
+     prefixes with one index are both left out (open question 2 stands).
+   - Problems are logged once each, at warn, and listed in
+     `show.segment_routing`.
+   - `show.routes` gains `sid` and each next hop's `label`. `isis-cli
+     show labels` and `show segment_routing`.
+   - Labels per level: each level has its own table. Question 3 is
+     PR 4's.
 4. **Forwarding.** Netlink label routes and encap. Gate: traffic below.
 5. **Simulator.** SIDs and SRGBs in the topology file.
 
