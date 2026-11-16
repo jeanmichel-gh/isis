@@ -4,7 +4,8 @@ require_relative "../../test_helper"
 
 # TLV 22 sub-TLVs 6 and 8, RFC 5305 sections 3.2 and 3.3: type, length 4,
 # then a four octet IPv4 address. Expected hex is our own arithmetic from
-# section 3's table.
+# section 3's table. Then the Adj-SID and LAN-Adj-SID of RFC 8667 section
+# 2.2; the Adj-SID with label 15000 is also what FRR 10.2.1 sent.
 class TestSubTlvExtendedIsReachability < Minitest::Test
   def octets(hex)
     ISIS::Octets.from_hex(hex)
@@ -83,5 +84,53 @@ class TestSubTlvExtendedIsReachability < Minitest::Test
     assert_equal [{ neighbor: "0000.0000.0002.00", metric: 10,
                     subtlvs: [{ ipv4_interface_address: "192.0.2.1" }, { ipv4_neighbor_address: "192.0.2.2" }] }],
                  again.to_hash
+  end
+
+  def replays(klass, hex)
+    s = klass.new(octets(hex))
+    assert_equal hex, s.to_shex, "#{klass} replays"
+    assert_equal hex, klass.new(s.to_hash).to_shex, "#{klass} rebuilds from its hash"
+    assert_equal hex, klass.new(s).to_shex, "#{klass} copies"
+    s
+  end
+
+  # Adj-SID, section 2.2.1: 1f type (31), 05 length, flags, weight, then a
+  # 3-octet label. V 0x20 and L 0x10, "By default, the flag is SET". This
+  # is FRR's, label 15000.
+  def test_adj_sid
+    s = ISIS::SubTlv::AdjSid.new(label: 15000)
+    assert_equal "1f053000003a98", s.to_shex
+    assert_equal({ flags: %w[V L], label: 15000 }, replays(ISIS::SubTlv::AdjSid, s.to_shex).to_hash)
+  end
+
+  # F 0x80, B 0x40, V 0x20, L 0x10, S 0x08, P 0x04; weight in its own octet.
+  def test_adj_sid_flags_and_weight
+    s = ISIS::SubTlv::AdjSid.new(label: 15001, weight: 2, flags: %w[B V L P])
+    assert_equal "1f057402003a99", s.to_shex
+    assert_equal({ flags: %w[B V L P], weight: 2, label: 15001 }, replays(ISIS::SubTlv::AdjSid, s.to_shex).to_hash)
+  end
+
+  # LAN-Adj-SID, section 2.2.2: 20 type (32), flags, weight, the
+  # neighbor's System ID, then the label. 2 + 6 + 3 is 11, 0b.
+  def test_lan_adj_sid
+    s = ISIS::SubTlv::LanAdjSid.new(neighbor: "0000.0000.0002", label: 15001)
+    assert_equal "200b3000" "000000000002" "003a99", s.to_shex
+    assert_equal({ neighbor: "0000.0000.0002", flags: %w[V L], label: 15001 },
+                 replays(ISIS::SubTlv::LanAdjSid, s.to_shex).to_hash)
+    assert_match(/LAN-Adj-SID 0000.0000.0002 label 15001/, s.to_s)
+  end
+
+  # Too short for a System ID: the octets are the SID alone, and replay.
+  def test_lan_adj_sid_without_room_for_a_neighbor
+    s = replays(ISIS::SubTlv::LanAdjSid, "20053000003a99")
+    assert_nil s.neighbor
+  end
+
+  # Adj-SID and LAN-Adj-SID under 22 (RFC 8667 section 2.2); under 135
+  # the same numbers stay unknown.
+  def test_adj_sids_registered_under_tlv_22
+    adj = ISIS::SubTlv::List.parse_under(22, octets("1f053000003a98" "200b3000000000000002003a99"))
+    assert_equal [ISIS::SubTlv::AdjSid, ISIS::SubTlv::LanAdjSid], adj.map(&:class)
+    assert_instance_of ISIS::SubTlv::Unknown, ISIS::SubTlv::List.parse_under(135, octets("1f053000003a98")).first
   end
 end
