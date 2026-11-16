@@ -8,7 +8,8 @@ isis4r, an IS-IS router in Ruby, with a daemon (`isisd`), a CLI
 
 ## What works
 
-Phases 1 and 2 of the plan, and the first gate of phase 3:
+Phases 1 and 2 of the plan, the first gate of phase 3, and SR-MPLS from
+phase 4:
 
 - Point to point and LAN adjacencies, the RFC 5303 three-way handshake,
   the DIS election and pseudonode LSPs.
@@ -17,16 +18,15 @@ Phases 1 and 2 of the plan, and the first gate of phase 3:
 - SPF for IPv4 and IPv6, ECMP, overload and attached, and routes installed
   through netlink.
 - Route leaking, summaries and redistribution.
+- Segment routing over MPLS (RFC 8667): with `segment_routing` in its
+  configuration isisd sends TLV 242 (SRGB, SRLB), a Prefix-SID per prefix
+  with a `sid`, and Adj-SIDs; computes the label table after each SPF run
+  (`isis-cli show labels`); and with `forwarding: true` installs it, label
+  routes and labels pushed on IP routes. Traffic crosses FRR and isis4r
+  routers on labels in the `isis4r-sr` lab (`docs/design/sr-mpls.md`).
 
-Segment routing (RFC 8667), advertised but not yet forwarded: with
-`segment_routing` in its configuration isisd sends TLV 242 (SRGB, SRLB),
-a Prefix-SID per prefix with a `sid`, and Adj-SIDs, and FRR reads them.
-The label table is computed after each SPF run (`isis-cli show labels`)
-and agrees with FRR's, but is not installed yet (`docs/design/sr-mpls.md`,
-PRs 1 to 3 of 5).
-
-Not yet: BFD, graceful restart, multi topology, TE, segment routing as
-a router, and Flex-Algo. `CLAUDE.md`, "Where to start", has the phases and their status.
+Not yet: BFD, graceful restart, multi topology, TE, SRv6 and Flex-Algo.
+`CLAUDE.md`, "Where to start", has the phases and their status.
 
 ## Run it as a router
 
@@ -62,6 +62,7 @@ with routescope's `routescope-labs` command:
 routescope-labs install isis/isis4r-frr
 routescope-labs install isis/isis4r-areas
 routescope-labs install isis/isis4r-areas-core
+routescope-labs install isis/isis4r-sr
 ```
 
 ## Run the demo

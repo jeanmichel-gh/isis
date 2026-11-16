@@ -46,6 +46,8 @@ module ISIS
       # A SegmentRouting, or nil: with one, each run also builds the label
       # table (Spf::Labels).
       attr_accessor :segment_routing
+      # A Forwarding::LabelTable the label table is installed through, or nil.
+      attr_accessor :label_table
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -129,6 +131,7 @@ module ISIS
         why = reasons.uniq.first(3).join("; ")
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
+        old_labels = @labels
         label(calc) if @segment_routing
         @leak.update(@routes) if level == 2 && @leak
         @summary.update(@routes) if level == 1 && @summary
@@ -137,7 +140,8 @@ module ISIS
                   kind: :spf, level: level, run: @runs, systems: @paths.size, prefixes: @routes.size,
                   reasons: reasons.uniq.first(REASONS_KEPT), more: [reasons.uniq.size - REASONS_KEPT, 0].max)
         report(before, @routes, why)
-        install(before, @routes)
+        install(before, @routes, old_labels)
+        @label_table&.update(level, @labels)
         @routes
       end
 
@@ -149,20 +153,20 @@ module ISIS
                         max_path_splits: @max_path_splits, max_path_metric: @max_path_metric).run
       end
 
-private
+      private
 
-DEFAULT = "0.0.0.0/0"
+      DEFAULT = "0.0.0.0/0"
 
-# The label table for this run's routes. A problem is logged once,
-# when it first appears, at warn: it is a label not installed.
-def label(calc)
-  before = @labels&.problems || []
-  adjacencies = @circuits.flat_map(&:spf_adjacencies).map { |_, _, a| a }
-  @labels = Labels.new(own: @segment_routing, database: @database, paths: calc.paths).build(@routes, adjacencies)
-  (@labels.problems - before).each do |p|
-    @log.warn("Level #{level} segment routing: #{p}", kind: :sr, level: level)
-  end
-end
+      # The label table for this run's routes. A problem is logged once,
+      # when it first appears, at warn: it is a label not installed.
+      def label(calc)
+        before = @labels&.problems || []
+        adjacencies = @circuits.flat_map(&:spf_adjacencies).map { |_, _, a| a }
+        @labels = Labels.new(own: @segment_routing, database: @database, paths: calc.paths).build(@routes, adjacencies)
+        (@labels.problems - before).each do |p|
+          @log.warn("Level #{level} segment routing: #{p}", kind: :sr, level: level)
+        end
+      end
 
       def add_default(attached)
         return if attached.nil?
@@ -183,10 +187,13 @@ end
       end
 
       # Each route operation, in prefix order, to the adapter.
-      def install(before, after)
+      # The IP routes, each next hop with the label it pushes when there is
+      # a label table.
+      def install(before, after, old_labels = nil)
         return unless @forwarding
 
-        Forwarding.operations(before, after, level: level).each { |op| @forwarding.apply(op) }
+        labels = [old_labels&.out_labels, @labels&.out_labels]
+        Forwarding.operations(before, after, level: level, labels: labels).each { |op| @forwarding.apply(op) }
       end
 
       def report(before, after, why)

@@ -40,4 +40,28 @@ class TestRouterHost < Minitest::Test
   def test_forwarding_priority_by_level
     assert_equal [21, 22], [1, 2].map { |l| @host.forwarding(l).priority }
   end
+
+  # MPLS: net.mpls.conf.IF.input set to 1 for each interface the kernel
+  # has, when net.mpls.platform_labels reaches the highest label.
+  def mpls_host
+    root = File.join(@dir, "mpls")
+    FileUtils.mkdir_p(File.join(root, "conf", "eth1"))
+    File.write(File.join(root, "conf", "eth1", "input"), "0\n")
+    File.write(File.join(root, "platform_labels"), "100000\n")
+    [ISIS::Router::Host.new(log: nil, proc_mpls: root), root]
+  end
+
+  def test_mpls_input_is_set
+    host, root = mpls_host
+    assert_nil host.mpls(%w[eth1 eth9], highest: 24_999)
+    assert_equal "1\n", File.read(File.join(root, "conf", "eth1", "input"))
+  end
+
+  def test_mpls_says_why_not
+    host, root = mpls_host
+    assert_match(/platform_labels is 100000, and labels go up to 100000/, host.mpls(%w[eth1], highest: 100_000))
+    assert_equal "0\n", File.read(File.join(root, "conf", "eth1", "input")), "nothing set"
+    none = ISIS::Router::Host.new(log: nil, proc_mpls: File.join(@dir, "none"))
+    assert_match(/mpls_router module/, none.mpls(%w[eth1], highest: 10))
+  end
 end

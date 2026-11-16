@@ -17,6 +17,7 @@ class TestSpfLabels < Minitest::Test
     TestLogs.heading(name)
     @log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
     @routers = []
+    @hosts = {}
   end
 
   # RFC 8667 section 3.1's example, under RFC 8660 section 2.4's formula:
@@ -30,7 +31,9 @@ class TestSpfLabels < Minitest::Test
   end
 
   def router(config, macs)
-    r = ISIS::Router.new(config, clock: @clock, scheduler: @scheduler, log: @log, host: SimHost.new(@wires, macs))
+    host = SimHost.new(@wires, macs)
+    r = ISIS::Router.new(config, clock: @clock, scheduler: @scheduler, log: @log, host: host)
+    @hosts[r] = host
     @routers << r
     r
   end
@@ -48,7 +51,7 @@ class TestSpfLabels < Minitest::Test
 
   # a ---- b ---- c. +sr+ maps a router to its segment_routing block, or
   # nil for none; +sids+ to its loopback's prefix entry extras.
-  def line(sr: {}, sids: {})
+  def line(sr: {}, sids: {}, extra: {})
     base = { "a" => 16_000, "b" => 18_000, "c" => 20_000 }
     conf = lambda do |id, ifaces|
       n = id.ord - 96
@@ -56,7 +59,7 @@ class TestSpfLabels < Minitest::Test
       prefix = { prefix: "10.255.0.#{n}/32", metric: 0 }
       prefix = prefix.merge(sid: n).merge(sids.fetch(id, {})) if block
       { system_id: "0000.0000.000#{id}", hostname: id, minimum_lsp_interval: 1, prefixes: [prefix],
-        interfaces: ifaces }.merge(block ? { segment_routing: block } : {})
+        interfaces: ifaces }.merge(block ? { segment_routing: block } : {}).merge(extra)
     end
     a = router(conf.("a", [p2p("ab", "10.0.12.1")]), { "ab" => "00:00:00:00:00:0a" })
     b = router(conf.("b", [p2p("ab", "10.0.12.2"), p2p("bc", "10.0.23.1")]),
@@ -166,5 +169,23 @@ class TestSpfLabels < Minitest::Test
     assert_equal({ enabled: false }, views.segment_routing)
     assert_equal [], views.labels
     refute views.routes.any? { _1.key?(:sid) || _1[:next_hops].any? { |h| h.key?(:label) } }
+  end
+
+  # With forwarding on, the table goes to the host: a's label routes, and
+  # its IP route to c's loopback pushing 18003 toward b.
+  def test_forwarding_installs_the_labels
+    a, = line(extra: { forwarding: true })
+    adapter = @hosts[a].adapters[1]
+    labels = adapter.operations.grep(ISIS::Forwarding::LabelOperation).select { _1.kind == :install }
+    assert_equal [15_000, 16_002, 16_003], labels.map { _1.entry.label }.uniq.sort
+    assert_equal a.label_table.installed.keys.sort, [15_000, 16_002, 16_003]
+    push = adapter.operations.grep(ISIS::Forwarding::Operation).reverse.find { _1.route.prefix == "10.255.0.3/32" }
+    assert_equal [18_003], push.labels.values
+  end
+
+  # Without forwarding, no label table.
+  def test_no_forwarding_no_label_table
+    a, = line
+    assert_nil a.label_table
   end
 end

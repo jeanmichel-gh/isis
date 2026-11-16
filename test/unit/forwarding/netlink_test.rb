@@ -172,4 +172,117 @@ class TestForwardingNetlink < Minitest::Test
                   { family: :ipv4, prefix: "198.18.7.0/24", table: 254, protocol: 3, scope: 0, type: 6, priority: 0 }],
                  @nl.routes
   end
+
+  # --- MPLS. The message bodies (after the 16 octet nlmsghdr) are the ones
+  # iproute2 6.19 sent, captured with strace in a network namespace on the
+  # lab VM, 2026-11-16, for ifindex 2 and 3 (d0, d1) and 1 (lo):
+  #
+  #   ip -M route add 100 as 200 via inet 10.0.0.2 dev d0 proto 187
+  #
+  # Only the header differs: iproute2 asks NLM_F_EXCL, isisd NLM_F_REPLACE.
+  # rtmsg: 1c AF_MPLS 28, 14 a 20 bit destination, fe main, bb protocol 187,
+  # 00 universe, 01 unicast. RTA_DST 0800 0100 00064100, 100 << 12 with
+  # the bottom-of-stack bit 0x100; RTA_NEWDST 0800 1300; RTA_VIA 0a00 1200,
+  # the family 0200 (AF_INET, host order) and the address, padded; RTA_OIF.
+  RTMSG_MPLS = "1c140000febb000100000000"
+
+  def body(m) = hex(m.byteslice(16..))
+
+  def test_a_label_swap_is_iproute2s
+    m = @nl.label_message(100, [[2, :ipv4, "10.0.0.2", 200]])
+    assert_equal "1800" "0505", hex(m.byteslice(4, 4))
+    assert_equal RTMSG_MPLS + "0800010000064100" "08001300000c8100" "0a00120002000a0000020000" "0800040002000000", body(m)
+  end
+
+  # ip -M route add 101 via inet 10.0.0.2 dev d0: a pop, no RTA_NEWDST.
+  def test_a_pop_is_iproute2s
+    m = @nl.label_message(101, [[2, :ipv4, "10.0.0.2", nil]])
+    assert_equal RTMSG_MPLS + "0800010000065100" "0a00120002000a0000020000" "0800040002000000", body(m)
+  end
+
+  # ip -M route add 102 dev lo: pop and look the packet up again.
+  def test_a_pop_to_lookup_is_iproute2s
+    m = @nl.label_message(102, [[1, nil, nil, nil]])
+    assert_equal RTMSG_MPLS + "0800010000066100" "0800040001000000", body(m)
+  end
+
+  # ip -M route add 103 nexthop as 300 via inet 10.0.0.2 dev d0 nexthop as
+  # 301 via inet 10.0.1.2 dev d1: RTA_MULTIPATH 3c00 0900, two rtnexthops
+  # of 1c00 each, then their RTA_NEWDST and RTA_VIA.
+  def test_a_multipath_label_is_iproute2s
+    m = @nl.label_message(103, [[2, :ipv4, "10.0.0.2", 300], [3, :ipv4, "10.0.1.2", 301]])
+    assert_equal RTMSG_MPLS + "0800010000067100" "3c000900"                "1c000000" "02000000" "080013000012c100" "0a00120002000a0000020000"                "1c000000" "03000000" "080013000012d100" "0a00120002000a0001020000", body(m)
+  end
+
+  # ip -M route del 100 proto 187, the whole message: 2400 length 36,
+  # 1900 RTM_DELROUTE, 0500 REQUEST | ACK.
+  def test_a_label_withdrawal_is_iproute2s
+    assert_equal "24000000" "1900" "0500" "01000000" "00000000" + RTMSG_MPLS + "0800010000064100",
+                 hex(@nl.label_delete_message(100))
+  end
+
+  # ip route add 192.0.2.4/32 encap mpls 18004 via 10.0.0.2 dev d0: RTA_ENCAP
+  # 0c00 1680, type 22 with NLA_F_NESTED, holding MPLS_IPTUNNEL_DST 0800
+  # 0100 04654100 (18004 << 12 | 0x100); then RTA_ENCAP_TYPE 0600 1500,
+  # 0100 LWTUNNEL_ENCAP_MPLS, padded. iproute2 sends them in that order.
+  ENCAP_18004 = "0c001680080001000465410006001500" "01000000"
+
+  def test_an_ip_route_pushes_a_label
+    m = @nl.new_message(:ipv4, "192.0.2.4/32", [[3, "10.0.12.2", 18_004]])
+    assert_includes body(m), "0800040003000000" "080005000a000c02" + ENCAP_18004
+    refute_includes hex(@nl.new_message(:ipv4, "192.0.2.4/32", [[3, "10.0.12.2"]])), "1680"
+  end
+
+  # In a multipath route each next hop carries its own, as iproute2 writes
+  # nexthop encap mpls 400 via ... nexthop via ...
+  def test_a_multipath_ip_route_pushes_per_next_hop
+    m = @nl.new_message(:ipv4, "192.0.2.5/32", [[3, "10.0.12.2", 400], [4, "10.0.13.3", nil]])
+    assert_includes body(m), "2400" "0000" "03000000" "080005000a000c02" "0c00168008000100" "00190100" "0600150001000000"
+    assert_includes body(m), "1000" "0000" "04000000" "080005000a000d03"
+  end
+
+  def entry(label, op, hops) = ISIS::Spf::Labels::Entry.new(label, op, :prefix_sid, "192.0.2.4/32", hops)
+
+  # A label operation goes by the next hop's IPv4 address, through the
+  # mapped interface; implicit null is a pop.
+  def test_apply_installs_a_label
+    @socket.queue(ack(1))
+    op = ISIS::Forwarding::LabelOperation.new(kind: :install, entry: entry(17_004, :swap, [[adjacency("eth0-l1", "10.0.12.2"), 18_004]]))
+    assert @nl.apply(op)
+    expected = ISIS::Forwarding::Netlink.new(log: @log, socket: nil).label_message(17_004, [[3, :ipv4, "10.0.12.2", 18_004]])
+    assert_equal body(expected), body(@socket.sent.first)
+    @socket.queue(ack(2))
+    pop = ISIS::Forwarding::LabelOperation.new(kind: :install, entry: entry(17_002, :php, [[adjacency("eth1", "10.0.13.3"), 3]]))
+    assert @nl.apply(pop)
+    refute_includes hex(@socket.sent.last), "1300", "no RTA_NEWDST"
+  end
+
+  # An IP route operation pushes the label its labels map gives the hop.
+  def test_apply_pushes_the_routes_label
+    @socket.queue(ack(1))
+    a = adjacency("eth0-l1", "10.0.12.2")
+    route = ISIS::Spf::Route.new("192.0.2.4/32", 30, [a])
+    labels = { ["eth0-l1", a.neighbor.b] => 18_004 }
+    assert @nl.apply(ISIS::Forwarding::Operation.new(kind: :install, route: route, labels: labels))
+    assert_includes hex(@socket.sent.first), ENCAP_18004
+  end
+
+  def mpls_dumped(sequence, label, protocol)
+    body = [28, 20, 0, 0, 254, protocol, 0, 1, 0].pack("C8L") + [8, 1].pack("SS") + [(label << 12) | 0x100].pack("N")
+    [16 + body.bytesize, 24, 2, sequence, 0].pack("LSSLL") + body
+  end
+
+  # The kernel's label routes are not IP routes for Redistribution, and
+  # flush_labels removes this protocol's, and only them.
+  def test_label_routes_in_a_dump
+    done = [20, 3, 2, 1, 0].pack("LSSLL") + [0].pack("l")
+    @socket.queue(dumped(1, "10.0.12.0", 24, 2, 0, scope: 253), mpls_dumped(1, 17_004, 187))
+    @socket.queue(done)
+    assert_equal ["10.0.12.0/24"], @nl.routes.map { _1[:prefix] }
+    @socket.queue(mpls_dumped(2, 17_004, 187), mpls_dumped(2, 16_003, 186))
+    @socket.queue([20, 3, 2, 2, 0].pack("LSSLL") + [0].pack("l"))
+    @socket.queue(ack(3))
+    assert_equal 1, @nl.flush_labels
+    assert_equal "080001000426c100", hex(@socket.sent.last)[-16..], "17004 is 0x426c"
+  end
 end
