@@ -45,6 +45,23 @@ interfaces:
     priority: 100
 ```
 
+Segment routing over MPLS (RFC 8667) is off unless `segment_routing` is
+there. With it, the LSPs carry TLV 242 (SRGB, SR-Algorithm 0, SRLB), the
+Prefix-SID of each prefix with a `sid`, and an Adj-SID per adjacency.
+isisd does not compute or install labels yet (`docs/design/sr-mpls.md`).
+
+```yaml
+router_id: 10.255.0.1       # TLV 242's; the first IPv4 /32 prefix if absent
+segment_routing:
+  srgb: [{ start: 16000, size: 8000 }]    # the defaults
+  srlb: { start: 15000, size: 1000 }
+prefixes:
+  - { prefix: 10.255.0.1/32, metric: 0, sid: 1 }   # index 1, N set
+  - { prefix: 10.9.0.0/24, metric: 0, sid: 9, no_php: true }
+interfaces:
+  - { name: eth1, adj_sid: false }       # no Adj-SID on this one
+```
+
 An area is read as written: YAML would read `49.0010` as the number
 49.001, so isisd takes the text of each item under `areas` from the file.
 

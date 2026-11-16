@@ -19,7 +19,14 @@ module ISIS
   #   ip_addresses: [...]           TLV 132 in the LSP; the interfaces'
   #                                 when not given
   #   ipv6_addresses: [...]         TLV 232 in the LSP
-  #   prefixes: [{prefix:, metric:}]   and ipv6_prefixes, external_prefixes
+  #   prefixes: [{prefix:, metric:}]   and ipv6_prefixes, external_prefixes;
+  #                                 with segment routing a prefix may add
+  #                                 sid: (its index), no_php:, explicit_null:
+  #   router_id: 10.255.0.1         TLV 242's Router ID; the first IPv4 /32
+  #                                 among the prefixes when not given
+  #   segment_routing:              SR-MPLS, RFC 8667 (SegmentRouting); off
+  #     srgb: [{start: 16000, size: 8000}]   when absent
+  #     srlb: {start: 15000, size: 1000}
   #   overload: false
   #   area_key: / hello_key:        HMAC-MD5 keys (RFC 5304)
   #   lsp_buffer_size: 1492
@@ -36,6 +43,7 @@ module ISIS
   #       priority: 64              broadcast only
   #       hello_interval: 3
   #       hello_multiplier: 10
+  #       adj_sid: true             false: no Adj-SID for its adjacencies
   #
   # The host gives what is outside the protocol: +link(name)+ answers {
   # transport:, snpa:, link_local: } for an interface, +forwarding(level,
@@ -53,7 +61,7 @@ module ISIS
       def each_circuit(&block) = circuits.values.uniq.each(&block)
     end
 
-    attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces,
+    attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing,
                 :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock
 
     def initialize(config, clock:, scheduler:, log:, host:)
@@ -171,6 +179,9 @@ module ISIS
     def build
       @databases = {}
       @originators = {}
+      @segment_routing = SegmentRouting.from_config(@config[:segment_routing], router_id: @config[:router_id],
+                                                    prefixes: @config.fetch(:prefixes, []),
+                                                    ipv6: protocols.include?(:ipv6), no_adj_sid: no_adj_sid)
       @levels.each do |level|
         @databases[level] = Database.new(level: level, clock: @clock, scheduler: @scheduler, log: @log)
         @originators[level] = originator(level)
@@ -213,7 +224,7 @@ module ISIS
                      minimum_interval: c.fetch(:minimum_lsp_interval, Originator::MINIMUM_LSP_GENERATION_INTERVAL),
                      buffer_size: c.fetch(:lsp_buffer_size, Originator::LSP_BUFFER_SIZE),
                      is_type: both? ? 3 : nil, level1_database: level == 2 ? @databases[1] : nil,
-                     overload: c.fetch(:overload, false))
+                     overload: c.fetch(:overload, false), segment_routing: @segment_routing)
     end
 
     # The settings an interface may give, and the circuit keyword each
@@ -251,6 +262,14 @@ module ISIS
                                **circuit_options(c))]
       end
       Interface.new(name: c[:name], network: c[:network], transport: link[:transport], circuits: circuits)
+    end
+
+    # The circuits of the interfaces whose configuration says adj_sid:
+    # false. A LAN circuit at both levels is named for its level.
+    def no_adj_sid
+      @config[:interfaces].select { _1[:adj_sid] == false }.flat_map do |c|
+        c[:network] == "broadcast" && both? ? @levels.map { |l| "#{c[:name]}-l#{l}" } : [c[:name]]
+      end
     end
 
     # A LAN circuit at both levels is named for its level; the kernel knows

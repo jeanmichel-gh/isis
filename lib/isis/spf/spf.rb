@@ -72,8 +72,9 @@ module ISIS
     # route to a prefix this system advertises itself has none and is
     # local. +external+ is true for a route of the external metric type,
     # from an entry with I/E set (RFC 5302 section 3), and +up_down+ for one
-    # whose entry had the up/down bit, an "L2->L1 inter-area" route.
-    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down) do
+    # whose entry had the up/down bit, an "L2->L1 inter-area" route. +sid+
+    # is the chosen entry's Prefix-SID (SubTlv::PrefixSid), or nil.
+    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down, :sid) do
       def local?
         adjacencies.empty?
       end
@@ -91,8 +92,9 @@ module ISIS
     end
 
     # One system's advertisement of a prefix: its metric, whether that is of
-    # the external metric type, and the up/down bit.
-    Offer = Struct.new(:metric, :external, :up_down) do
+    # the external metric type, the up/down bit, and its algorithm 0
+    # Prefix-SID (RFC 8667 section 2.1), or nil.
+    Offer = Struct.new(:metric, :external, :up_down, :sid) do
       # RFC 5302 section 3's order of preference, within one level: routes
       # "with internal metric" before those "with external metric", and at
       # each, intra-area before "L2->L1 inter-area", which is up/down set.
@@ -235,7 +237,7 @@ module ISIS
           held = @routes[prefix]
           if held.nil? || (key <=> @keys[prefix]).negative?
             @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil,
-                                        offer.up_down || nil)
+                                        offer.up_down || nil, offer.sid)
             @keys[prefix] = key
           elsif key == @keys[prefix] && !held.local?
             held.adjacencies = path.adjacencies.empty? ? [] : prune(held.adjacencies | path.adjacencies)
@@ -331,7 +333,7 @@ module ISIS
         each_tlv(lsps) do |tlv|
           case tlv
           when Tlv::ExtendedIpReachability, Tlv::Ipv6Reachability
-            tlv.entries.each { |e| keep_best(found, e.prefix, Offer.new(e.metric, false, e.up_down)) if e.prefix }
+            tlv.entries.each { |e| keep_best(found, e.prefix, Offer.new(e.metric, false, e.up_down, prefix_sid(e))) if e.prefix }
           when Tlv::IpExternalReachability
             tlv.entries.each do |e|
               offer = Offer.new(e.metrics.default, e.metrics.external?, e.up_down?)
@@ -342,6 +344,11 @@ module ISIS
           end
         end
         found
+      end
+
+      # An entry's Prefix-SID for algorithm 0, the only one computed here.
+      def prefix_sid(entry)
+        entry.subtlvs&.find { |s| s.is_a?(SubTlv::PrefixSid) && s.algorithm.zero? }
       end
 
       def each_tlv(lsps, &block)
