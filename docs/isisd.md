@@ -48,7 +48,8 @@ interfaces:
 Segment routing over MPLS (RFC 8667) is off unless `segment_routing` is
 there. With it, the LSPs carry TLV 242 (SRGB, SR-Algorithm 0, SRLB), the
 Prefix-SID of each prefix with a `sid`, and an Adj-SID per adjacency.
-isisd does not compute or install labels yet (`docs/design/sr-mpls.md`).
+isisd computes the label table after each SPF run (`show.labels`) but
+does not install it yet (`docs/design/sr-mpls.md`).
 
 ```yaml
 router_id: 10.255.0.1       # TLV 242's; the first IPv4 /32 prefix if absent
@@ -83,7 +84,9 @@ Every method:
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
-| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops |
+| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label` |
+| `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop) |
+| `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, and the problems met |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |
 | `show.configuration` | | the configuration, keys masked |

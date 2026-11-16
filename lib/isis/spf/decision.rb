@@ -41,12 +41,15 @@ module ISIS
     # (routescope's Timeline) can see every run and what started it.
     class Decision
       REASONS_KEPT = 20
-      attr_reader :system_id, :database, :circuits, :routes, :paths, :runs
+      attr_reader :system_id, :database, :circuits, :routes, :paths, :runs, :labels
       attr_accessor :max_path_splits, :max_path_metric, :delay, :forwarding, :attached_flag, :leak, :summary
+      # A SegmentRouting, or nil: with one, each run also builds the label
+      # table (Spf::Labels).
+      attr_accessor :segment_routing
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
-                     attached_flag: nil, leak: nil, summary: nil)
+                     attached_flag: nil, leak: nil, summary: nil, segment_routing: nil)
         @system_id = system_id
         @database = database
         @scheduler = scheduler
@@ -58,6 +61,8 @@ module ISIS
         @attached_flag = attached_flag
         @leak = leak
         @summary = summary
+        @segment_routing = segment_routing
+        @labels = nil
         @circuits = []
         @routes = {}
         @paths = {}
@@ -124,6 +129,7 @@ module ISIS
         why = reasons.uniq.first(3).join("; ")
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
+        label(calc) if @segment_routing
         @leak.update(@routes) if level == 2 && @leak
         @summary.update(@routes) if level == 1 && @summary
         @log.info("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
@@ -143,9 +149,20 @@ module ISIS
                         max_path_splits: @max_path_splits, max_path_metric: @max_path_metric).run
       end
 
-      private
+private
 
-      DEFAULT = "0.0.0.0/0"
+DEFAULT = "0.0.0.0/0"
+
+# The label table for this run's routes. A problem is logged once,
+# when it first appears, at warn: it is a label not installed.
+def label(calc)
+  before = @labels&.problems || []
+  adjacencies = @circuits.flat_map(&:spf_adjacencies).map { |_, _, a| a }
+  @labels = Labels.new(own: @segment_routing, database: @database, paths: calc.paths).build(@routes, adjacencies)
+  (@labels.problems - before).each do |p|
+    @log.warn("Level #{level} segment routing: #{p}", kind: :sr, level: level)
+  end
+end
 
       def add_default(attached)
         return if attached.nil?

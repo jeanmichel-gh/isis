@@ -7,6 +7,8 @@
 #   isis-cli show database 2
 #   isis-cli show topology 1          one level's LSDB by node, as JSON
 #   isis-cli show routes --json
+#   isis-cli show labels 2            the SR label table
+#   isis-cli show segment_routing
 #   isis-cli events                 follow the event stream
 #   isis-cli call show.log '{"count": 20}'
 #   isis-cli sim state                     isis4r-sim only
@@ -25,7 +27,8 @@ SOCKET = "/run/isis4r/isisd.sock"
 options = { socket: SOCKET, json: false }
 parser = OptionParser.new do |o|
   o.banner = "usage: isis-cli [options] show WHAT [LEVEL] | events | call METHOD [PARAMS] | sim ACTION [KEY=VALUE ...]\n" \
-             "  WHAT: overview interfaces adjacencies database routes topology hostnames log configuration"
+             "  WHAT: overview interfaces adjacencies database routes labels topology hostnames log configuration\n" \
+             "        segment_routing"
   o.on("-s", "--socket PATH", "the API socket (#{SOCKET})") { options[:socket] = _1 }
   o.on("-j", "--json", "print the answer as JSON") { options[:json] = true }
 end
@@ -77,7 +80,7 @@ case command
 when "show"
   what = ARGV.shift or abort parser.banner
   params = {}
-  params["level"] = Integer(ARGV.shift) if %w[database routes topology].include?(what) && ARGV.first
+  params["level"] = Integer(ARGV.shift) if %w[database routes labels topology].include?(what) && ARGV.first
   params["count"] = Integer(ARGV.shift) if what == "log" && ARGV.first
   print_result(call(options[:socket], "show.#{what}", params), options[:json])
 when "call"
