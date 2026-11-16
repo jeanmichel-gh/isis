@@ -1840,8 +1840,9 @@ routescope's `CLAUDE.md`, "Where the work is going", holds the full note.
   join `ospf-cli` and `bgp4r-cli` behind it.
 * CI runs only the jobs a change's paths need.
 * Review and document every lab in `routescope/labs/`.
-* Do not open a pull request for documents alone: CI costs money. Let a
-  document change ride with the next code change, or ask first.
+* A change to documents alone may have its own pull request: CI no
+  longer costs money (2026-11-15, the repository is public). A small
+  note may still ride with a code change on the same topic.
 
 **History, 2026-10-31 to 2026-11-14.** The status table above is the
 current state. This paragraph is the record of how each gate was met,
