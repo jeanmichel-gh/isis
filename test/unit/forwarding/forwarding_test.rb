@@ -49,4 +49,14 @@ class TestForwardingOperations < Minitest::Test
     after = { "b" => route("b", 1, "10.0.0.2"), "a" => route("a", 1, "10.0.0.2") }
     assert_equal %w[a b], ISIS::Forwarding.operations({}, after).map { |o| o.route.prefix }
   end
+
+  # A route whose pushed label changes, and nothing else, is replaced, and
+  # the operation carries the labels.
+  def test_a_new_label_is_a_replace
+    r = { "p" => route("192.0.2.2/32", 11, "10.0.0.2") }
+    key = ["eth0", "\x00\x00\x00\x00\x00\x02".b]
+    ops = ISIS::Forwarding.operations(r, r, labels: [{ "p" => { key => 18_002 } }, { "p" => { key => 18_003 } }])
+    assert_equal [[:replace, { key => 18_003 }]], ops.map { [_1.kind, _1.labels] }
+    assert_empty ISIS::Forwarding.operations(r, r, labels: [{ "p" => { key => 1 } }, { "p" => { key => 1 } }])
+  end
 end

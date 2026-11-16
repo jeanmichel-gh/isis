@@ -334,6 +334,27 @@ One topic each, in this order, in isis:
    - Labels per level: each level has its own table. Question 3 is
      PR 4's.
 4. **Forwarding.** Netlink label routes and encap. Gate: traffic below.
+   **Built 2026-11-16; gate met** in `routescope/labs/isis4r-sr`, the
+   line below with r1 and r2 isis4r. A ping from f1's loopback to f2's
+   entered r1 on 17004, left it on 18004, and reached f2 as plain IP
+   after r2's pop; back, FRR f2 pushed 18001, r2 swapped it to 17001,
+   r1 popped it. r1 pinged f2 pushing 18004 itself. With r1's link to
+   r2 down, r1 withdrew every label through it; up again, its label
+   table came back as it was. As built:
+   - `Forwarding::Netlink` writes label routes (`label_message`) and
+     pushes on IP routes (`encap`). Every message body matches what
+     iproute2 6.19 sent for `ip -M route add ... as ... via inet` and
+     `ip route add ... encap mpls`, captured with strace in a network
+     namespace (`test/unit/forwarding/netlink_test.rb`). Label routes
+     carry no RTA_TABLE and no RTA_PRIORITY, as iproute2 sends them.
+   - `Forwarding::LabelTable` installs both levels' tables through one
+     adapter, Level 1's where both give a label, and sends only what
+     changed. Old label routes of protocol 187 are flushed at start.
+   - `Router::Host#mpls` turns on MPLS input per interface and checks
+     `net.mpls.platform_labels`; without them isisd logs why and runs
+     with IP routes only.
+   - The adapter's route dump now skips MPLS routes, which would have
+     read as IPv4 prefixes for Redistribution.
 5. **Simulator.** SIDs and SRGBs in the topology file.
 
 Then routescope's views, and a lab, `isis4r-sr`, in this repository's
@@ -390,11 +411,11 @@ The gate passes against FRR 10.2.1, the version on the VM.
 2. **Label collisions.** RFC 8660 section 2.5 has tie-breaking rules.
    The draft drops both sides with a warning. Read 2.5 and decide before
    PR 3.
-3. **Label routes per level.** A prefix both levels reach gets one label
-   route, from the level the IP route uses (Level 1 first, as
-   `netlink.rb` already does for IP, with a lower kernel metric). Whether
-   the kernel orders `AF_MPLS` routes by metric too is not checked. If
-   not, isisd picks the level itself.
+3. ~~Label routes per level.~~ Answered in PR 4: isisd picks the level
+   itself, Level 1's label where both levels give one
+   (`Forwarding::LabelTable`). iproute2 sends no metric for a label
+   route, so isisd sends none either; whether the kernel would order two
+   by metric was not tested.
 4. ~~SRLB use.~~ Answered 2026-11-16: FRR 10.2.1 takes Adj-SIDs from
    its SRLB (15000 and up with `local-block 15000 15999`). Recorded in
    routescope `test/fixtures/frr/sr-mpls/`.

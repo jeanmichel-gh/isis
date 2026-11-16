@@ -62,6 +62,7 @@ module ISIS
     end
 
     attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing,
+                :label_table,
                 :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock
 
     def initialize(config, clock:, scheduler:, log:, host:)
@@ -207,6 +208,7 @@ module ISIS
           @adapters[l] = adapter
         end
       end
+      @label_table = build_label_table
       @leak = both? ? Spf::Leak.new(originator: @originators[1], log: @log, policy: self.class.leak_policy(@config[:leak])) : nil
       @summary = both? ? Spf::Summary.new(originator: @originators[2], log: @log, summaries: @config.fetch(:summaries, [])) : nil
       @redistributions = build_redistributions
@@ -264,6 +266,25 @@ module ISIS
       Interface.new(name: c[:name], network: c[:network], transport: link[:transport], circuits: circuits)
     end
 
+    # With segment routing and forwarding, one label table for both levels,
+    # through the first level's adapter, once the host can take label
+    # routes: MPLS input on every interface, and a platform label table
+    # reaching the highest label in the SRGB and SRLB. A host that cannot is
+    # logged and runs with IP routes only.
+    def build_label_table
+      return nil unless @segment_routing && !@adapters.empty?
+
+      if @host.respond_to?(:mpls)
+        names = @config[:interfaces].map { _1[:name] }
+        why = @host.mpls(names, highest: @segment_routing.highest_label)
+        if why
+          @log.error("segment routing labels not installed: #{why}")
+          return nil
+        end
+      end
+      Forwarding::LabelTable.new(adapter: @adapters.values.first, log: @log)
+    end
+
     # The circuits of the interfaces whose configuration says adj_sid:
     # false. A LAN circuit at both levels is named for its level.
     def no_adj_sid
@@ -298,6 +319,7 @@ module ISIS
                             attached_flag: both? && level == 2 ? @originators[1] : nil,
                             leak: level == 2 ? @leak : nil, summary: level == 1 ? @summary : nil,
                             segment_routing: @segment_routing)
+      d.label_table = @label_table
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))

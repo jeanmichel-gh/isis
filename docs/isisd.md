@@ -48,8 +48,13 @@ interfaces:
 Segment routing over MPLS (RFC 8667) is off unless `segment_routing` is
 there. With it, the LSPs carry TLV 242 (SRGB, SR-Algorithm 0, SRLB), the
 Prefix-SID of each prefix with a `sid`, and an Adj-SID per adjacency.
-isisd computes the label table after each SPF run (`show.labels`) but
-does not install it yet (`docs/design/sr-mpls.md`).
+isisd computes the label table after each SPF run (`show.labels`), and
+with `forwarding: true` installs it: label routes, and IP routes that push
+a label. That needs the host's `mpls_router` and `mpls_iptunnel` modules
+and `net.mpls.platform_labels` above the highest label; isisd turns on
+MPLS input on its interfaces itself. When it cannot, it logs why and
+installs IP routes only. Where both levels give a label, Level 1's is
+installed.
 
 ```yaml
 router_id: 10.255.0.1       # TLV 242's; the first IPv4 /32 prefix if absent

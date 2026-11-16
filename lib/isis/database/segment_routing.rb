@@ -154,6 +154,12 @@ module ISIS
       end
     end
 
+    # The highest label in the SRGB and SRLB, which the host's label table
+    # must reach.
+    def highest_label
+      (@srgb + [@srlb]).map { |first, size| first + size - 1 }.max
+    end
+
     # The adjacency labels given out, key => label.
     def adj_labels = @adj_labels.dup
 

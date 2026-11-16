@@ -440,42 +440,42 @@ module ISIS
       list
     end
 
-# The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
-# With segment routing, each neighbour carries its Adj-SIDs as a fourth
-# element: a point to point neighbour its own (RFC 8667 section 2.2.1),
-# the entry to a LAN's pseudonode one LAN-Adj-SID per neighbour Up on
-# that LAN (section 2.2.2).
-def variable_tlvs
-  neighbors = @circuits.filter_map do |c|
-    n = c.is_neighbor or next
-    @segment_routing ? [*n.first(3), adj_sids(c, n.first)] : n
-  end
-  reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes)
-end
+    # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
+    # With segment routing, each neighbour carries its Adj-SIDs as a fourth
+    # element: a point to point neighbour its own (RFC 8667 section 2.2.1),
+    # the entry to a LAN's pseudonode one LAN-Adj-SID per neighbour Up on
+    # that LAN (section 2.2.2).
+    def variable_tlvs
+      neighbors = @circuits.filter_map do |c|
+        n = c.is_neighbor or next
+        @segment_routing ? [*n.first(3), adj_sids(c, n.first)] : n
+      end
+      reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes)
+    end
 
-def adj_sids(circuit, id)
-  name = circuit.respond_to?(:name) ? circuit.name : circuit.circuit.name
-  if id.getbyte(-1).zero?
-    @segment_routing.adj_sids(name, id.byteslice(0, 6))
-  else
-    @segment_routing.lan_adj_sids(name, circuit.up_neighbors.map { |n| n.system_id.b })
-  end
-end
+    def adj_sids(circuit, id)
+      name = circuit.respond_to?(:name) ? circuit.name : circuit.circuit.name
+      if id.getbyte(-1).zero?
+        @segment_routing.adj_sids(name, id.byteslice(0, 6))
+      else
+        @segment_routing.lan_adj_sids(name, circuit.up_neighbors.map { |n| n.system_id.b })
+      end
+    end
 
-# A prefix as TLV 135 or 236 takes it: its prefix and metric, and with
-# segment routing the Prefix-SID its configuration gives.
-def own_prefix(p)
-  h = p.slice(:prefix, :metric)
-  sid = @segment_routing && SegmentRouting.prefix_sid(p)
-  sid ? h.merge(subtlvs: [sid]) : h
-end
+    # A prefix as TLV 135 or 236 takes it: its prefix and metric, and with
+    # segment routing the Prefix-SID its configuration gives.
+    def own_prefix(p)
+      h = p.slice(:prefix, :metric)
+      sid = @segment_routing && SegmentRouting.prefix_sid(p)
+      sid ? h.merge(subtlvs: [sid]) : h
+    end
 
-# A prefix from the other level with the Prefix-SID its route came
-# with, propagated as RFC 8667 section 2.1.2 says.
-def carried(p, h)
-  sid = @segment_routing && SegmentRouting.propagated_sid(p[:sid])
-  sid ? h.merge(subtlvs: [sid]) : h
-end
+    # A prefix from the other level with the Prefix-SID its route came
+    # with, propagated as RFC 8667 section 2.1.2 says.
+    def carried(p, h)
+      sid = @segment_routing && SegmentRouting.propagated_sid(p[:sid])
+      sid ? h.merge(subtlvs: [sid]) : h
+    end
 
     # The IS and IP reachability TLVs for +neighbors+, [ID, metric] pairs,
     # and +prefixes+, then +externals+, then +leaked+, then +area+, in the
