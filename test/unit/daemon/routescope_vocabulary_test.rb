@@ -10,8 +10,9 @@ require_relative "../../support/routescope_vocabulary"
 # renames one fails this test, before routescope's panels break
 # (routescope docs/design/api-contract.md, part 3).
 #
-# The state is real: a router with a neighbour, so adjacencies, LSPs,
-# routes and the topology are not empty. An empty list cannot show its
+# The state is real: a router with a neighbour, both with segment
+# routing, so adjacencies, LSPs, routes, labels and the topology are not
+# empty. An empty list cannot show its
 # elements' keys, so one fails the test rather than passing it.
 class TestRoutescopeVocabulary < Minitest::Test
   STREAMS = ISIS::Daemon::Api::STREAM_METHODS
@@ -40,7 +41,7 @@ class TestRoutescopeVocabulary < Minitest::Test
   def neighbour(interface, mac)
     router({ system_id: "0000.0000.000b", hostname: "b", minimum_lsp_interval: 1,
              interfaces: [{ name: interface, ip_addresses: ["10.0.12.2"], hello_interval: 1, hello_multiplier: 3 }],
-             prefixes: [{ prefix: "192.0.2.11/32", metric: 1 }] }, { interface => mac })
+             prefixes: [{ prefix: "192.0.2.11/32", metric: 1, sid: 11 }], segment_routing: true, level: "1-2" }, { interface => mac })
   end
 
   # What routescope sends each method; the rest take nothing.
@@ -84,10 +85,13 @@ class TestRoutescopeVocabulary < Minitest::Test
     [nodes, nil]
   end
 
+  # A key as a symbol, a string, or a number: show.segment_routing keys
+  # its levels by number, which JSON turns into "2".
   def fetch(hash, key, where)
     assert_kind_of Hash, hash, "#{where}: not an object"
-    assert hash.key?(key.to_sym) || hash.key?(key), "#{where}: no key #{key}"
-    hash.key?(key.to_sym) ? hash[key.to_sym] : hash[key]
+    k = [key.to_sym, key, (Integer(key) if key.match?(/\A\d+\z/))].compact.find { hash.key?(_1) }
+    assert k, "#{where}: no key #{key}"
+    hash[k]
   end
 
   def check(api, vocabulary, where)
@@ -107,7 +111,8 @@ class TestRoutescopeVocabulary < Minitest::Test
   def test_isisd_answers_what_routescope_reads
     a = router({ system_id: "0000.0000.000a", hostname: "a", minimum_lsp_interval: 1,
                  interfaces: [{ name: "ab", ip_addresses: ["10.0.12.1"], hello_interval: 1, hello_multiplier: 3 }],
-                 prefixes: [{ prefix: "192.0.2.10/32", metric: 1 }] }, { "ab" => "00:00:00:00:00:0a" })
+                 prefixes: [{ prefix: "192.0.2.10/32", metric: 1, sid: 10 }], segment_routing: true, level: "1-2" },
+               { "ab" => "00:00:00:00:00:0a" })
     neighbour("ab", "00:00:00:00:00:0b")
     @routers.each(&:start)
     run_for(10)

@@ -1,6 +1,8 @@
 # SR-MPLS in isis4rd
 
-Status: approved by the owner 2026-11-16, merged in #84. No code yet.
+Status: approved by the owner 2026-11-16, merged in #84. Built the same
+day in five pull requests (#85 to #89); the gate below passes against
+FRR 10.2.1 (`routescope/labs/isis4r-sr`, its `sr-break` scenario).
 The open questions at the end keep the answers this document gives
 until the owner changes them.
 
