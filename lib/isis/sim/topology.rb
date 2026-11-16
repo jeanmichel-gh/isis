@@ -34,6 +34,14 @@ module ISIS
     #       externals: [{ prefix: 50.0.0.0/24, count: 200, metric: 20 }]
     #   links:
     #     - { from: s1, to: r1c1, metric: 10 }
+    #   segment_routing:            optional: SR-MPLS (RFC 8667) for every
+    #     srgb: [{ start: 16000, size: 8000 }]   simulated system, with
+    #     srlb: { start: 15000, size: 1000 }     these blocks by default
+    #
+    # With segment_routing, a grid's sids gives r1c1 that index and each
+    # next system the next, row by row, on its loopback; a router's sid gives
+    # its loopback's, and its srgb its own block. A system with a sid needs
+    # an IPv4 loopback, the Router ID its TLV 242 carries.
     #
     # It refuses what cannot be put in an LSP: a metric too large for the
     # metric style, a System ID that is not six octets, a lifetime over
@@ -45,14 +53,15 @@ module ISIS
 
       # One prefix as it goes in an LSP. +group+ is the prefix a count was
       # given from, so a group can be withdrawn by its first prefix.
-      Prefix = Struct.new(:prefix, :metric, :group, keyword_init: true) do
-        def to_h = { prefix: prefix, metric: metric }
+      Prefix = Struct.new(:prefix, :metric, :group, :sid, keyword_init: true) do
+        def to_h = sid ? { prefix: prefix, metric: metric, sid: sid } : { prefix: prefix, metric: metric }
       end
 
       # One system. +levels+ is [1], [2] or [1, 2]; +grid+ is [row, column]
       # for a grid system.
       System = Struct.new(:name, :system_id, :hostname, :levels, :areas, :attached, :overload, :loopback,
-                          :prefixes, :externals, :lsp_buffer_size, :grid, :simulator, keyword_init: true) do
+                          :prefixes, :externals, :lsp_buffer_size, :grid, :simulator, :sid, :srgb,
+                          keyword_init: true) do
         def simulator? = simulator ? true : false
       end
 
@@ -63,10 +72,11 @@ module ISIS
         def up? = state != :down
       end
 
-      TOP_KEYS = %w[simulator grid routers links].freeze
-      GRID_KEYS = %w[columns rows metric system_id_base loopbacks level areas].freeze
+      TOP_KEYS = %w[simulator grid routers links segment_routing].freeze
+      GRID_KEYS = %w[columns rows metric system_id_base loopbacks level areas sids].freeze
       ROUTER_KEYS = %w[name system_id hostname level areas attached overload loopback prefixes externals
-                       lsp_buffer_size].freeze
+                       lsp_buffer_size sid srgb].freeze
+      SR_KEYS = %w[srgb srlb].freeze
       PREFIX_KEYS = %w[prefix count metric].freeze
       LINK_KEYS = %w[from to metric one_way state].freeze
       SIM_ONLY_KEYS = %w[lsp_lifetime].freeze
@@ -82,6 +92,9 @@ module ISIS
       DEFAULT_GRID_BASE = "0000.0001.0000"
 
       attr_reader :simulator, :systems, :links, :warnings, :lsp_lifetime, :metric_style, :router_config, :source
+      # The segment_routing block as { srgb: [[first, size]], srlb: [first,
+      # size] }, or nil when the file has none.
+      attr_reader :segment_routing
 
       def self.load(path)
         from_hash(ConfigFile.load(path), source: path)
@@ -136,13 +149,22 @@ module ISIS
       # topology this hash builds again, system by system.
       def to_h
         sim = @router_config.merge(lsp_lifetime: @lsp_lifetime)
+        block = ->(list) { list.map { |first, size| { start: first, size: size } } }
         routers = @systems.map do |s|
+          # The loopback goes back as loopback:, its sid as sid:, so the
+          # file reads again; it leads the prefixes, as reading puts it.
+          lo = s.loopback && s.prefixes.first&.prefix == s.loopback
           { name: s.name, system_id: s.system_id, hostname: s.hostname, level: level_text(s.levels), areas: s.areas,
-            attached: s.attached, overload: s.overload, prefixes: s.prefixes.map(&:to_h),
-            externals: s.externals.map(&:to_h), lsp_buffer_size: s.lsp_buffer_size }.compact
+            attached: s.attached, overload: s.overload, loopback: lo ? s.loopback.split("/").first : nil,
+            prefixes: (lo ? s.prefixes.drop(1) : s.prefixes).map { _1.to_h.except(:sid) },
+            externals: s.externals.map(&:to_h), lsp_buffer_size: s.lsp_buffer_size, sid: s.sid,
+            srgb: s.srgb && block.(s.srgb) }.compact
         end
+        sr = @segment_routing && { segment_routing: { srgb: block.(@segment_routing[:srgb]),
+                                                      srlb: block.([@segment_routing[:srlb]]).first } }
         { simulator: sim, routers: routers,
           links: @links.map { |l| { from: l.from, to: l.to, metric: l.metric, one_way: l.one_way || nil, state: l.state == :down ? "down" : nil }.compact } }
+          .merge(sr || {})
       end
 
       private
@@ -152,11 +174,57 @@ module ISIS
         read_simulator(h["simulator"])
         return unless @simulator
 
+        read_segment_routing(h["segment_routing"]) if h.key?("segment_routing")
         read_grid(h["grid"]) if h.key?("grid")
         Array(h["routers"]).each_with_index { |r, i| read_router(r, "routers[#{i}]") }
         read_ids
         Array(h["links"]).each_with_index { |l, i| read_link(l, "links[#{i}]") }
         read_reachable
+        check_sids
+      end
+
+      # The blocks every simulated system with SR uses by default. They must
+      # be blocks SegmentRouting would advertise.
+      def read_segment_routing(sr)
+        return error("segment_routing", "is a map of #{SR_KEYS.join(', ')}") unless sr.is_a?(Hash)
+
+        unknown(sr, SR_KEYS, "segment_routing")
+        srgb = sr.key?("srgb") ? blocks(sr["srgb"], "segment_routing.srgb") : SegmentRouting::SRGB.map(&:dup)
+        srlb = sr.key?("srlb") ? blocks([sr["srlb"]], "segment_routing.srlb")&.first : SegmentRouting::SRLB.dup
+        return unless srgb && srlb
+
+        begin
+          SegmentRouting.check_blocks(srgb + [srlb])
+        rescue ArgumentError => e
+          return error("segment_routing", e.message)
+        end
+        @segment_routing = { srgb: srgb, srlb: srlb }
+      end
+
+      # A list of { start, size } as [[first, size]], or nil after an error.
+      def blocks(list, at)
+        return error(at, "is a list of { start, size }") unless list.is_a?(Array) && list.all?(Hash)
+
+        list.each_with_index.map do |b, i|
+          first = integer(b["start"], "#{at}[#{i}].start", 16, 0xfffff) or return nil
+          size = integer(b["size"], "#{at}[#{i}].size", 1, 0xfffff) or return nil
+          [first, size]
+        end
+      end
+
+      # A sid needs segment_routing and an IPv4 loopback; an index used twice
+      # is kept, since a simulator exists to send it, and warned of.
+      def check_sids
+        with = all_systems.select(&:sid)
+        return if with.empty?
+
+        with.each do |sys|
+          error("#{sys.name}.sid", "needs a segment_routing section") unless @segment_routing
+          error("#{sys.name}.sid", "needs an IPv4 loopback, the Router ID of its TLV 242") unless sys.loopback && !sys.loopback.include?(":")
+        end
+        with.group_by(&:sid).each do |sid, list|
+          @warnings << "index #{sid} is the Prefix-SID of #{list.map(&:name).join(' and ')}" if list.size > 1
+        end
       end
 
       def read_simulator(s)
@@ -194,6 +262,8 @@ module ISIS
         levels = level(g["level"], "grid.level") || @simulator.levels
         grid_areas = g.key?("areas") ? areas(g["areas"], "grid.areas") : @simulator.areas
         loopbacks = grid_loopbacks(g["loopbacks"], rows * columns)
+        sids = g.key?("sids") ? integer(g["sids"], "grid.sids", 0, 0xffff_ffff - (rows * columns)) : nil
+        error("grid.sids", "needs grid.loopbacks: a SID goes on a loopback") if sids && !loopbacks
         (1..rows).each do |r|
           (1..columns).each do |c|
             n = (r - 1) * columns + c
@@ -201,8 +271,8 @@ module ISIS
             lo = loopbacks && loopbacks[n - 1]
             @systems << System.new(name: "r#{r}c#{c}", system_id: id, hostname: "r#{r}c#{c}", levels: levels,
                                    areas: grid_areas, attached: false, overload: false, loopback: lo,
-                                   prefixes: lo ? [Prefix.new(prefix: lo, metric: 0, group: lo)] : [], externals: [],
-                                   grid: [r, c])
+                                   prefixes: lo ? [Prefix.new(prefix: lo, metric: 0, group: lo, sid: sids && sids + n - 1)] : [],
+                                   externals: [], grid: [r, c], sid: sids && sids + n - 1)
           end
         end
         (1..rows).each do |r|
@@ -256,6 +326,19 @@ module ISIS
         end
         sys.prefixes.concat(prefixes(r["prefixes"], "#{at}.prefixes"))
         sys.externals.concat(prefixes(r["externals"], "#{at}.externals"))
+        if r.key?("srgb")
+          sys.srgb = blocks(r["srgb"], "#{at}.srgb")
+          begin
+            SegmentRouting.check_blocks(sys.srgb + [@segment_routing&.dig(:srlb)].compact) if sys.srgb
+          rescue ArgumentError => e
+            error("#{at}.srgb", e.message)
+          end
+        end
+        if r.key?("sid")
+          sys.sid = integer(r["sid"], "#{at}.sid", 0, 0xffff_ffff)
+          lo = sys.prefixes.find { _1.prefix == sys.loopback }
+          lo.sid = sys.sid if lo
+        end
       end
 
       def prefixes(list, at)

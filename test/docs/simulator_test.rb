@@ -24,6 +24,7 @@ class TestDocsSimulator < Minitest::Test
   def test_routers = check("routers", T::ROUTER_KEYS)
   def test_prefixes = check("prefixes and externals", T::PREFIX_KEYS)
   def test_links = check("links", T::LINK_KEYS)
+  def test_segment_routing = check("segment_routing", T::SR_KEYS)
 
   def test_actions
     documented = DOC[/^## Actions\n(.*?)(?=\n## )/m, 1].scan(/^\| `([a-z.]+)` \|/).flatten
