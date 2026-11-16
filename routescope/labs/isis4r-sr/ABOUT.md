@@ -1,6 +1,6 @@
 # isis4r forwarding on SR-MPLS labels
 
-Two isis4r routers in a line between two FRR routers, all at IS-IS Level 2 with segment routing over MPLS (RFC 8667). Each loopback has a Node-SID, and isis4r installs its labels in its container's kernel. Watch a packet cross the line on labels, swapped by isis4r and popped before its last hop.
+Two isis4r routers in a line between two FRR routers, all at IS-IS Level 2 with segment routing over MPLS (RFC 8667), and an isis4r-sim with a simulated SR grid behind r2. Each loopback has a Node-SID, and isis4r installs its labels in its container's kernel. Watch a packet cross the line on labels, swapped by isis4r and popped before its last hop, and every router's table grow labels toward the grid.
 
 ```
   f1 ---- r1 ---- r2 ---- f2
@@ -8,6 +8,14 @@ Two isis4r routers in a line between two FRR routers, all at IS-IS Level 2 with 
   16000   17000   18000   16000     SRGB start
   idx 1   idx 2   idx 3   idx 4     Node-SID on 10.255.0.N/32
       10.0.12.0/30    10.0.23.0/30    10.0.34.0/30
+                        |
+                        s1 (isis4r-sim)   SRGB 19000, idx 9 on 10.255.0.9
+                        |                 10.0.35.0/30
+                    r1c1 -- r1c2 -- r1c3
+                     |       |       |
+                    r2c1 -- r2c2 -- r2c3  simulated, SRGB 16000, Node-SIDs
+                     |       |       |    101 .. 109 on 10.200.0.1 .. 9
+                    r3c1 -- r3c2 -- r3c3  r3c3 with SRGB 21000
 ```
 
 The SRGBs differ on purpose: a label is always taken from the next router's block, so one from the wrong block would show.
@@ -21,6 +29,16 @@ Measured on the VM, 2026-11-16, with isis4r built from the SR-MPLS forwarding br
 - `isis-cli show labels` on r1 or r2 lists the same table, and `isis-cli show segment_routing` every router's SRGB.
 - A ping from f1's loopback to f2's, `ping -I 10.255.0.1 10.255.0.4` on f1, crosses on labels: tcpdump shows 17004 into r1, 18004 from r1 to r2, and plain IP from r2 to f2. Back from f2: FRR pushes 18001, r2 swaps it to 17001, r1 pops it.
 - r1 down its link to r2 (`ip link set eth2 down` in r1's network namespace): r1 withdraws every label through it, keeping 15000 and 17001 toward f1. Up again: its label table comes back as it was, and the ping crosses again.
+
+### The simulated grid
+
+Measured on the VM, 2026-11-16, isis4r at isis 7ad1b77:
+
+- Toward r1c1's SID, 101, each label comes from the next router's block: f1 sends 17101 to r1, r1 swaps it to 18101 toward r2, r2 swaps it to 19101 toward s1 (`show mpls table` on f1, `ip -M route` on r1 and r2). The same for 105 and 109.
+- FRR f1 lists the nine simulated systems in `show isis segment-routing node`, r3c3 with its own block 21000-28999, and s1 with 19000-26999.
+- s1 itself has no label toward the grid: it has no real adjacency to a simulated system, so the path ends at s1. Simulated systems forward nothing, so pings stay between f1 and f2.
+
+Not measured yet: routescope's SR nodes table listing the grid, and the grid's `sim` actions (a link down, a router overloaded) moving these labels. Both should follow from the above; watch r2's MPLS labels.
 
 ## Running it
 
