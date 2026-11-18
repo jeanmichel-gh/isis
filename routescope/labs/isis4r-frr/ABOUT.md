@@ -1,3 +1,8 @@
+---
+title: isis4r between two FRR routers
+tags: [isis]
+role: interop
+---
 # isis4r between two FRR routers
 
 isis4r between two IS-IS areas, with FRR on each side. r1 is isis4r at Level 1-2 in area 49.0001. f1 is FRR at Level 1 in the same area. f2 is FRR at Level 2 only, in area 49.0002. Watch r1 join the two: f1 reaches f2 by the attached bit, and f2 reaches f1 through Level 2.

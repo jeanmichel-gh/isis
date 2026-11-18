@@ -1,3 +1,8 @@
+---
+title: isis4r forwarding on SR-MPLS labels
+tags: [isis, sr, mpls]
+role: main
+---
 # isis4r forwarding on SR-MPLS labels
 
 Two isis4r routers in a line between two FRR routers, all at IS-IS Level 2 with segment routing over MPLS (RFC 8667), and an isis4r-sim with a simulated SR grid behind r2. Each loopback has a Node-SID, and isis4r installs its labels in its container's kernel. Watch a packet cross the line on labels, swapped by isis4r and popped before its last hop, and every router's table grow labels toward the grid.

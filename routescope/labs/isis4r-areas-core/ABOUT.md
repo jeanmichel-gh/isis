@@ -1,3 +1,8 @@
+---
+title: isis4r in three areas around a Level 2-only backbone
+tags: [isis]
+role: main
+---
 # isis4r in three areas around a Level 2-only backbone
 
 Three IS-IS areas, 49.0001 to 49.0003, around `c0`, a backbone router at Level 2 only in its own area, 49.0000. In each area, `bN` is a Level 1-2 border, `rN` a Level 1-only router, and `sN` an isis4r simulator with a 3x3 grid of Level 1 systems. Each area exercises one thing a border does: **area 1 leaking**, **area 2 summaries**, **area 3 the attached bit**.
