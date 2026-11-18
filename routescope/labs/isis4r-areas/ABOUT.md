@@ -1,3 +1,8 @@
+---
+title: isis4r in three areas over a Level 2 backbone
+tags: [isis]
+role: main
+---
 # isis4r in three areas
 
 Three IS-IS areas, 49.0001 to 49.0003, over a Level 2 backbone. In each area, `bN` is an isis4r border at Level 1-2, `rN` an isis4r router at Level 1, and `sN` an isis4r simulator with a 3x3 grid of Level 1 systems behind it. The borders meet in a Level 2 ring. Watch what a border puts into Level 2, what it tells its own area by the attached bit, and how the backbone reroutes.
