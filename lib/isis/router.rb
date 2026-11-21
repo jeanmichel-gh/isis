@@ -49,6 +49,10 @@ module ISIS
   #       bfd_tlv: true             true or false: what TLV 148 says,
   #                                 whatever BFD does; for negative tests
   #
+  # An interface key not listed here is refused, naming the key and the
+  # interface, so a misspelt one (bdf: true) does not quietly do nothing.
+  # INTERFACE_KEYS is this list, and router_test holds it to this comment.
+  #
   # The host gives what is outside the protocol: +link(name)+ answers {
   # transport:, snpa:, link_local: } for an interface, +forwarding(level,
   # interfaces:)+ an adapter or nil, and +route_source+ what
@@ -57,6 +61,10 @@ module ISIS
   # one; a test gives a simulated one.
   class Router
     NETWORKS = %w[point-to-point broadcast].freeze
+
+    # The keys an interface may give, as the class comment lists them.
+    INTERFACE_KEYS = %i[name network ip_addresses metric priority hello_interval hello_multiplier
+                        adj_sid bfd bfd_tlv].freeze
 
     # One configured interface: its transport and its circuits, one per
     # level on a broadcast interface, the same one for every level on a
@@ -96,7 +104,14 @@ module ISIS
         network = (i[:network] || "point-to-point").to_s
         raise ArgumentError, "interface #{i[:name]}: network is #{NETWORKS.join(' or ')}" unless NETWORKS.include?(network)
 
-        i.merge(name: i.fetch(:name) { raise ArgumentError, "an interface needs a name" }.to_s, network: network)
+        name = i.fetch(:name) { raise ArgumentError, "an interface needs a name" }.to_s
+        unknown = i.keys - INTERFACE_KEYS
+        unless unknown.empty?
+          raise ArgumentError, "interface #{name}: unknown #{unknown.size == 1 ? 'key' : 'keys'} " \
+                               "#{unknown.join(', ')}; the keys are #{INTERFACE_KEYS.join(', ')}"
+        end
+
+        i.merge(name: name, network: network)
       end
       config
     end

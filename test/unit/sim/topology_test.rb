@@ -111,6 +111,15 @@ class TestSimTopology < Minitest::Test
     assert_includes m, "links[1]: s1--b: no level in common"
   end
 
+  # The simulator's own interfaces are isisd's, so a key isisd does not
+  # know is refused here too, with where it is.
+  def test_an_unknown_interface_key
+    m = refused("simulator" => SIM.merge("interfaces" => [{ "name" => "eth1", "bdf" => true }]),
+                "routers" => [{ "name" => "x", "system_id" => "0000.0000.0100" }],
+                "links" => [{ "from" => "s1", "to" => "x" }])
+    assert_includes m, "simulator: interface eth1: unknown key bdf;"
+  end
+
   # What a metric style cannot carry is refused, with the limit; what it
   # can carry, however odd, is kept.
   def test_metric_limits
