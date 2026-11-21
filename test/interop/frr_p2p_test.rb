@@ -10,7 +10,7 @@ require_relative "../support/frr_lab"
 #
 # Runs only as root with FRR installed and ISIS_FRR=1:
 #
-#   sudo -E env "PATH=$PATH" ISIS_FRR=1 ruby -Ilib -I../datalink-socket/lib -Itest test/integration/frr_p2p_test.rb
+#   sudo -E env "PATH=$PATH" ISIS_FRR=1 ruby -Ilib -I../datalink-socket/lib -Itest test/interop/frr_p2p_test.rb
 #
 # Hellos are every second with a multiplier of 3, so the holding time is
 # 3 s on both sides. A failing test prints both sides' logs.
