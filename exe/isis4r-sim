@@ -17,12 +17,14 @@ $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../bfd4r", __dir__)
 require "isis4r"
 
-options = { config: "/lab/sim.yml", socket: ISIS::Daemon::SOCKET, log: nil, debug: false, group: nil }
+options = { config: "/lab/sim.yml", socket: ISIS::Daemon::SOCKET, log: nil, debug: false, group: nil,
+            http: "127.0.0.1:8080" }
 OptionParser.new do |o|
   o.banner = "usage: isis4r-sim [options]"
   o.on("-c", "--config FILE", "the simulated area (#{options[:config]})") { options[:config] = _1 }
   o.on("-s", "--socket PATH", "the API socket (#{options[:socket]})") { options[:socket] = _1 }
   o.on("-g", "--group NAME", "the API socket's group") { options[:group] = _1 }
+  o.on("--http ADDRESS:PORT", "the HTTP API (#{options[:http]}), off for none") { options[:http] = _1 == "off" ? nil : _1 }
   o.on("-l", "--log FILE", "write the log to FILE, - for standard output") { options[:log] = _1 }
   o.on("-d", "--debug", "log at debug, with each PDU and its hex") { options[:debug] = true }
   o.on("-v", "--version") { puts ISIS::VERSION; exit }
@@ -46,7 +48,7 @@ log = ISIS::Runtime::Log.new(clock: clock,
                              tracer: io && options[:debug] ? ISIS::Runtime::Log.trace_writer(io, clock: clock, debug: true) : nil)
 begin
   daemon = ISIS::Daemon.new(nil, topology: topology, log: log, clock: clock, socket: options[:socket],
-                                 group: options[:group])
+                                 group: options[:group], http: options[:http])
 rescue ArgumentError, SystemCallError, ISIS::Error => e
   abort "isis4r-sim: #{e.message}"
 end

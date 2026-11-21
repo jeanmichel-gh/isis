@@ -65,11 +65,12 @@ module ISIS
     end
 
     # What an entry is built for: the system, its loopback and index, its
-    # SRGB as [first, size], a second prefix, and its neighbors with
-    # their metrics, as { "0000.0000.0002" => 10 }, so SPF reaches it.
+    # Router ID (the loopback's address unless given), its SRGB as
+    # [first, size], a second prefix, and its neighbors with their
+    # metrics, as { "0000.0000.0002" => 10 }, so SPF reaches it.
     def context(system_id: "0000.0000.0003", loopback: "10.255.0.3/32", index: INDEX, srgb: SRGB,
-                second: "10.255.9.3/32", neighbors: {})
-      { system_id: system_id, loopback: loopback, router_id: loopback.split("/").first, index: index,
+                second: "10.255.9.3/32", neighbors: {}, router_id: nil)
+      { system_id: system_id, loopback: loopback, router_id: router_id || loopback.split("/").first, index: index,
         srgb: srgb, second: second, neighbors: neighbors }
     end
 

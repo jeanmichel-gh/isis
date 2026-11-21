@@ -42,6 +42,17 @@ class TestDocsSimulator < Minitest::Test
     api::SIM_PARAMS.each { |action, keys| assert_equal keys, documented["sim.#{action}"], "sim.#{action}" }
   end
 
+  # The HTTP API table: every path of Daemon::Http's own, and each socket
+  # action named as a path.
+  def test_http
+    section = DOC[/^## The HTTP API\n(.*?)(?=\n## )/m, 1]
+    listed = section.scan(%r{^\| `(GET|POST) (/api/[a-z.]+)` \|}).map { |m, path| [m, path] }
+    http = ISIS::Daemon::Http
+    own = http::ACTIONS.keys.reject { |p| ISIS::Daemon::Api::SIM_PARAMS.key?(p.delete_prefix("/api/")) }
+    assert_equal http::READS.keys.map { ["GET", _1] } + own.map { ["POST", _1] }, listed
+    assert_includes section, "POST /api/ACTION"
+  end
+
   # The example in the guide loads.
   def test_the_example_loads
     yaml = DOC[/```yaml\n(.*?)```/m, 1]

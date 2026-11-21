@@ -121,7 +121,7 @@ module ISIS
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
-    attr_reader :overload, :attached, :segment_routing
+    attr_reader :overload, :attached, :segment_routing, :injected
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
@@ -378,6 +378,17 @@ module ISIS
       changed("AttachedFlag #{on ? 'set' : 'cleared'} (RFC 1142 7.2.9.2)") if @generated_at
     end
 
+    # TLVs a test or the simulator puts in this system's LSPs on purpose,
+    # wrong ones included (ISIS::Fault): a Router Capability among them
+    # takes the place of this system's own, and the others follow its
+    # reachability. [] takes them out. Generated again as any change is.
+    # Never set by ordinary origination (CLAUDE.md, "Ordinary production and
+    # deliberate overrides").
+    def inject(tlvs, reason)
+      @injected = tlvs.dup.freeze
+      changed(reason)
+    end
+
     # Clause 7.3.6: an event "which would cause the information content to
     # change". The LSP is generated again if its content did change, but
     # not sooner than minimumLSPGenerationInterval after the last one: "A
@@ -436,8 +447,16 @@ module ISIS
       list << Tlv::DynamicHostname.new(@hostname) if @hostname
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
-      list << @segment_routing.capability if @segment_routing
+      if injected_capability?
+        list.concat(@injected.select { |t| t.is_a?(Tlv::RouterCapability) })
+      elsif @segment_routing
+        list << @segment_routing.capability
+      end
       list
+    end
+
+    def injected_capability?
+      (@injected || []).any? { |t| t.is_a?(Tlv::RouterCapability) }
     end
 
     # The reachability TLVs, IS neighbours before IP prefixes (7.3.4 b, c).
@@ -451,7 +470,8 @@ module ISIS
         # [ID, metric, addresses]; a simulated link answers without addresses.
         @segment_routing ? [n[0], n[1], n[2], adj_sids(c, n.first)] : n
       end
-      reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes)
+      reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes) +
+        (@injected || []).reject { |t| t.is_a?(Tlv::RouterCapability) }
     end
 
     def adj_sids(circuit, id)
