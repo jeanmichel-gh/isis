@@ -197,6 +197,13 @@ module ISIS
       end
 
       # Every method this API answers.
+      # The events kept, after sequence number +since+: what
+      # events.subscribe replays, for a reader that polls (Http).
+      def events_since(since)
+        n = Integer(since)
+        { seq: @seq, events: @events.select { _1[:seq] > n } }
+      end
+
       def method_names
         (METHODS.keys + STREAM_METHODS + (@simulator ? SIM_METHODS.keys : [])).sort
       end

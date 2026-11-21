@@ -97,6 +97,8 @@ module ISIS
         @aging = true
         @withdrawn = Hash.new { |h, k| h[k] = [] }
         @flaps = []
+        @faults = []
+        @sent = []
         @originators = { topology.simulator.name => @router.levels.to_h { |l| [l, @router.originators[l]] } }
         topology.systems.each { |s| @originators[s.name] = build_originators(s) }
         attach_links
@@ -247,6 +249,59 @@ module ISIS
       # or all of them, so its neighbours' adjacencies time out. A circuit
       # already sending is not started again, which would run a second
       # hello timer beside the first.
+      # A fault of the catalog (ISIS::Fault) in simulated system +name+'s
+      # LSPs: the entry's Router Capability in place of the system's own,
+      # and its reachability, a +prefix+ of its own with +index+, after the
+      # system's. The system needs segment routing. Answers the entry, the
+      # context it was built for, and its TLVs. +plan+ builds and injects
+      # nothing.
+      def fault(name, router:, prefix: nil, index: nil, plan: false)
+        sys = simulated(router)
+        sr = segment_routing(sys) or raise ArgumentError, "#{router} has no segment routing, so no SR fault applies"
+        n = @faults.size + 1
+        first, size = sr.srgb.first
+        ctx = { system_id: sys.system_id.to_s, loopback: prefix || "10.255.250.#{n % 250}/32",
+                index: index || size - n, srgb: [first, size], router_id: sr.router_id.to_s,
+                second: "10.255.251.#{n % 250}/32" }
+        entry = Fault.entry(name.to_s.to_sym)
+        tlvs = Fault.tlvs(entry[:name], **ctx)
+        answer = { case: entry[:name], router: router, finding: entry[:finding], channel: entry[:channel],
+                   expect: entry[:expect], rfc: entry[:rfc], context: ctx.except(:neighbors),
+                   tlvs: tlvs.map { |t| { hash: t.to_hash, hex: t.to_shex } } }
+        return answer.merge(plan: true) if plan
+
+        @originators[sys.name].each_value { |o| o.inject(tlvs, "simulator: fault #{entry[:name]}") }
+        @faults << answer.slice(:case, :router, :finding).merge(prefix: ctx[:loopback], index: ctx[:index],
+                                                                 at: @scheduler.now.round(3))
+        event(:fault, "fault #{entry[:name]} in #{router}'s LSPs (#{entry[:finding]})")
+        answer
+      end
+
+      # Takes the injected TLVs out of +name+'s LSPs, or every system's.
+      def fault_clear(name = nil)
+        names = name ? [simulated(name).name] : @originators.keys
+        names.each { |n| @originators[n].each_value { |o| o.inject([], "simulator: fault cleared") if o.injected&.any? } }
+        event(:fault, "faults cleared in #{name || 'every system'}")
+        { cleared: names }
+      end
+
+      attr_reader :faults, :sent
+
+      # Sends +octets+, any PDU or none, as they are, on +circuit+'s
+      # circuits, or every interface's. Pdu.factory keeps what it cannot
+      # read and writes the same octets back (docs/parse-policy.md).
+      def send_pdu(octets, circuit: nil)
+        pdu = Pdu.factory(Octets.new(octets.b))
+        count = 0
+        each_interface(circuit) do |c|
+          c.transmit(pdu)
+          count += 1
+        end
+        @sent << { octets: octets.bytesize, circuit: circuit, circuits: count, at: @scheduler.now.round(3) }
+        event(:send, "sent #{octets.bytesize} octets on #{circuit || 'every interface'}")
+        { sent: count, octets: octets.bytesize, pdu: pdu.class.name.split("::").last }
+      end
+
       def neighbor_stop(circuit: nil) = each_interface(circuit) { |c| c.stop }.tap { event(:neighbor, "hellos stopped on #{circuit || 'every interface'}") }
       def neighbor_start(circuit: nil) = each_interface(circuit) { |c| c.start unless c.hellos? }.tap { event(:neighbor, "hellos started on #{circuit || 'every interface'}") }
 

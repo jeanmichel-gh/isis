@@ -19,7 +19,8 @@ isis-cli sim router.overload router=r1c1 on=true
 ```
 
 isis4r-sim takes isisd's options (`docs/isisd.md`), with `-c` naming the
-simulated area's file, `/lab/sim.yml` by default. It answers isisd's API
+simulated area's file, `/lab/sim.yml` by default, and `--http`, its HTTP
+API (below). It answers isisd's API
 on the same socket, the simulator's own system answering every `show.*`,
 and the `sim.*` methods below as well. Its log says what it started as
 and how many systems it simulates, and warns of any system no link
@@ -228,6 +229,52 @@ metric it carries, each of the simulator's interfaces with whether it is
 sending hellos, every system with its levels, flags, prefix counts, prefix
 groups by their first prefix, withdrawn groups and LSP Numbers, and every
 link with its number, state, metric and levels. `sim.graph` gives nodes and links for a map.
+
+## The HTTP API
+
+isis4r-sim also answers HTTP/1.1 on 127.0.0.1:8080, as bgp4r-sim,
+vtep4r-sim and bfd4r-sim do (routescope
+`docs/design/protocol-conventions.md`, part 4): `--http ADDRESS:PORT`
+moves it, `--http off` turns it off. It reads and acts in the daemon's
+own loop, as the socket's API does. JSON in and out, one request per
+connection.
+
+A POST needs the header `X-ISIS4R: routescope`, compared in lower case;
+without it, 403. A refused request is a 4xx with `{"error": ...}`: 400
+for a parameter or value at fault, 404 for no such path, 405 for a
+method other than GET and POST.
+
+| Path | Does |
+| --- | --- |
+| `GET /api/status` | the version, the simulator's system, how many systems and links, whether it generates and ages, how many faults, and the paths |
+| `GET /api/state` | `sim.state` |
+| `GET /api/topology` | `sim.graph` |
+| `GET /api/sent` | the faults injected and the octets sent, each with when |
+| `GET /api/catalog` | the fault catalog (`ISIS::Fault`, `docs/protocol-testing.md`) and each POST's parameters |
+| `GET /api/events` | the events after `since=N`, as the socket's `events.subscribe` replays them |
+| `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a simulated system's LSPs |
+| `POST /api/plan` | the same, built and answered, injected nowhere |
+| `POST /api/fault.clear` | `router`: takes the injected TLVs out, of one system or, without it, every one |
+| `POST /api/send` | `octets` in hex, `circuit`: sends them as they are, on one interface or every one |
+
+And each action of the socket's API, as `POST /api/ACTION` with the same
+parameters: `/api/link.down` with `link`, `/api/router.overload` with
+`router` and `on`, and so on. Each answers as its `sim.` method does.
+
+A fault replaces the system's Router Capability with the entry's, and
+adds the entry's reachability after the system's: a prefix of its own,
+`10.255.250.N/32` unless `prefix` says, with index `index`, near the top
+of the system's SRGB unless given. The system needs segment routing. It
+stays until cleared. A neighbour learns it as any change, and isisd there
+makes the entry's finding.
+
+```sh
+H='X-ISIS4R: routescope'
+curl -s 127.0.0.1:8080/api/catalog
+curl -s -H "$H" -d '{"case":"srgb_overlap","router":"r2c3"}' 127.0.0.1:8080/api/fault
+curl -s -H "$H" -d '{"router":"r2c3"}' 127.0.0.1:8080/api/fault.clear
+curl -s -H "$H" -d '{"link":"r1c1--r1c2"}' 127.0.0.1:8080/api/link.down
+```
 
 ## What it refuses, and what it keeps
 

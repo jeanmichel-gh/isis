@@ -12,7 +12,7 @@ module ISIS
   class Daemon
     SOCKET = "/run/isis4r/isisd.sock"
 
-    attr_reader :router, :api, :host, :log, :simulator
+    attr_reader :router, :api, :host, :log, :simulator, :http
 
     # The configuration file, YAML (JSON is YAML too), with its areas
     # as written (ConfigFile).
@@ -23,7 +23,7 @@ module ISIS
     # +config+ is a Router configuration, or with +topology+ nil and
     # ignored: the simulator's own configuration is the topology's.
     def initialize(config, log:, clock:, scheduler: Runtime::Scheduler.new(clock), host: nil, socket: SOCKET,
-                   group: nil, topology: nil)
+                   group: nil, topology: nil, http: nil)
       @log = log
       @clock = clock
       @host = host || Router::Host.new(log: log)
@@ -34,6 +34,12 @@ module ISIS
         @router = Router.new(config, clock: clock, scheduler: scheduler, log: log, host: @host)
       end
       @api = socket && Api.new(@router, path: socket, group: group, simulator: @simulator)
+      # isis4r-sim's HTTP API (Http) on +http+, "ADDRESS:PORT", when given.
+      # It reads the events the Unix socket's API keeps, so it needs that.
+      if http && @simulator && @api
+        address, port = http.to_s.split(/:(?=\d+\z)/)
+        @http = Http.new(@simulator, api: @api, address: address, port: Integer(port))
+      end
       @stop = false
     end
 
@@ -41,6 +47,7 @@ module ISIS
 
     def start
       @api&.start
+      @http&.start
       # Before the circuits start, so their first hellos carry TLV 148 when
       # bfdd4r answers.
       @router.bfd&.poll(@clock.now)
@@ -66,6 +73,7 @@ module ISIS
       @router.step(wait: wait)
       @router.bfd&.poll(@clock.now)
       @api&.poll
+      @http&.poll
     end
 
     def stop
@@ -76,6 +84,7 @@ module ISIS
       @log.info("#{name} stopping", kind: :daemon)
       @simulator ? @simulator.stop : @router.stop
       @api&.stop
+      @http&.stop
       @host.close if @host.respond_to?(:close)
       self
     end

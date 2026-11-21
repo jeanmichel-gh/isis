@@ -2389,8 +2389,9 @@ Fast reroute is TI-LFA (RFC 9855), specified in routescope's
 `docs/design/ti-lfa.md` (approved 2026-11-21). Its step 0 builds the
 conventions it stands on, one pull request each: SR findings and receive
 policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
-#100), the label stack codec and the `to_hash` catalog (0c), `isis4r-sim`'s HTTP API,
-and `test/integration` renamed `test/interop`.
+#100), the label stack codec and the `to_hash` catalog (0c, #101),
+`isis4r-sim`'s HTTP API with `/api/fault` (0d), and `test/integration`
+renamed `test/interop`.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
