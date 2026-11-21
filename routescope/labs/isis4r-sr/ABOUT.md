@@ -81,7 +81,7 @@ Images: `isis4r:latest`, built in an isis checkout beside datalink-socket, and F
 
 ```sh
 docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
-docker pull quay.io/frrouting/frr:10.2.1
+docker pull quay.io/frrouting/frr:10.7.1
 ```
 
 Start it from routescope's Labs panel (`routescope-labs install isis/isis4r-sr`), or here: `sudo containerlab deploy -t isis4r-sr.clab.yml`.

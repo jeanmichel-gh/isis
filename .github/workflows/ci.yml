@@ -185,7 +185,7 @@ jobs:
       - name: containerlab and FRR
         run: |
           bash -c "$(curl -sL https://get.containerlab.dev)"
-          docker pull -q quay.io/frrouting/frr:10.2.1
+          docker pull -q quay.io/frrouting/frr:10.7.1
       - name: The isis4r-frr lab
         working-directory: isis
         run: sudo test/lab/isis4r-frr.sh clab

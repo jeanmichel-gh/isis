@@ -17,7 +17,7 @@
 # Images: isis4r:latest, built in a checkout of isis4r beside
 # datalink-socket, and FRR:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
-#   docker pull quay.io/frrouting/frr:10.2.1
+#   docker pull quay.io/frrouting/frr:10.7.1
 # Then install it into ~/labs with
 #   routescope-labs install isis/isis4r-frr
 # and start it from routescope's lab menu, or here:
@@ -46,14 +46,14 @@ topology:
     # theirs comes from IS-IS.
     f1:
       kind: linux
-      image: quay.io/frrouting/frr:10.2.1
+      image: quay.io/frrouting/frr:10.7.1
       binds: [f1:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
         - sh -c "ip addr add 10.0.12.2/30 dev eth1 2>/dev/null || true"
     f2:
       kind: linux
-      image: quay.io/frrouting/frr:10.2.1
+      image: quay.io/frrouting/frr:10.7.1
       binds: [f2:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
