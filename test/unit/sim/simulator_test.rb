@@ -304,4 +304,18 @@ class TestSimSimulator < Minitest::Test
     adj = lsp.tlvs.grep(ISIS::Tlv::ExtendedIsReachability).flat_map(&:entries).map { |en| en.subtlvs.to_a.grep(ISIS::SubTlv::AdjSid).size }
     assert_equal [1, 1, 1], adj, "r1c1 has three links: s1, r1c2, r2c1"
   end
+
+  # bfd_tlv on a simulator interface reaches its circuit: what TLV 148
+  # says, for negative tests, whatever BFD does (no bfdd4r here).
+  def test_bfd_tlv_on_a_simulator_interface
+    topo = topology("simulator" => { "system_id" => "0000.0000.0009", "hostname" => "s1", "areas" => ["49.0001"],
+                                     "level" => 1, "minimum_lsp_interval" => 1,
+                                     "interfaces" => [{ "name" => "a", "ip_addresses" => ["10.0.14.2"],
+                                                        "bfd_tlv" => true }] })
+    sim = ISIS::Sim::Simulator.new(topo, clock: @clock, scheduler: @scheduler, log: @log,
+                                         host: SimHost.new(@wires, { "a" => "00:00:00:00:00:09" }))
+    circuit = sim.router.interfaces.first.circuits[1]
+    assert_equal true, circuit.bfd_tlv
+    assert_equal "94030000cc", circuit.build_hello.tlvs.find { |t| t.is_a?(ISIS::Tlv::BfdEnabled) }.to_shex
+  end
 end

@@ -54,6 +54,8 @@ module ISIS
                       address: Array(n.ip_addresses).first, address6: Array(n.ipv6_addresses).first,
                       areas: Array(n.areas).map(&:to_s), holding_time: n.holding_time, hold: hold(n.expiry) }
               row[:priority] = n.priority if i.broadcast?
+              bfd = c.bfd_view(n)
+              row[:bfd] = bfd if bfd
               row
             end
           end

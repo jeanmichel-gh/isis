@@ -197,3 +197,93 @@ class TestRouter < Minitest::Test
     refute_equal "up", b.interfaces.first.circuits[1].three_way_state.to_s
   end
 end
+
+# bfd: true on an interface, through a Router: the circuits get the Bfd
+# mechanism on the host's client, TLV 148 goes out, and the adjacencies
+# view says what BFD does (routescope docs/design/bfd-clients.md).
+class TestRouterBfd < Minitest::Test
+  require_relative "../support/fake_bfd"
+
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    @wires = Hash.new { |h, k| h[k] = ISIS::Link::SimulatedWire.new }
+    TestLogs.heading(name)
+    @logs = {}
+    @fakes = {}
+    @routers = {}
+  end
+
+  def router(who, interface, network: "point-to-point")
+    @logs[who] = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
+    host = SimHost.new(@wires, { "ab" => "00:00:00:00:00:0#{who}" })
+    host.bfd_client = @fakes[who] = FakeBfd.new
+    @routers[who] = ISIS::Router.new(
+      { system_id: "0000.0000.000#{who}", hostname: who, minimum_lsp_interval: 1,
+        interfaces: [{ name: "ab", network: network, ip_addresses: ["10.0.12.#{who == 'a' ? 1 : 2}"],
+                       hello_interval: 1, hello_multiplier: 3 }.merge(interface)] },
+      clock: @clock, scheduler: @scheduler, log: @logs[who], host: host
+    )
+  end
+
+  def run_for(seconds, step: 0.25)
+    (seconds / step).ceil.times do
+      @scheduler.advance(step)
+      @routers.each_value do |r|
+        r.step(wait: 0)
+        r.bfd&.poll(@clock.now)
+      end
+    end
+  end
+
+  def view(who) = ISIS::Daemon::Views.new(@routers[who]).adjacencies.first
+
+  def test_bfd_true_gives_the_circuit_the_mechanism
+    a = router("a", { bfd: true })
+    circuit = a.interfaces.first.circuits[1]
+    assert_same a.bfd, circuit.bfd
+    assert_same @fakes["a"], a.bfd.client
+    assert_equal "94030000cc", circuit.build_hello.tlvs.find { |t| t.is_a?(ISIS::Tlv::BfdEnabled) }.to_shex
+  end
+
+  def test_no_bfd_no_mechanism
+    a = router("a", {})
+    assert_nil a.bfd
+    assert_nil a.interfaces.first.circuits[1].bfd
+  end
+
+  def test_bfd_tlv_reaches_the_circuit
+    a = router("a", { bfd_tlv: true })
+    assert_equal true, a.interfaces.first.circuits[1].bfd_tlv
+  end
+
+  # The view: waiting, then up; on a failure, the adjacency event says
+  # reason bfd. On both kinds of circuit.
+  %w[point-to-point broadcast].each do |network|
+    define_method("test_view_and_reason_#{network.tr('-', '_')}") do
+      a = router("a", { bfd: true }, network: network)
+      b = router("b", { bfd: true }, network: network)
+      [a, b].each(&:start)
+      run_for(3)
+      assert_equal "waiting", view("a")[:bfd]
+      assert_equal "initializing", view("a")[:state]
+      @fakes.each_value { |f| f.tell_all(:up) }
+      run_for(2)
+      assert_equal "up", view("a")[:state]
+      assert_equal "up", view("a")[:bfd]
+      @fakes.each_value { |f| f.tell_all(:down) }
+      run_for(0.25)
+      down = @logs["a"].events.find { |e| e.kind == :adjacency && e.data[:to] == :down }
+      assert_equal :bfd, down.data[:reason]
+    end
+  end
+
+  # Without BFD on the interface the view has no bfd key: additive.
+  def test_view_without_bfd_has_no_bfd_key
+    a = router("a", {})
+    b = router("b", {})
+    [a, b].each(&:start)
+    run_for(3)
+    refute view("a").key?(:bfd)
+  end
+end

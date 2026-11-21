@@ -41,6 +41,9 @@ module ISIS
 
     def start
       @api&.start
+      # Before the circuits start, so their first hellos carry TLV 148 when
+      # bfdd4r answers.
+      @router.bfd&.poll(@clock.now)
       @simulator ? @simulator.start : @router.start
       @log.info("#{name} #{VERSION} started as #{@router.system_id_s}" \
                 "#{" (#{@router.config[:hostname]})" if @router.config[:hostname]}, " \
@@ -57,8 +60,11 @@ module ISIS
       shutdown
     end
 
+    # BFD's events are read as the API's are, without blocking (BFD::Client
+    # never does), so one thread still changes every mechanism.
     def step(wait: 0.05)
       @router.step(wait: wait)
+      @router.bfd&.poll(@clock.now)
       @api&.poll
     end
 

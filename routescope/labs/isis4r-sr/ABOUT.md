@@ -80,7 +80,7 @@ The host needs the `mpls_router` and `mpls_iptunnel` modules; the lab VMs load t
 Images: `isis4r:latest`, built in an isis checkout beside datalink-socket, and FRR:
 
 ```sh
-docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 

@@ -67,5 +67,5 @@ The design is `docs/design/isis4r-areas-lab.md` in the isis repo. `test/scenario
 Every node runs `isis4r:latest`, built in an isis checkout beside datalink-socket:
 
 ```sh
-docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 ```

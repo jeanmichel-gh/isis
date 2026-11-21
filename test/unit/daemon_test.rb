@@ -79,6 +79,22 @@ class TestDaemon < Minitest::Test
     refute File.exist?(d.api.path)
   end
 
+  # bfd: true: the daemon reads BFD's events at start, before the first
+  # hellos, and on each step, as it reads the API.
+  def test_bfd_is_polled_at_start_and_on_each_step
+    require_relative "../support/fake_bfd"
+    host = SimHost.new(@wires, { "eth1" => "00:00:00:00:00:0a" })
+    host.bfd_client = fake = FakeBfd.new
+    config = ISIS::Router.normalize({ system_id: "0000.0000.000a", interfaces: [{ name: "eth1", bfd: true }] })
+    d = ISIS::Daemon.new(config, log: @log, clock: @clock, host: host, socket: nil).start
+    assert_equal 1, fake.polls
+    d.step(wait: 0)
+    d.step(wait: 0)
+    assert_equal 3, fake.polls
+    d.shutdown
+    assert_includes fake.calls, [:close, true]
+  end
+
   def test_without_a_socket
     d = daemon(socket: nil).start
     d.step(wait: 0)

@@ -2,6 +2,7 @@
 
 require_relative "../test_helper"
 require_relative "../support/pass_through"
+require_relative "../support/fake_bfd"
 
 # Pass-through equivalence (CLAUDE.md, "Pass-through equivalence"): one
 # router scenario, run from the same initial state on simulated time, with
@@ -23,8 +24,11 @@ require_relative "../support/pass_through"
 # each advertising a /32. A and B run Level 2 too on their link; each puts
 # the Level 1 area's prefixes in its Level 2 LSP, A summarizing them as
 # 192.0.2.0/24, and B leaks its Level 2 routes into Level 1. C
-# redistributes its host's static routes, which change when D goes. The script brings it up, overloads C, cuts the
-# point to point link and restores it, and silences D, the DIS.
+# redistributes its host's static routes, which change when D goes. A and
+# B run BFD on their link, through a FakeBfd each that the script drives
+# as bfdd4r would. The script brings it up, overloads C, cuts the
+# point to point link, BFD telling the failure, and restores it, and
+# silences D, the DIS.
 class TestPassThroughEquivalence < Minitest::Test
   IDS = { a: "0000.0000.000a", b: "0000.0000.000b", c: "0000.0000.000c", d: "0000.0000.000d" }.freeze
   STEP = 0.5
@@ -42,7 +46,7 @@ class TestPassThroughEquivalence < Minitest::Test
   # One run of the scenario. Returns what the harness observed: packets per
   # circuit, a state snapshot per step, and route operations, each in order.
   class Run
-    attr_reader :packets, :states, :operations, :lines, :calls
+    attr_reader :packets, :states, :operations, :lines, :calls, :systems
 
     def initialize(controls:, logging:)
       @controls = controls
@@ -59,6 +63,8 @@ class TestPassThroughEquivalence < Minitest::Test
       @ab = ISIS::Link::SimulatedWire.new
       @lan = ISIS::Link::SimulatedWire.new
       @host_routes = HostRoutes.new([HostRoutes.static("198.18.7.0/24")])
+      @fakes = []
+      @bfds = []
       @systems = IDS.keys.to_h { |w| [w, system(w)] }
       @a_transport = @systems[:a][:circuits].first.transport
       install_controls if controls
@@ -79,11 +85,16 @@ class TestPassThroughEquivalence < Minitest::Test
       decision.summary = l2[:summary] if l2
       circuits = []
       if both
+        fake = FakeBfd.new
+        bfd = ISIS::Bfd.new(client: fake, log: log)
+        @fakes << fake
+        @bfds << bfd
+        @mechanisms << bfd
         levels = { 1 => { database: db, originator: orig }, 2 => { database: l2[:db], originator: l2[:orig] } }
         circuits << ISIS::P2pCircuit.new(transport: transport(@ab, "#{who}-p2p"), scheduler: @scheduler, log: log,
                                          name: "#{who}-p2p", system_id: IDS[who], snpa: "00:00:00:00:01:0#{n}",
                                          ip_addresses: ["10.0.12.#{n}"], levels: levels,
-                                         hello_interval: 1, hello_multiplier: 3)
+                                         hello_interval: 1, hello_multiplier: 3, bfd: bfd, bfd_interface: "ab")
       end
       unless who == :a
         circuits << ISIS::LanCircuit.new(transport: transport(@lan, "#{who}-lan"), scheduler: @scheduler, log: log,
@@ -171,13 +182,18 @@ class TestPassThroughEquivalence < Minitest::Test
         [s[:orig], s[:l2] && s[:l2][:orig], *s[:circuits], s[:decision], s[:l2] && s[:l2][:decision],
          s[:redistribution]].compact.each(&:start)
       end
-      run_for(40)
+      run_for(3)
+      @fakes.each { |f| f.tell_all(:up) }
+      run_for(37)
       @systems[:c][:orig].overload = true
       run_for(15)
       @ab.detach(@a_transport)
+      @fakes.each { |f| f.tell_all(:down) }
       run_for(15)
       @ab.attach(@a_transport)
-      run_for(20)
+      run_for(3)
+      @fakes.each { |f| f.tell_all(:up) }
+      run_for(17)
       @systems[:d][:circuits].each(&:stop)
       @d_stopped = true
       @host_routes.rows = [HostRoutes.static("198.18.8.0/24")]
@@ -191,6 +207,7 @@ class TestPassThroughEquivalence < Minitest::Test
     def run_for(seconds)
       (seconds / STEP).ceil.times do
         @scheduler.advance(STEP)
+        @bfds.each { |b| b.poll(@clock.now) }
         @systems.each do |who, s|
           s[:circuits].each { |c| c.poll unless who == :d && @d_stopped }
         end
@@ -220,7 +237,8 @@ class TestPassThroughEquivalence < Minitest::Test
         [circuit.name, circuit.lan_id_s, circuit.dis == :self ? :self : circuit.dis&.system_id_s,
          circuit.neighbors.values.map { |n| [n.system_id_s, n.state] }]
       else
-        [circuit.name, circuit.three_way_state, circuit.neighbor&.state]
+        [circuit.name, circuit.three_way_state, circuit.neighbor&.state,
+         circuit.neighbor && circuit.bfd_view(circuit.neighbor)]
       end
     end
   end
@@ -246,6 +264,13 @@ class TestPassThroughEquivalence < Minitest::Test
   # prefixes, and something moved, so a run that compared two idle
   # networks could not pass.
   def test_the_scenario_routes_and_changes
+    # BFD held A and B's adjacency until its sessions were Up, and took it
+    # down when the link was cut.
+    ab = @plain.states.map { |st| st[:a][:circuits].first }
+    assert_includes ab, ["a-p2p", :initializing, :initializing, "waiting"]
+    assert_includes ab, ["a-p2p", :up, :up, "up"]
+    reasons = @plain.systems[:a][:log].events.select { |e| e.kind == :adjacency }.map { |e| e.data[:reason] }
+    assert_includes reasons, :bfd
     ops = @plain.operations.transform_values(&:first)
     assert(ops[:a].any? { |o| o.start_with?("install 192.0.2.4/32") }, ops[:a].inspect)
     assert(ops[:a].any? { |o| o.start_with?("withdraw 192.0.2.4/32") }, ops[:a].inspect)
@@ -267,7 +292,7 @@ class TestPassThroughEquivalence < Minitest::Test
   MECHANISMS = [ISIS::Runtime::Scheduler, ISIS::Link::SimulatedTransport, ISIS::P2pCircuit, ISIS::P2pCircuit::Level,
                 ISIS::LanCircuit, ISIS::Database, ISIS::Originator, ISIS::Pseudonode, ISIS::Spf::Decision,
                 ISIS::Forwarding::Recorder, ISIS::Runtime::Log, ISIS::Spf::Leak,
-                ISIS::Spf::Summary, ISIS::Redistribution].freeze
+                ISIS::Spf::Summary, ISIS::Redistribution, ISIS::Bfd].freeze
 
   def test_every_control_passing_through_changes_nothing
     controlled = run_with(controls: true, logging: false)

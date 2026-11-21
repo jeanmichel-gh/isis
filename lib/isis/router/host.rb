@@ -51,6 +51,13 @@ module ISIS
         "the MPLS settings cannot be written: #{e.message}"
       end
 
+      # What an interface with bfd: true asks bfdd4r through. bfd4r is
+      # required here, so a router without BFD never loads it.
+      def bfd_client
+        require "bfd/client"
+        BFD::Client.new("isisd")
+      end
+
       def route_source
         @source ||= Forwarding::Netlink.new(log: @log)
       end

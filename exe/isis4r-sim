@@ -14,6 +14,7 @@
 require "optparse"
 $LOAD_PATH.unshift File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../datalink-socket/lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../../bfd4r", __dir__)
 require "isis4r"
 
 options = { config: "/lab/sim.yml", socket: ISIS::Daemon::SOCKET, log: nil, debug: false, group: nil }

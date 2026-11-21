@@ -17,6 +17,7 @@ module ISIS
   TLV_IS_NEIGHBORS        = 6
   TLV_PADDING             = 8
   TLV_PROTOCOLS_SUPPORTED = 129
+  TLV_BFD_ENABLED         = 148 # RFC 6213 section 6, "BFD-Enabled"
 
   # NLPID values for Protocols Supported.
   NLPID_IPV4 = 0xCC

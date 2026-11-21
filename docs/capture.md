@@ -1,7 +1,8 @@
 # Wire capture
 
 Build the helper with `docker build --target capture --build-context
- datalink-socket=../datalink-socket -t isis4r-capture:latest .`.
+datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r -t
+isis4r-capture:latest .`.
 Run `isis-capture -i eth1` in a container sharing the router network namespace,
 with NET_RAW and NET_ADMIN. `-r FILE` reads a classic Ethernet PCAP.
 

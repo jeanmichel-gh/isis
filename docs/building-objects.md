@@ -83,6 +83,7 @@ them and fails if one is missing.
 - `ISIS::Tlv::ExtendedIsReachability`
 - `ISIS::Tlv::AreaAddresses`
 - `ISIS::Tlv::Authentication`
+- `ISIS::Tlv::BfdEnabled`
 - `ISIS::Tlv::DynamicHostname`
 - `ISIS::Tlv::IpInternalReachability`
 - `ISIS::Tlv::IpExternalReachability`

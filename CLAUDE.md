@@ -175,6 +175,7 @@ it. At least these:
 | Receive policy | decides what a received PDU may change |
 | SPF | computes routes when a database changes |
 | Route installation | hands route operations to a forwarding adapter |
+| BFD | asks bfdd4r for sessions and tells the circuits what they do (`Bfd`, `adjacency/bfd.rb`) |
 
 Controls compose at whatever granularity the mechanism has. A test can run
 ordinary routing on three circuits and manipulate hellos or flooding on a
@@ -1747,7 +1748,7 @@ it out.
 Record status here as it moves, because a plan that lives only in a chat
 is lost when the chat is.
 
-**Status by gate, measured 2026-11-13.** Update this table in the pull
+**Status by gate, measured 2026-11-21.** Update this table in the pull
 request that moves a gate. The paragraph after it has the detail.
 
 | Phase | Gate | Status |
@@ -1760,12 +1761,36 @@ request that moves a gate. The paragraph after it has the detail.
 | | 3 routes computed | Done, FRR 8.4.4, 2026-11-01 |
 | | 4 routes installed | Done, FRR 8.4.4, 2026-11-01 |
 | 3, enhanced router | 1 policy | Done, FRR 8.4.4, 2026-11-02 |
-| | 2 failure handling (BFD, RFC 8706) | Not started |
+| | 2 failure handling (BFD, RFC 8706) | BFD built, FRR 10.2.1, 2026-11-21; RFC 8706 not started |
 | | 3 topologies and TE | Not started; TLV 22 sub-TLVs 6 and 8 only, 2026-11-15 |
 | 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | SR-MPLS designed and approved 2026-11-16 (`docs/design/sr-mpls.md`); its codec built 2026-11-16 (PR 1 of 5), against an FRR 10.2.1 LSP; origination built the same day (PR 2), FRR 10.2.1 reading isis4r's SRGB, Prefix-SID and Adj-SIDs; the label table and its API too (PR 3), agreeing with FRR's on a four-router line; and forwarding (PR 4), traffic crossing FRR and isis4r on labels in `routescope/labs/isis4r-sr`. And the simulator (PR 5): a simulated grid advertises SIDs and SRGBs, which FRR reads. SR-MPLS's five pull requests are done. The rest not started |
 
-Not started was measured by searching `lib/` and `exe/`: nothing for BFD,
-RFC 8706, multi topology, TLVs 222 or 229, or TE. The TE gate is not
+Not started was measured by searching `lib/` and `exe/`: nothing for
+RFC 8706, multi topology, TLVs 222 or 229, or TE.
+
+**BFD, 2026-11-21** (routescope `docs/design/bfd-clients.md`, step 6b).
+`bfd: true` on an interface gives its circuits the `Bfd` mechanism, which
+asks bfd4r's bfdd4r for sessions through `BFD::Client`, client name
+`isisd`; `Daemon#step` polls it as it polls the API, and the image runs
+`with-bfdd4r isisd`. Its hellos carry TLV 148 (`tlv/bfd_enabled.rb`,
+RFC 6213 section 6) while bfdd4r answers, and `adjacency/bfd_circuit.rb`
+holds RFC 6213 3.1's variables and 3.2's and 4's rules for both kinds of
+circuit. Two readings where the RFCs pull apart, written there with
+their mechanism: the Down in TLV 240 and the MAC left out of TLV 6 apply
+only to an adjacency not yet Up, since on an Up one they drop it at the
+peer by RFC 5303's table and so defeat section 4; and AdminDown counts
+as usable (RFC 5882 4.1, "the adjacency MUST be allowed"). FRR does
+not implement RFC 6213: 10.5.1's isisd binary has no TLV 148 code, and
+10.2.1's hellos carry none (captured in the lab). So with FRR BFD is never
+required: an Up adjacency on a BFD circuit still gets a session, and a
+failure takes it down, reason `bfd` (RFC 5882 10.1.2). The gate,
+measured 2026-11-21 on FRR 10.2.1 in `routescope/labs/isis4r-bfd` with
+`test/lab/isis4r-bfd.sh`: BFD Up on both, and with 100% loss on the
+link the adjacency Down on both in 0.69 to 0.92 s, reason `bfd` on
+isisd, five runs in a row, each side timed from its peer's netem. Not in CI: 300 ms times 3 leaves little room under a
+second. Not yet: timers per interface (bfdd4r's defaults), BFD for
+IPv6 against an independent router, and a second peer that sends TLV
+148. The TE gate is not
 met by the link addresses below: they are two of RFC 5305's sub-TLVs,
 sent without traffic engineering, and no TE attribute is carried.
 
@@ -2143,7 +2168,7 @@ cut and restored link and a silenced DIS, four ways: plain, with every
 control installed, with logging at debug, and with both. A control is a
 method replaced on the object that runs a mechanism, so
 `test/support/pass_through.rb` replaces every method of every mechanism
-object, the scheduler, transports, circuits, point to point levels,
+object, the scheduler, transports, circuits, point to point levels, BFD,
 databases, originators, pseudonodes, decision processes, leaks,
 summaries, redistributions, the forwarding adapter and the log, with one that calls the original. The four runs
 must give the same packets per circuit, sent and received in order, the
@@ -2593,6 +2618,18 @@ Ruby.**
 * Consequence: the adapter takes route operations (install, replace,
   withdraw) and nothing netlink specific, so a BSD routing socket
   adapter can sit behind the same interface later.
+
+**2026-11-21. bfd4r, as datalink-socket; Ruby 3.2.**
+
+* The owner's decision (routescope `docs/design/bfd-clients.md`): the
+  gemspec depends on `bfd4r`, the Gemfile takes it by path,
+  `../bfd4r`, the Dockerfile as a build context (`--build-context
+  bfd4r=../bfd4r`), and CI checks it out beside isis.
+* bfd4r required Ruby 3.3, and bundler refused it on 3.2. The owner's
+  decision: bfd4r comes down to 3.2 (bfd4r #10), and isis drops 3.1.
+  Premise, measured in the ruby images: bfd4r's unit tests pass 228 of
+  228 on 3.2, and error on 3.1, where `Thread::Queue#pop(timeout:)` does
+  not exist.
 
 ## Corrections
 

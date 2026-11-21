@@ -13,6 +13,7 @@
 # exactly what happened on the wire.
 $LOAD_PATH.unshift File.expand_path("../../lib", __dir__)
 $LOAD_PATH.unshift File.expand_path("../../../datalink-socket/lib", __dir__)
+$LOAD_PATH.unshift File.expand_path("../../../bfd4r", __dir__)
 
 require "json"
 require "ipaddr"

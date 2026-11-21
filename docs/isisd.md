@@ -68,6 +68,38 @@ interfaces:
   - { name: eth1, adj_sid: false }       # no Adj-SID on this one
 ```
 
+BFD (RFC 5880) is per interface, with `bfd: true`. isisd asks bfdd4r,
+bfd4r's daemon, for sessions through `BFD::Client`, under the client name
+`isisd`; bfdd4r runs beside it, one per network namespace, and the
+isis4r image starts it (`with-bfdd4r isisd ...`, its entrypoint). A lab
+that sets its own entrypoint puts `with-bfdd4r` first.
+
+```yaml
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.12.1], bfd: true }
+```
+
+On such an interface, while bfdd4r answers:
+
+- every hello carries TLV 148, BFD-Enabled, with MTID 0 and the NLPID of
+  each protocol isisd runs, 0xCC and with `ipv6: true` 0x8E (RFC 6213
+  section 3). With bfdd4r away, no TLV 148, and nothing goes down.
+- With TLV 148 from the neighbour too, BFD is required (RFC 6213 3.1): a
+  session to its TLV 132 address (TLV 232 for IPv6), from the
+  interface's; the adjacency comes Up only once the sessions are, and
+  until then a point to point hello says Down in TLV 240 and a LAN hello
+  leaves the neighbour out of TLV 6 (3.2). TLV 148 new on an Up
+  adjacency holds its hold time until BFD is Up (section 4).
+- Without TLV 148 from the neighbour, as FRR sends none, the adjacency
+  comes Up on its hellos (RFC 5882 4.1), and once Up it has a session
+  too.
+- Either way, an Up session gone Down takes the adjacency Down at once,
+  with reason `bfd` (RFC 5882 10.1.2). AdminDown never does (4.2).
+
+`bfd_tlv: true` or `false` on an interface overrides what TLV 148 says,
+whatever BFD does, for a test that wants a router that says one thing and
+does another; isis4r-sim takes it on its own interfaces.
+
 An area is read as written: YAML would read `49.0010` as the number
 49.001, so isisd takes the text of each item under `areas` from the file.
 
@@ -86,7 +118,7 @@ Every method:
 |---|---|---|
 | `show.overview` | | system ID, hostname, levels, areas, counts per level |
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
-| `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold |
+| `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label` |
@@ -159,6 +191,9 @@ An event is one log line above debug, as `show.log` and
   `prefixes`, `reasons` (the first 20) and `more` (how many it left out).
   A reason that names an LSP is written as the `database` event names it,
   `LSP 0000.0001.0101.00-00 sequence 0x000001a7`.
+- `kind: "adjacency"` with `data.reason: "bfd"` is an adjacency taken
+  Down by BFD. `kind: "bfd"` is a session's change, with `interface`,
+  `peer`, `from` and `to`, or bfdd4r going or coming.
 - `data.refresh: true`, on an `origination` or a `database` event, says
   the LSP's content is what it was, only a new sequence (RFC 1142 7.3.5).
   It is absent otherwise.

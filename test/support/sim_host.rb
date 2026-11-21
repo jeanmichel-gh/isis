@@ -26,6 +26,12 @@ class SimHost
 
   def route_source = self
 
+  # What an interface with bfd: true asks for sessions through: a FakeBfd
+  # (test/support/fake_bfd.rb) a test hands in.
+  attr_writer :bfd_client
+
+  def bfd_client = @bfd_client || raise(ArgumentError, "this SimHost has no bfd_client")
+
   def routes = @routes || []
 end
 
