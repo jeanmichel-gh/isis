@@ -36,10 +36,17 @@ class TestFrrP2p < Minitest::Test
     assert @lab.wait_for(timeout, &block), "#{message}\n#{@lab.report}"
   end
 
+  # isis4r comes up one of two ways, both RFC 5303 section 3.2's table:
+  # from Initializing, when it heard FRR before FRR heard it; or straight
+  # from Down, when FRR's first hello it reads already says Initializing,
+  # since FRR heard it first. Which one is a race between the two daemons'
+  # first hellos, so either passes. CI met the second on isis #97.
+  UP = /adjacency with #{Regexp.escape(FrrLab::FRR_ID)} (initializing|down) -> up/
+
   def test_adjacency_comes_up_on_both_sides
     @lab.start
     assert_eventually("adjacency did not come up on both sides") { both_up? }
-    assert_includes @lab.isis4r_log, "adjacency with #{FrrLab::FRR_ID} initializing -> up"
+    assert_match UP, @lab.isis4r_log
   end
 
   # Ten seconds is more than three holding times: the hellos each side
