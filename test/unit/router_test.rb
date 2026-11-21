@@ -163,6 +163,34 @@ class TestRouter < Minitest::Test
     end
   end
 
+  # A misspelt interface key is refused, naming the key and the interface,
+  # where it used to be kept and do nothing. String keys, as YAML reads.
+  def test_an_unknown_interface_key_is_refused
+    e = assert_raises(ArgumentError) do
+      ISIS::Router.normalize({ "system_id" => "0000.0000.000c", "interfaces" => [{ "name" => "eth1", "bdf" => true }] })
+    end
+    assert_match(/\Ainterface eth1: unknown key bdf; the keys are name, network, /, e.message)
+    e = assert_raises(ArgumentError) do
+      ISIS::Router.normalize({ interfaces: [{ name: "eth2", metirc: 5, helo_interval: 1 }] })
+    end
+    assert_match(/\Ainterface eth2: unknown keys metirc, helo_interval;/, e.message)
+  end
+
+  def test_every_interface_key_is_taken
+    i = ISIS::Router::INTERFACE_KEYS.to_h { [_1, nil] }.merge(name: "eth1", network: "broadcast")
+    assert_equal ISIS::Router::INTERFACE_KEYS.sort, ISIS::Router.normalize({ interfaces: [i] })[:interfaces][0].keys.sort
+  end
+
+  # INTERFACE_KEYS is the interface block of Router's class comment, key for
+  # key, so neither can change alone.
+  def test_interface_keys_are_the_ones_the_comment_lists
+    source = File.read(File.expand_path("../../lib/isis/router.rb", __dir__))
+    block = source[/^  #   interfaces:\n(.*?)^  #\n/m, 1]
+    refute_nil block, "Router's comment has an interfaces: block"
+    listed = block.scan(/^  #     (?:- |  )(\w+):/).flatten.map(&:to_sym)
+    assert_equal ISIS::Router::INTERFACE_KEYS.sort, listed.sort
+  end
+
   # A line of three, a - b - c, where b - c comes up before a starts, as
   # in a lab whose systems start in any order. b has to pass a's LSP on to
   # c (RFC 1142 7.3.15.1 e 1 ii). isis4r sends no periodic CSNP on a point

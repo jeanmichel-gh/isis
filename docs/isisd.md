@@ -26,6 +26,11 @@ It needs root or `CAP_NET_RAW` to open the interfaces, and
 
 YAML. The keys are `ISIS::Router`'s, and its comment lists them all.
 
+An interface key isisd does not know is refused at start, naming the key
+and the interface, so a misspelt `bdf: true` stops isisd rather than
+leaving BFD off with nothing said. isis4r-sim refuses it the same way in
+its `simulator` section.
+
 ```yaml
 system_id: 1921.6800.1001
 hostname: r1
