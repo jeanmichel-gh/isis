@@ -36,6 +36,7 @@ module ISIS
   # of clause 10.1 on the hello, PSNP and CSNP timers.
   class LanCircuit
     include UpdateProcess
+    include Bfd::Circuit
 
     # RFC 1142 annex defaults: "iSISHelloTimer-Default INTEGER ::= 3",
     # "dRISISHelloTimer-Default INTEGER ::= 1",
@@ -66,8 +67,11 @@ module ISIS
     # One neighbour on the LAN, keyed by its LAN address (clause 8.4.1.4).
     # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1),
     # and +ipv6_addresses+ in TLV 232, link-local only (RFC 5308 section 3).
+    # The bfd_ fields are BFD's (Bfd::Circuit), as P2pCircuit::Neighbor's;
+    # +listed+ is whether its last hello listed this system's LAN address,
+    # which an adjacency held in Initializing for BFD comes Up on.
     Neighbor = Struct.new(:system_id, :snpa, :state, :priority, :holding_time, :lan_id, :areas, :expiry,
-                          :ip_addresses, :ipv6_addresses) do
+                          :ip_addresses, :ipv6_addresses, :listed, :bfd_pairs, :bfd_sessions, :bfd_seen_up) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -88,7 +92,8 @@ module ISIS
                    ip_addresses: [], ipv6_addresses: [], protocols: [:ipv4], hello_key: nil, database: nil, originator: nil,
                    metric: 10, area_key: nil, complete_snp_interval: COMPLETE_SNP_INTERVAL,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
-                   lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL, circuit_type: nil)
+                   lsp_transmission_interval: MINIMUM_BROADCAST_LSP_TRANSMISSION_INTERVAL, circuit_type: nil,
+                   bfd: nil, bfd_interface: nil, bfd_tlv: nil)
       raise ArgumentError, "a LAN circuit is Level 1 or Level 2, not #{level.inspect}" unless [1, 2].include?(level)
       # The Circuit Type its hellos carry: :l1 or :l1l2 at Level 1, :l2 or
       # :l1l2 at Level 2. :l1l2 says this system runs both levels on the
@@ -122,6 +127,7 @@ module ISIS
       @ipv6_addresses = ipv6_addresses
       @protocols = protocols
       @hello_key = hello_key
+      setup_bfd(bfd, bfd_interface, bfd_tlv)
       @neighbors = {} # LAN address as a String => Neighbor
       @dis = nil      # nil, :self, or the Neighbor elected
       @electing = false
@@ -272,7 +278,12 @@ module ISIS
       tlvs = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       tlvs << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       tlvs << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
-      listed = @neighbors.values.map(&:snpa)
+      tlvs.concat(bfd_tlvs)
+      # RFC 6213 3.2: "On a LAN circuit whenever "ISIS_NEIGHBOR_USEABLE" is
+      # "FALSE", the IS Neighbors TLV advertising the Media Access Control
+      # (MAC) address of the neighbor MUST be omitted in all transmitted
+      # IIHs." While the adjacency is not Up: Bfd::Circuit says why.
+      listed = @neighbors.values.reject { |n| bfd_hidden?(n) }.map(&:snpa)
       tlvs << Tlv::IsNeighbors.new(listed) unless listed.empty?
       hello = Pdu::LanHello.new(level: @level, circuit_type: @circuit_type,
                                 source_id: Octets.new(@system_id), holding_time: holding_time,
@@ -401,7 +412,9 @@ module ISIS
                                    .flat_map { |t| t.addresses.map(&:to_s) }
       neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
                                      .flat_map { |t| t.addresses.map(&:to_s) }
-      restart_holding_timer(key, neighbor)
+      neighbor.bfd_pairs = bfd_pairs_of(hello)
+      bfd_sync(neighbor)
+      restart_holding_timer(key, neighbor) if bfd_holds_time?(neighbor)
       # The next hop's address comes from TLVs 132 and 232, so a route
       # through a neighbour Up moves when they do.
       if neighbor.state == :up && addresses != [neighbor.ip_addresses, neighbor.ipv6_addresses]
@@ -409,7 +422,13 @@ module ISIS
       end
 
       listed = hello.neighbors.any? { |n| n.to_s == @snpa.to_s }
-      if listed && neighbor.state != :up
+      neighbor.listed = listed
+      if listed && neighbor.state != :up && bfd_blocked?(neighbor)
+        # RFC 6213 3.2: ""ISIS_NEIGHBOR_USEABLE" MUST be "TRUE" before the
+        # adjacency can transition from "INIT" to "UP" state."
+        @log.debug("adjacency with #{neighbor.system_id_s} held in initializing: BFD required and not usable " \
+                   "(RFC 6213 3.2)", circuit: @name)
+      elsif listed && neighbor.state != :up
         # Clause 8.4.1.5: "When R reports this circuit's lANAddress ... set
         # the adjacency's state to Up".
         transition(neighbor, :up, "it lists our LAN address #{@snpa}")
@@ -561,6 +580,7 @@ module ISIS
       @log.info("adjacency with #{neighbor.system_id_s} at #{neighbor.snpa} #{from} -> #{to}: #{why} " \
                 "(RFC 1142 8.4.1.5)", circuit: @name, kind: :adjacency, neighbor: neighbor.system_id_s,
                                       from: from, to: to)
+      bfd_sync(neighbor)
       up_changed("adjacency with #{neighbor.system_id_s} #{to}")
     end
 
@@ -602,6 +622,7 @@ module ISIS
       neighbor = @neighbors.delete(key)
       if neighbor
         neighbor.expiry&.cancel
+        bfd_release(neighbor)
         @log.info("adjacency with #{neighbor.system_id_s} at #{key} #{neighbor.state} -> down: #{why}",
                   circuit: @name, kind: :adjacency, neighbor: neighbor.system_id_s, from: neighbor.state,
                   to: :down, reason: reason)
@@ -617,6 +638,29 @@ module ISIS
     def refuse(reason, why)
       @log.info("hello refused: #{why}", circuit: @name, kind: :refused, reason: reason)
       reason
+    end
+
+    # For Bfd::Circuit.
+    def bfd_neighbors = @neighbors.values
+
+    # RFC 5882 10.1.2: the hold timer's path, with reason bfd.
+    def bfd_drop(neighbor, why)
+      drop(neighbor.snpa.to_s, :bfd, "#{why} (RFC 5882 10.1.2, RFC 6213 3.2)")
+    end
+
+    def bfd_hello_changed
+      hello_contents_changed if hellos?
+    end
+
+    # +n+ may have become usable or stopped being: whether TLV 6 lists it
+    # changes, and an adjacency held in Initializing for BFD comes Up once
+    # its neighbour lists this system (RFC 1142 8.4.1.5).
+    def bfd_usable_changed(n)
+      if n.state != :up && n.listed && !bfd_blocked?(n)
+        transition(n, :up, "it lists our LAN address #{@snpa}, and BFD is usable (RFC 6213 3.2)")
+        elect
+      end
+      bfd_hello_changed
     end
   end
 end

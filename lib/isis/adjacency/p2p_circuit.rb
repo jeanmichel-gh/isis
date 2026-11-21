@@ -41,6 +41,8 @@ module ISIS
   # refused unless its digest checks out under that key. Without one,
   # nothing is added and nothing is checked.
   class P2pCircuit
+    include Bfd::Circuit
+
     # AllISs. RFC 5309 section 4.1 recommends it for point to point hellos
     # on a LAN; second hand, from FRR's isis_pfpacket.c, which cites that
     # section. RFC 5309 itself is not read here.
@@ -49,8 +51,15 @@ module ISIS
     # +usage+ is the levels the adjacency serves, [1], [2] or [1, 2].
     # +ip_addresses+ is what its hellos carry in TLV 132 (RFC 1195 5.3.1),
     # and +ipv6_addresses+ in TLV 232, link-local only (RFC 5308 section 3).
+    #
+    # The bfd_ fields are BFD's (Bfd::Circuit): the MTID/NLPID pairs of the
+    # neighbour's TLV 148, nil when it sends none; the sessions this circuit
+    # asked for, [[peer, local], ...]; and whether one has been Up.
+    # +received_state+ is the three-way state its last hello said, which
+    # an adjacency held in Initializing for BFD comes Up on.
     Neighbor = Struct.new(:system_id, :snpa, :state, :extended_circuit_id, :holding_time, :areas, :expiry,
-                          :usage, :ip_addresses, :ipv6_addresses) do
+                          :usage, :ip_addresses, :ipv6_addresses, :received_state,
+                          :bfd_pairs, :bfd_sessions, :bfd_seen_up) do
       def system_id_s
         system_id.unpack1("H*").scan(/.{1,4}/).join(".")
       end
@@ -86,7 +95,8 @@ module ISIS
                    ip_addresses: [], ipv6_addresses: [], protocols: [:ipv4], database: nil, originator: nil, metric: 10,
                    hello_key: nil, area_key: nil, levels: nil,
                    partial_snp_interval: PARTIAL_SNP_INTERVAL,
-                   lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL)
+                   lsp_transmission_interval: MINIMUM_LSP_TRANSMISSION_INTERVAL,
+                   bfd: nil, bfd_interface: nil, bfd_tlv: nil)
       @transport = transport
       @scheduler = scheduler
       @log = log
@@ -107,6 +117,7 @@ module ISIS
       @hello_timer = nil
       @metric = metric
       @hello_key = hello_key
+      setup_bfd(bfd, bfd_interface, bfd_tlv)
       levels ||= { 1 => { database: database, originator: originator, area_key: area_key } }
       unless CIRCUIT_TYPES.key?(levels.keys.sort)
         raise ArgumentError, "a point to point circuit runs Level 1, Level 2 or both, not #{levels.keys.inspect}"
@@ -174,6 +185,16 @@ module ISIS
       @neighbor ? @neighbor.state : :down
     end
 
+    # The three-way state the hellos say: this system's, except Down while
+    # BFD is required and not usable. RFC 6213 3.2: "On a Point-to-Point
+    # circuit whenever "ISIS_NEIGHBOR_USEABLE" is "FALSE", the Three-Way
+    # adjacency state MUST be set to "DOWN" in the Point-to-Point Three-Way
+    # Adjacency TLV [RFC5303] in all transmitted IIHs." While the adjacency
+    # is not Up: Bfd::Circuit says why.
+    def advertised_three_way_state
+      @neighbor && bfd_hidden?(@neighbor) ? :down : three_way_state
+    end
+
     # Up, and with +n+, Up and serving Level n.
     def up?(n = nil)
       return false unless three_way_state == :up
@@ -188,12 +209,13 @@ module ISIS
       tlvs = [Tlv::AreaAddresses.new(@areas), Tlv::ProtocolsSupported.new(@protocols)]
       tlvs << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       tlvs << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
+      tlvs.concat(bfd_tlvs)
       three_way = { extended_circuit_id: @extended_circuit_id }
       if @neighbor
         three_way[:neighbor_system_id] = Octets.new(@neighbor.system_id)
         three_way[:neighbor_extended_circuit_id] = @neighbor.extended_circuit_id
       end
-      tlvs << Tlv::ThreeWayAdjacency.new(three_way_state, **three_way.compact)
+      tlvs << Tlv::ThreeWayAdjacency.new(advertised_three_way_state, **three_way.compact)
       hello = Pdu::P2pHello.new(circuit_type: circuit_type, source_id: Octets.new(@system_id), holding_time: holding_time,
                                 local_circuit_id: @local_circuit_id, tlvs: keyed(tlvs, @hello_key))
       hello.key = @hello_key
@@ -334,7 +356,6 @@ module ISIS
       end
 
       before = @neighbor.state
-      @neighbor.state = Adjacency::ThreeWay.after(action, before)
       # RFC 1142 clause 8.2.4.2 e: on Up or Accept, take the holding time
       # and areas from the PDU.
       @neighbor.snpa = snpa
@@ -345,9 +366,28 @@ module ISIS
       @neighbor.ipv6_addresses = hello.tlvs.select { |t| t.is_a?(Tlv::Ipv6InterfaceAddresses) }
                                       .flat_map { |t| t.addresses.map(&:to_s) }
       @neighbor.extended_circuit_id = three_way&.extended_circuit_id
-      restart_holding_timer
+      @neighbor.received_state = three_way ? three_way.state : :up
+      @neighbor.bfd_pairs = bfd_pairs_of(hello)
+      bfd_sync(@neighbor)
+      # RFC 6213 3.2: ""ISIS_NEIGHBOR_USEABLE" MUST be "TRUE" before the
+      # adjacency can transition from "INIT" to "UP" state."
+      after = Adjacency::ThreeWay.after(action, before)
+      if after == :up && before != :up && bfd_blocked?(@neighbor)
+        @log.debug("adjacency with #{@neighbor.system_id_s} held in initializing: BFD required and not usable " \
+                   "(RFC 6213 3.2)", circuit: @name)
+        after = :initializing
+      end
+      restart_holding_timer if bfd_holds_time?(@neighbor)
+      @neighbor.state = after
+      settle(before, usage, addresses)
+    end
+
+    # After the state changed, or did not: log it, and tell the levels
+    # what they gained and lost.
+    def settle(before, usage, addresses)
       was = @neighbor.usage || []
       @neighbor.usage = usage
+      bfd_sync(@neighbor)
       if before != @neighbor.state
         @log.info("adjacency with #{@neighbor.system_id_s} #{before} -> #{@neighbor.state}" \
                   "#{@neighbor.state == :up ? " at Level #{usage.join(' and ')}" : ''}",
@@ -416,6 +456,7 @@ module ISIS
     def drop_neighbor(reason, why)
       if @neighbor
         @neighbor.expiry&.cancel
+        bfd_release(@neighbor)
         @log.info("adjacency with #{@neighbor.system_id_s} #{@neighbor.state} -> down: #{why}",
                   circuit: @name, kind: :adjacency, neighbor: @neighbor.system_id_s, from: @neighbor.state,
                   to: :down, reason: reason)
@@ -431,6 +472,33 @@ module ISIS
     def refuse(reason, why)
       @log.info("hello refused: #{why}", circuit: @name, kind: :refused, reason: reason)
       reason
+    end
+
+    # For Bfd::Circuit.
+    def bfd_neighbors = [@neighbor].compact
+
+    # RFC 5882 10.1.2: the hold timer's path, with reason bfd.
+    def bfd_drop(_neighbor, why)
+      drop_neighbor(:bfd, "#{why} (RFC 5882 10.1.2, RFC 6213 3.2)")
+      bfd_hello_changed
+    end
+
+    def bfd_hello_changed
+      send_hello if hellos?
+    end
+
+    # +n+ may have become usable or stopped being: what the hellos say
+    # changes, and an adjacency held in Initializing for BFD comes Up when
+    # its neighbour's last hello allowed it (RFC 5303 3.2's table).
+    def bfd_usable_changed(n)
+      if n.state != :up && !bfd_blocked?(n) && n.received_state &&
+         Adjacency::ThreeWay::TABLE.dig(n.state, n.received_state) == :up
+        before = n.state
+        n.state = :up
+        @log.debug("adjacency with #{n.system_id_s} no longer held for BFD", circuit: @name)
+        settle(before, n.usage || [], [n.ip_addresses, n.ipv6_addresses])
+      end
+      bfd_hello_changed
     end
   end
 end

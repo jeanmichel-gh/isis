@@ -27,7 +27,7 @@ isis4r between two IS-IS areas, with FRR on each side. r1 is isis4r at Level 1-2
 `isis4r:latest`, built in an isis checkout beside datalink-socket, and FRR:
 
 ```sh
-docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 docker pull quay.io/frrouting/frr:10.2.1
 ```
 

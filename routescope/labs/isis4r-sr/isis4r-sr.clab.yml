@@ -22,7 +22,7 @@
 #
 # Images: isis4r:latest, built in an isis checkout beside datalink-socket,
 # and FRR:
-#   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 #   docker pull quay.io/frrouting/frr:10.2.1
 #   sudo containerlab deploy -t isis4r-sr.clab.yml
 name: isis4r-sr

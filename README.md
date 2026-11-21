@@ -27,7 +27,11 @@ phase 4:
   isis4r-sim simulates an SR area: SIDs and SRGBs in its topology file
   (`docs/simulator.md`).
 
-Not yet: BFD, graceful restart, multi topology, TE, SRv6 and Flex-Algo.
+- BFD per interface, `bfd: true`, through bfd4r's bfdd4r: TLV 148 and
+  RFC 6213's rules, and RFC 5882's with a neighbour that sends no TLV 148,
+  as FRR does. Shown against FRR in the `isis4r-bfd` lab.
+
+Not yet: graceful restart, multi topology, TE, SRv6 and Flex-Algo.
 `CLAUDE.md`, "Where to start", has the phases and their status.
 
 ## Run it as a router
@@ -37,7 +41,7 @@ asks it what it knows. [docs/isisd.md](docs/isisd.md) has the file and
 the API.
 
 ```sh
-sudo ruby -Ilib -I../datalink-socket/lib exe/isisd -c isisd.yml -l -
+sudo ruby -Ilib -I../datalink-socket/lib -I../bfd4r exe/isisd -c isisd.yml -l -
 sudo ruby exe/isis-cli show adjacencies
 ```
 

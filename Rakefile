@@ -5,7 +5,7 @@ require "rake/testtask"
 Rake::TestTask.new(:test) do |t|
   # datalink-socket is a path dependency; add its lib too so tests run
   # without bundler.
-  t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__)
+  t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__) << File.expand_path("../bfd4r", __dir__)
   t.test_files = FileList["test/unit/**/*_test.rb", "test/scenario/**/*_test.rb", "test/docs/**/*_test.rb", "test/exe/**/*_test.rb"]
   t.warning = false
 end
@@ -24,7 +24,7 @@ desc "Run the FRR interop tests, one process per file"
 task :interop do
   require "rbconfig"
   require "tempfile"
-  libs = ["lib", "test", File.expand_path("../datalink-socket/lib", __dir__)].flat_map { |l| ["-I", l] }
+  libs = ["lib", "test", File.expand_path("../datalink-socket/lib", __dir__), File.expand_path("../bfd4r", __dir__)].flat_map { |l| ["-I", l] }
   files = FileList["test/integration/**/frr_*_test.rb"].sort_by { |f| -File.size(f) }
   jobs = Integer(ENV.fetch("ISIS_INTEROP_JOBS", files.size.to_s)).clamp(1, files.size)
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -55,7 +55,7 @@ end
 #
 #   sudo env "PATH=$PATH" ISIS_SRL=1 rake interop_srl
 Rake::TestTask.new(:interop_srl) do |t|
-  t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__)
+  t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__) << File.expand_path("../bfd4r", __dir__)
   t.test_files = FileList["test/integration/**/srl_*_test.rb"]
   t.warning = false
 end

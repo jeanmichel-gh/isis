@@ -44,12 +44,17 @@ module ISIS
   #       hello_interval: 3
   #       hello_multiplier: 10
   #       adj_sid: true             false: no Adj-SID for its adjacencies
+  #       bfd: false                true: BFD for its adjacencies, through
+  #                                 bfdd4r, with TLV 148 (RFC 6213)
+  #       bfd_tlv: true             true or false: what TLV 148 says,
+  #                                 whatever BFD does; for negative tests
   #
   # The host gives what is outside the protocol: +link(name)+ answers {
   # transport:, snpa:, link_local: } for an interface, +forwarding(level,
   # interfaces:)+ an adapter or nil, and +route_source+ what
-  # redistribution reads. Router::Host is the Linux one; a test gives a
-  # simulated one.
+  # redistribution reads, and +bfd_client+ what an interface with bfd: true
+  # asks for sessions through, a BFD::Client. Router::Host is the Linux
+  # one; a test gives a simulated one.
   class Router
     NETWORKS = %w[point-to-point broadcast].freeze
 
@@ -63,7 +68,7 @@ module ISIS
 
     attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing,
                 :label_table,
-                :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock
+                :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock, :bfd
 
     def initialize(config, clock:, scheduler:, log:, host:)
       @config = self.class.normalize(config)
@@ -132,6 +137,7 @@ module ISIS
       @redistributions.each(&:stop)
       @decisions.each_value(&:stop)
       @adapters.each_value { |a| a.flush; a.close }
+      @bfd&.close
       self
     end
 
@@ -187,6 +193,7 @@ module ISIS
         @databases[level] = Database.new(level: level, clock: @clock, scheduler: @scheduler, log: @log)
         @originators[level] = originator(level)
       end
+      @bfd = @config[:interfaces].any? { _1[:bfd] } ? Bfd.new(client: @host.bfd_client, log: @log) : nil
       @interfaces = []
       p2p_index = 0
       lan_index = 0
@@ -232,7 +239,9 @@ module ISIS
     # The settings an interface may give, and the circuit keyword each
     # becomes.
     def circuit_options(c)
-      c.slice(:hello_interval, :hello_multiplier, :metric)
+      options = c.slice(:hello_interval, :hello_multiplier, :metric, :bfd_tlv)
+      options.merge!(bfd: @bfd, bfd_interface: c[:name]) if c[:bfd]
+      options
     end
 
     def p2p_interface(c, index)

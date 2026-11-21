@@ -16,7 +16,7 @@
 #
 # Images: isis4r:latest, built in a checkout of isis4r beside
 # datalink-socket, and FRR:
-#   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 #   docker pull quay.io/frrouting/frr:10.2.1
 # Then install it into ~/labs with
 #   routescope-labs install isis/isis4r-frr

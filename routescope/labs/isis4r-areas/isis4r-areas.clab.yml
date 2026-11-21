@@ -37,7 +37,7 @@
 #
 # s and the routers come from one image, told apart by their command.
 # Build it from an isis checkout beside datalink-socket:
-#   docker build -t isis4r --build-context datalink-socket=../datalink-socket .
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
 # Then install it into ~/labs with
 #   routescope-labs install isis/isis4r-areas
 # and start it from routescope's lab menu, or here:

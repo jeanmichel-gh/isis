@@ -1,0 +1,43 @@
+# isis4r and FRR with BFD on their link: the interop check of isisd's BFD
+# client (routescope docs/design/bfd-clients.md, step 6b).
+#
+#   r1 10.255.0.1 ---- f1 10.255.0.2
+#   isis4r, bfdd4r     FRR, bfdd
+#         10.0.12.0/30
+#
+# r1 runs isisd under with-bfdd4r, so bfdd4r answers in its namespace,
+# and eth1 has bfd: true. f1 runs FRR's bfdd with "isis bfd" on eth1.
+#
+# Images: isis4r:latest, built in an isis checkout beside datalink-socket
+# and bfd4r, and FRR:
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
+#   docker pull quay.io/frrouting/frr:10.2.1
+# test/lab/isis4r-bfd.sh in the isis repo runs it and checks it.
+name: isis4r-bfd
+
+topology:
+  defaults:
+    labels: { routescope.protocols: isis }
+  nodes:
+    # isisd opens eth1 when it starts, so it waits for containerlab to
+    # wire it, and has its address before it does. with-bfdd4r first, as
+    # the image's own entrypoint does.
+    r1:
+      kind: linux
+      image: isis4r:latest
+      binds: [r1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth1 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.1/30 dev eth1; ip addr add 10.255.0.1/32 dev lo;
+        ip route del default dev eth0 2>/dev/null;
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
+    f1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.2.1
+      binds: [f1:/etc/frr]
+      exec:
+        - sh -c "ip route del default dev eth0 2>/dev/null || true"
+        - sh -c "ip addr add 10.0.12.2/30 dev eth1 2>/dev/null || true"
+  links:
+    - endpoints: ["r1:eth1", "f1:eth1"]

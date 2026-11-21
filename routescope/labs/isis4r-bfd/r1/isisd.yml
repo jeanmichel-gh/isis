@@ -1,0 +1,11 @@
+# isis4r with BFD on its link to f1 (routescope/labs/isis4r-bfd).
+system_id: 0000.0000.0001
+hostname: r1
+areas: [49.0001]
+level: 1
+metric_style: wide
+forwarding: true
+prefixes:
+  - { prefix: 10.255.0.1/32, metric: 0 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.12.1], metric: 10, hello_interval: 1, hello_multiplier: 3, bfd: true }
