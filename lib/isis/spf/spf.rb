@@ -193,6 +193,18 @@ module ISIS
         node_info(@self_id)&.fetch(:attached) || false
       end
 
+      # What this calculation reads of a node, for another one to use
+      # (Graph): { links:, prefixes:, overload:, attached:, areas: }, as
+      # node_info reads it, or nil when the node has no LSP Number 0.
+      def node(id)
+        node_info(id.b)
+      end
+
+      # The node's LSPs, LSP Number 0 first, or nil (clause 7.2.5).
+      def lsps(id)
+        node_lsps(id.b)
+      end
+
       private
 
       # Step 1 for P, just placed on PATHS: each neighbour N its LSPs
