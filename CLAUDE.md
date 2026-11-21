@@ -130,7 +130,8 @@ lib/isis/validation.rb     the receive rules, each a named finding with its
 lib/isis/fault.rb          the fault catalog: crafted inputs, each making
                            one finding (docs/protocol-testing.md)
 lib/isis/mpls/             the MPLS label stack, RFC 3032 (LabelStack)
-lib/isis/spf/              route calculation
+lib/isis/spf/              route calculation; graph.rb and ti_lfa.rb, the
+                           TI-LFA computation (docs/ti-lfa.md)
 lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
 lib/isis/router.rb         a whole system from one configuration;
@@ -2397,7 +2398,9 @@ policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
 #100), the label stack codec and the `to_hash` catalog (0c, #101),
 `isis4r-sim`'s HTTP API with `/api/fault` (0d, #102), and
 `test/integration` renamed `test/interop`, the conventions' name for the
-tier (0e).
+tier (0e, #103). Step 1, the computation (`Spf::Graph`, `Spf::TiLfa`,
+`docs/ti-lfa.md`), for a link and for a node; isisd does not run it
+until step 2.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
