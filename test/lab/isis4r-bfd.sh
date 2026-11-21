@@ -102,6 +102,67 @@ on r1 tc qdisc del dev eth1 root
 on f1 tc qdisc del dev eth1 root
 eventually 60 r1_up "up/up" || fail "r1's adjacency did not come back with BFD: $(r1_adjacency || true)"
 echo "ok: with the loss lifted, the adjacency and BFD are Up again"
+sleep 3
+
+# AdminDown, RFC 5882 4.2: "If a BFD session transitions from Up state to
+# AdminDown, or the session transitions from Up to Down because the
+# remote system is indicating that the session is in state AdminDown,
+# clients SHOULD NOT take any control protocol action."
+# r1's adjacency lines in its log, and f1's flap count, before and after.
+r1_lines() { docker logs "clab-isis4r-bfd-r1" 2>&1 | grep -cE "$1" || true; }
+# Whether f1 had no adjacency Up at any moment of the next $1 seconds:
+# "down" or "up", into $W/f1_watch. FRR's "Adjacency flaps" cannot say:
+# FRR deletes the adjacency and makes a new one, whose count starts again.
+# An answer without the table's header is no answer: vtysh may return
+# nothing while the configuration changes.
+f1_watch() {
+  on f1 sh -c "end=\$((\$(date +%s) + $1)); while [ \$(date +%s) -lt \$end ]; do
+    out=\$(vtysh -c 'show isis neighbor'); echo \"\$out\" | grep -q 'System Id' || continue
+    echo \"\$out\" | grep -q ' Up ' || { echo down; echo \"\$out\"; exit; }; done; echo up" > "$W/f1_watch" &
+  watcher=$!
+  sleep 1
+}
+# Waits for the watcher, so not in a $( ), whose subshell cannot wait.
+f1_watched() { wait "$watcher" || true; f1_seen=$(head -1 "$W/f1_watch"); }
+r1_changes='eth1 adjacency with .* -> '
+r1_drops='eth1 adjacency with .* -> down'
+
+# f1's session AdminDown: r1 sees the remote AdminDown, and neither side
+# acts. Six seconds is two of r1's hold times.
+r1_before=$(r1_lines "$r1_changes"); f1_watch 8
+f1_peer=(-c 'conf t' -c 'bfd' -c 'peer 10.0.12.1 local-address 10.0.12.2 interface eth1')
+on f1 vtysh "${f1_peer[@]}" -c 'shutdown' >/dev/null
+sleep 6
+r1_after=$(r1_lines "$r1_changes"); f1_watched
+on f1 vtysh "${f1_peer[@]}" -c 'no shutdown' -c 'exit' \
+  -c 'no peer 10.0.12.1 local-address 10.0.12.2 interface eth1' >/dev/null
+[ "$r1_after" = "$r1_before" ] || fail "r1's adjacency changed on f1's AdminDown (RFC 5882 4.2)"
+[ "$f1_seen" = up ] || fail "f1's adjacency went Down on its own AdminDown: $(cat "$W/f1_watch")"
+echo "ok: f1's session AdminDown, the adjacency stays Up on both"
+eventually 60 r1_up "up/up" || fail "r1's BFD did not come back Up: $(r1_adjacency || true)"
+sleep 3
+
+# r1's session AdminDown. r1 must not act on it. FRR 10.2.1 does: its
+# isisd logs "changed from Up to Down, bfd session went down" and sends
+# TLV 240 Down, so r1 goes Up -> Initializing by RFC 5303 3.2's table
+# and back Up on the next hellos (measured 2026-11-21). That is FRR's,
+# against 4.2's SHOULD NOT, and expected here: the check fails when FRR
+# stops doing it, so a fix in a newer FRR shows.
+frr=$(vty "show version" | sed -n 's/^FRRouting \([^ ]*\).*/\1/p' | head -1)
+r1_before=$(r1_lines "$r1_changes"); r1_drops_before=$(r1_lines "$r1_drops"); f1_watch 8
+on r1 bfd4r-cli session.admin interface=eth1 peer=10.0.12.2 down=true >/dev/null
+sleep 6
+r1_after=$(r1_lines "$r1_changes"); r1_drops_after=$(r1_lines "$r1_drops"); f1_watched
+on r1 bfd4r-cli session.admin interface=eth1 peer=10.0.12.2 down=false >/dev/null || true
+[ "$r1_drops_after" = "$r1_drops_before" ] || fail "r1 took its adjacency Down on its own AdminDown (RFC 5882 4.2)"
+if [ "$f1_seen" = up ]; then
+  [ "$r1_after" = "$r1_before" ] || fail "r1's adjacency changed on its own AdminDown, and f1's did not (RFC 5882 4.2)"
+  fail "FRR $frr no longer drops its adjacency on its peer's AdminDown: FRR fixed it. Update this check, ABOUT.md and CLAUDE.md"
+fi
+echo "ok: r1's session AdminDown, r1 takes no action of its own"
+echo "known: FRR $frr drops its adjacency on its peer's AdminDown, against RFC 5882 4.2; r1 follows its TLV 240 Down"
+eventually 60 r1_up "up/up" || fail "r1's adjacency did not come back with BFD: $(r1_adjacency || true)"
+echo "ok: the adjacency and BFD are Up again"
 cli show adjacencies
 vty "show bfd peers brief"
 [ "${KEEP_LAB:-}" ] || down
