@@ -4,9 +4,38 @@ Topology Independent Loop-Free Alternate, RFC 9855: for a failure next
 to this system, a repair path to each destination it cuts, computed
 before the failure. The design is routescope's `docs/design/ti-lfa.md`.
 
-**Status.** The computation is built (`Spf::Graph`, `Spf::TiLfa`). isisd
-does not run it yet: the configuration (`ti_lfa:`), the backup routes in
-the kernel and the API come next, in the design's step 2.
+**Status.** isisd computes the backups and shows them: `ti_lfa: link` on
+a point-to-point interface, with segment routing (`docs/isisd.md`). It
+installs none yet: the backup routes in the kernel, and the switch when
+a link fails, come next (the design's step 2b). Node protection is
+computed by `Spf::TiLfa` but not configurable yet (step 3).
+
+## In isisd
+
+After each SPF run and its label table, `Spf::Backups` runs TI-LFA for
+each adjacency on an interface with `ti_lfa: link`. Each route whose
+next hops all go through that neighbour gets:
+
+- **a backup**: the adjacency to the repair's first hop, and the labels
+  to push, top first, as RFC 9855 section 7.1 has them. Each segment of
+  the repair: a Node-SID as its index in the first hop's SRGB (RFC 8660
+  section 2.10.1), or an Adj-SID's label. Then the route's own
+  Prefix-SID, as its index in Q's SRGB ("computed according to the
+  Segment Routing Global Block (SRGB) of Q", 7.1 rule 2), unless Q
+  advertises the prefix itself, where the packet arrives as it would
+  with the label popped. A route with no Prefix-SID has the repair's
+  labels alone and goes on from Q as IP.
+- **ECMP**, when another of its next hops is on another adjacency.
+- **unprotected**, with TiLfa's reason, or `no_label` when an SRGB gives
+  no label for an index.
+
+A Prefix-SID's label route backs up with its prefix's labels. isisd logs
+the summary per interface when it changes, kind `ti_lfa`.
+
+`test/unit/spf/backups_test.rb` runs real routers on simulated wires: in
+a triangle, a's backup to b leaves for c with `[20002]`, b's index in
+c's SRGB; in a square, `[20004, 22002]`, a node segment to d in c's
+SRGB, then b's index in d's.
 
 ## The graph
 

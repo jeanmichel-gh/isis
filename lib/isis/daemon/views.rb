@@ -81,6 +81,7 @@ module ISIS
       def routes(level: nil)
         @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
           labels = @router.decisions[l].labels
+          backups = @router.decisions[l].backups
           @router.decisions[l].routes.values.map do |r|
             row = { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
                     up_down: r.up_down ? true : false,
@@ -89,7 +90,10 @@ module ISIS
                       label = labels&.out_label(r.prefix, a)
                       label ? hop.merge(label: label) : hop
                     end }
-            r.sid&.index ? row.merge(sid: r.sid.index) : row
+            row[:sid] = r.sid.index if r.sid&.index
+            backup = backups&.routes&.[](r.prefix)
+            row.merge!(backup_fields(backup, r.family)) if backup
+            row
           end
         end
       end
@@ -104,13 +108,36 @@ module ISIS
           table = @router.decisions[l].labels or next []
           table.entries.values.sort_by(&:label).map do |e|
             fec = e.kind == :adj_sid ? names.fetch(SystemId.from_bytes(e.fec).to_s, SystemId.from_bytes(e.fec).to_s) : e.fec
-            { level: l, label: e.label, kind: e.kind.to_s, fec: fec, op: e.op.to_s,
-              next_hops: e.hops.map do |a, out|
-                { address: a.next_hop(e.kind == :adj_sid || !e.fec.include?(":") ? :ipv4 : :ipv6),
-                  interface: interface_of(a.circuit), label: out }
-              end }
+            row = { level: l, label: e.label, kind: e.kind.to_s, fec: fec, op: e.op.to_s,
+                    next_hops: e.hops.map do |a, out|
+                      { address: a.next_hop(e.kind == :adj_sid || !e.fec.include?(":") ? :ipv4 : :ipv6),
+                        interface: interface_of(a.circuit), label: out }
+                    end }
+            backup = @router.decisions[l].backups&.label(e.label)
+            row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4)) if backup
+            row
           end
         end
+      end
+
+      # TI-LFA (docs/ti-lfa.md): per level, each protected interface with
+      # its neighbor and what it protects, and how long the last
+      # computation took. { enabled: false } when no interface has ti_lfa.
+      def ti_lfa
+        names = @router.ti_lfa_interfaces
+        return { enabled: false } if names.empty?
+
+        hosts = hostnames
+        { enabled: true, interfaces: names,
+          levels: @router.levels.to_h do |l|
+            b = @router.decisions[l].backups
+            [l, { trees: b&.trees || 0, milliseconds: ((b&.seconds || 0) * 1000).round(1),
+                  protecting: (b&.summaries || []).map do |s|
+                    id = SystemId.from_bytes(s.neighbor).to_s
+                    { interface: interface_of(s.interface), neighbor: hosts.fetch(id, id), mode: s.mode.to_s,
+                      protected: s.protected, ecmp: s.ecmp, unprotected: s.unprotected.transform_keys(&:to_s) }
+                  end }]
+          end }
       end
 
       # This system's segment routing and what it learned: its blocks and
@@ -293,6 +320,19 @@ module ISIS
 
       # A circuit's name is the interface's, with -l1 or -l2 on a LAN at
       # both levels.
+      # A route's or label's backup as fields: backup, its next hop and
+      # labels, or unprotected and why.
+      def backup_fields(backup, family)
+        case backup
+        when Spf::Backups::Backup
+          a = backup.adjacency
+          { backup: { address: a.next_hop(family), interface: interface_of(a.circuit), labels: backup.labels,
+                      case: backup.repair.case.to_s } }
+        when Spf::Backups::Ecmp then { backup: { ecmp: true } }
+        else { unprotected: backup.reason.to_s }
+        end
+      end
+
       def interface_of(name)
         @router.interfaces.find { |i| i.circuits.values.any? { _1.name == name } }&.name || name
       end
