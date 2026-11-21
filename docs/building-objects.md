@@ -54,6 +54,7 @@ Every class that includes `ISIS::Node` is listed here. The suite discovers
 them and fails if one is missing.
 
 - `ISIS::Capture`
+- `ISIS::Mpls::LabelStack`
 - `ISIS::Pdu`
 - `ISIS::Pdu::Csnp`
 - `ISIS::Pdu::LanHello`
@@ -99,3 +100,14 @@ them and fails if one is missing.
 - `ISIS::Tlv::RouterCapability`
 - `ISIS::Tlv::ThreeWayAdjacency`
 - `ISIS::Tlv::Unknown`
+
+## The to_hash catalog
+
+`test/unit/to_hash_catalog.rb` says, class by class, whether a class's
+`to_hash` rebuilds it, as CLAUDE.md's "The one hash contract" asks. A
+class is in one of three lists: round trips, with wire recipes that set
+every field it carries; gaps, with what its hash loses and the decision;
+or not measured yet. `test/unit/to_hash_catalog_test.rb` measures each
+declaration on every run, and fails when a class that includes
+`ISIS::Node` is in none of them, or in two. The counts are the file's,
+not written here.

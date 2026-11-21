@@ -129,6 +129,7 @@ lib/isis/validation.rb     the receive rules, each a named finding with its
                            (docs/protocol-testing.md)
 lib/isis/fault.rb          the fault catalog: crafted inputs, each making
                            one finding (docs/protocol-testing.md)
+lib/isis/mpls/             the MPLS label stack, RFC 3032 (LabelStack)
 lib/isis/spf/              route calculation
 lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
@@ -2387,8 +2388,8 @@ not SRv6 support. Experimental mechanisms, such as fast flooding in RFC
 Fast reroute is TI-LFA (RFC 9855), specified in routescope's
 `docs/design/ti-lfa.md` (approved 2026-11-21). Its step 0 builds the
 conventions it stands on, one pull request each: SR findings and receive
-policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b),
-the label stack codec and the `to_hash` catalog, `isis4r-sim`'s HTTP API,
+policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
+#100), the label stack codec and the `to_hash` catalog (0c), `isis4r-sim`'s HTTP API,
 and `test/integration` renamed `test/interop`.
 
 Testing: unusual extension combinations, compatibility and scale, and
