@@ -1773,7 +1773,7 @@ request that moves a gate. The paragraph after it has the detail.
 | | 3 routes computed | Done, FRR 8.4.4, 2026-11-01 |
 | | 4 routes installed | Done, FRR 8.4.4, 2026-11-01 |
 | 3, enhanced router | 1 policy | Done, FRR 8.4.4, 2026-11-02 |
-| | 2 failure handling (BFD, RFC 8706) | BFD built, FRR 10.2.1, 2026-11-21; RFC 8706 not started |
+| | 2 failure handling (BFD, RFC 8706) | BFD built, FRR 10.2.1 then 10.7.1, 2026-11-21; RFC 8706 not started |
 | | 3 topologies and TE | Not started; TLV 22 sub-TLVs 6 and 8 only, 2026-11-15 |
 | 4, modern platform | SR-MPLS, SRv6, Flex-Algo, fast reroute | SR-MPLS designed and approved 2026-11-16 (`docs/design/sr-mpls.md`); its codec built 2026-11-16 (PR 1 of 5), against an FRR 10.2.1 LSP; origination built the same day (PR 2), FRR 10.2.1 reading isis4r's SRGB, Prefix-SID and Adj-SIDs; the label table and its API too (PR 3), agreeing with FRR's on a four-router line; and forwarding (PR 4), traffic crossing FRR and isis4r on labels in `routescope/labs/isis4r-sr`. And the simulator (PR 5): a simulated grid advertises SIDs and SRGBs, which FRR reads. SR-MPLS's five pull requests are done. The rest not started |
 
@@ -1793,18 +1793,19 @@ only to an adjacency not yet Up, since on an Up one they drop it at the
 peer by RFC 5303's table and so defeat section 4; and AdminDown counts
 as usable (RFC 5882 4.1, "the adjacency MUST be allowed"). FRR does
 not implement RFC 6213: 10.5.1's isisd binary has no TLV 148 code, and
-10.2.1's hellos carry none (captured in the lab). So with FRR BFD is never
+10.2.1's and 10.7.1's hellos carry none (captured in the lab). So with FRR BFD is never
 required: an Up adjacency on a BFD circuit still gets a session, and a
 failure takes it down, reason `bfd` (RFC 5882 10.1.2). The gate,
 measured 2026-11-21 on FRR 10.2.1 in `routescope/labs/isis4r-bfd` with
 `test/lab/isis4r-bfd.sh`: BFD Up on both, and with 100% loss on the
 link the adjacency Down on both in 0.69 to 0.92 s, reason `bfd` on
 isisd, five runs in a row, each side timed from its peer's netem. Not in CI: 300 ms times 3 leaves little room under a
-second. The gate also sets each end's session AdminDown: f1's changes
-nothing; r1's flaps the adjacency because FRR 10.2.1's isisd drops it
-and sends TLV 240 Down (RFC 5882 4.2 says it SHOULD NOT), and isisd
-follows RFC 5303's table. The gate expects that flap and fails when it
-stops, so an FRR fix shows. Not yet: timers per interface (bfdd4r's defaults), BFD for
+second. The gate also sets each end's session AdminDown, and neither
+may change the adjacency (RFC 5882 4.2). The lab runs FRR 10.7.1 since
+2026-11-21 (isis4r-bfd: r1 Down 0.78 to 0.93 s, f1 0.66 to 0.79 s, four
+runs): 10.2.1's isisd dropped the adjacency on r1's AdminDown and sent
+TLV 240 Down, and isisd followed RFC 5303's table; 10.7.1's bfdd tells
+its isisd Admin Down, and it does not act. Not yet: timers per interface (bfdd4r's defaults), BFD for
 IPv6 against an independent router, and a second peer that sends TLV
 148. The TE gate is not
 met by the link addresses below: they are two of RFC 5305's sub-TLVs,
