@@ -124,6 +124,9 @@ lib/isis/runtime/          the injected monotonic clock and the scheduler
 lib/isis/adjacency/        hello generation and the adjacency state machines
 lib/isis/database/         the per level LSP databases and flooding
 lib/isis/receive/          the receive policy: what a received PDU may change
+lib/isis/validation.rb     the receive rules, each a named finding with its
+                           clause and an action per receive policy
+                           (docs/protocol-testing.md)
 lib/isis/spf/              route calculation
 lib/isis/forwarding/       forwarding adapters, one per platform, each
                            declaring its dependencies
@@ -2378,6 +2381,13 @@ calculation, correct forwarding where that applies, and interoperation
 with an independent implementation. Advertising an SRv6 locator alone is
 not SRv6 support. Experimental mechanisms, such as fast flooding in RFC
 9681, stay out of the default profile.
+
+Fast reroute is TI-LFA (RFC 9855), specified in routescope's
+`docs/design/ti-lfa.md` (approved 2026-11-21). Its step 0 builds the
+conventions it stands on, one pull request each: SR findings and receive
+policies in `validation.rb` (0a, this change), the `ISIS::Fault` catalog,
+the label stack codec and the `to_hash` catalog, `isis4r-sim`'s HTTP API,
+and `test/integration` renamed `test/interop`.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained

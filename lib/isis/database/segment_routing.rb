@@ -20,12 +20,15 @@ module ISIS
     FIRST_LABEL = 16
     LAST_LABEL = 0xfffff
 
-    attr_reader :srgb, :srlb, :router_id, :ipv6
+    attr_reader :srgb, :srlb, :router_id, :ipv6, :receive_policy
+
+    # The keys of the configuration's segment_routing block.
+    KEYS = %i[srgb srlb receive_policy].freeze
 
     # +srgb+ is a list of [first label, size], in the order advertised;
     # +srlb+ one [first label, size]. +no_adj_sid+ lists circuit names
     # whose adjacencies get no Adj-SID.
-    def initialize(router_id:, srgb: SRGB, srlb: SRLB, ipv6: false, no_adj_sid: [])
+    def initialize(router_id:, srgb: SRGB, srlb: SRLB, ipv6: false, no_adj_sid: [], receive_policy: :rfc)
       @srgb = srgb.map { |first, size| [Integer(first), Integer(size)] }
       @srlb = [Integer(srlb[0]), Integer(srlb[1])]
       self.class.check_blocks(@srgb + [@srlb])
@@ -35,6 +38,7 @@ module ISIS
       @ipv6 = ipv6
       @no_adj_sid = no_adj_sid.map(&:to_s)
       @adj_labels = {}
+      @receive_policy = Validation.policy(receive_policy)
     end
 
     # The blocks must not overlap and must stay inside 16 to 2^20 - 1.
@@ -58,6 +62,10 @@ module ISIS
     #   segment_routing:
     #     srgb: [{ start: 16000, size: 8000 }]
     #     srlb: { start: 15000, size: 1000 }
+    #     receive_policy: rfc     what a finding on SR data does (Validation):
+    #                             rfc (the default), strict or lenient
+    #
+    # A key not in KEYS is refused.
     #
     # +router_id+ is the configuration's, else the first IPv4 /32 among
     # +prefixes+ (RFC 7981 section 3: the Router ID "SHOULD be identical to
@@ -66,12 +74,18 @@ module ISIS
       return nil if sr.nil?
 
       sr = {} if sr == true
+      unknown = sr.keys.map(&:to_sym) - KEYS
+      unless unknown.empty?
+        raise ArgumentError, "segment_routing: unknown #{unknown.size == 1 ? 'key' : 'keys'} " \
+                             "#{unknown.join(', ')}; the keys are #{KEYS.join(', ')}"
+      end
       router_id ||= prefixes.map { |p| p[:prefix].to_s }.find { |p| p.end_with?("/32") && !p.include?(":") }&.split("/")&.first
       raise ArgumentError, "segment_routing needs a router_id, or an IPv4 /32 among the prefixes" unless router_id
 
       srgb = sr[:srgb] ? Array(sr[:srgb]).map { |b| [b.fetch(:start), b.fetch(:size)] } : SRGB
       srlb = sr[:srlb] ? [sr[:srlb].fetch(:start), sr[:srlb].fetch(:size)] : SRLB
-      new(router_id: router_id, srgb: srgb, srlb: srlb, ipv6: ipv6, no_adj_sid: no_adj_sid)
+      new(router_id: router_id, srgb: srgb, srlb: srlb, ipv6: ipv6, no_adj_sid: no_adj_sid,
+          receive_policy: sr[:receive_policy] || :rfc)
     end
 
     # TLV 242 for an LSP: S and D clear, since RFC 8667 section 3.1 says the

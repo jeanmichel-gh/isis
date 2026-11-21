@@ -158,13 +158,16 @@ module ISIS
       DEFAULT = "0.0.0.0/0"
 
       # The label table for this run's routes. A problem is logged once,
-      # when it first appears, at warn: it is a label not installed.
+      # when it first appears, at warn: it is a label not installed. A
+      # finding is logged by its name.
       def label(calc)
         before = @labels&.problems || []
         adjacencies = @circuits.flat_map(&:spf_adjacencies).map { |_, _, a| a }
         @labels = Labels.new(own: @segment_routing, database: @database, paths: calc.paths).build(@routes, adjacencies)
+        named = @labels.findings.to_h { [_1.to_s, _1.name] }
         (@labels.problems - before).each do |p|
-          @log.warn("Level #{level} segment routing: #{p}", kind: :sr, level: level)
+          text = named[p] ? "#{named[p]}: #{p}" : p
+          @log.warn("Level #{level} segment routing: #{text}", kind: :sr, level: level)
         end
       end
 

@@ -61,11 +61,17 @@ MPLS input on its interfaces itself. When it cannot, it logs why and
 installs IP routes only. Where both levels give a label, Level 1's is
 installed.
 
+What isisd receives of other systems' SR data is checked against RFC 8667
+and RFC 8660. Each break is a named finding, logged by its name; the
+receive policy says what it does (`docs/protocol-testing.md`). A key
+`segment_routing` does not know is refused, with the keys it takes.
+
 ```yaml
 router_id: 10.255.0.1       # TLV 242's; the first IPv4 /32 prefix if absent
 segment_routing:
   srgb: [{ start: 16000, size: 8000 }]    # the defaults
   srlb: { start: 15000, size: 1000 }
+  receive_policy: rfc                     # rfc, strict or lenient
 prefixes:
   - { prefix: 10.255.0.1/32, metric: 0, sid: 1 }   # index 1, N set
   - { prefix: 10.9.0.0/24, metric: 0, sid: 9, no_php: true }
@@ -128,7 +134,7 @@ Every method:
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label` |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop) |
-| `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, and the problems met |
+| `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |
 | `show.configuration` | | the configuration, keys masked |

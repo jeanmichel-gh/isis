@@ -27,6 +27,7 @@ module ISIS
   #   segment_routing:              SR-MPLS, RFC 8667 (SegmentRouting); off
   #     srgb: [{start: 16000, size: 8000}]   when absent
   #     srlb: {start: 15000, size: 1000}
+  #     receive_policy: rfc          rfc, strict or lenient (Validation)
   #   overload: false
   #   area_key: / hello_key:        HMAC-MD5 keys (RFC 5304)
   #   lsp_buffer_size: 1492
