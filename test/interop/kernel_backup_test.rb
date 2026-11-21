@@ -44,7 +44,9 @@ class TestKernelBackup < Minitest::Test
   def missing
     return "needs root" unless Process.uid.zero?
     return "needs iproute2" unless system("which ip > /dev/null")
-    return "needs the mpls_iptunnel module, to push labels" unless File.read("/proc/modules").include?("mpls_iptunnel")
+    unless File.read("/proc/modules").include?("mpls_iptunnel")
+      return "needs the mpls_iptunnel module, to push labels: sudo modprobe mpls_iptunnel"
+    end
 
     nil
   rescue Errno::ENOENT
