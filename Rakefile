@@ -25,7 +25,7 @@ task :interop do
   require "rbconfig"
   require "tempfile"
   libs = ["lib", "test", File.expand_path("../datalink-socket/lib", __dir__), File.expand_path("../bfd4r", __dir__)].flat_map { |l| ["-I", l] }
-  files = FileList["test/integration/**/frr_*_test.rb"].sort_by { |f| -File.size(f) }
+  files = FileList["test/interop/**/frr_*_test.rb"].sort_by { |f| -File.size(f) }
   jobs = Integer(ENV.fetch("ISIS_INTEROP_JOBS", files.size.to_s)).clamp(1, files.size)
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   queue = files.dup
@@ -56,7 +56,7 @@ end
 #   sudo env "PATH=$PATH" ISIS_SRL=1 rake interop_srl
 Rake::TestTask.new(:interop_srl) do |t|
   t.libs << "lib" << "test" << File.expand_path("../datalink-socket/lib", __dir__) << File.expand_path("../bfd4r", __dir__)
-  t.test_files = FileList["test/integration/**/srl_*_test.rb"]
+  t.test_files = FileList["test/interop/**/srl_*_test.rb"]
   t.warning = false
 end
 

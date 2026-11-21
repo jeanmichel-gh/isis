@@ -148,6 +148,9 @@ test/scenario/             router scenarios on simulated time, run with and
 test/fixtures/             PDUs captured from real routers, as hex, named
                            for the router and version that sent them
 test/functional/           tests that put PDUs on a real interface
+test/interop/              against FRR's isisd and SR Linux, in network
+                           namespaces and containers: root, then
+                           ISIS_FRR=1 rake interop, ISIS_SRL=1 rake interop_srl
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
 routescope/labs/           labs of isis4r and FRR, as routescope reads them;
@@ -1831,7 +1834,7 @@ minimumBroadcastLSPTransmissionInterval on a LAN. `send_psnp` sends what
 fits and goes on next time from the next LSP (7.3.15.4). Before, one
 oversized CSNP made isis4r-sim exit with `Errno::EMSGSIZE` on a 1500 octet
 link; measured against FRR 10.5.1 with 326 LSPs
-(`test/integration/frr_sim_test.rb`).
+(`test/interop/frr_sim_test.rb`).
 
 **Left around it:**
 
@@ -1933,7 +1936,7 @@ wire mark and the constructor dispatch. `docs/building-objects.md` and
 1 is met**. The header fields were read in RFC 1142 clause 9 and agree
 with Wireshark and FRR, except octets 7 and 8, where the editions differ
 (see the list at the end). **Gate 2 is met against FRR**, measured 2026-10-31 with FRR
-8.4.4's isisd, and again on 10.5.1: `test/integration/frr_p2p_test.rb` brings the point to point
+8.4.4's isisd, and again on 10.5.1: `test/interop/frr_p2p_test.rb` brings the point to point
 adjacency up on both sides, holds it for over three holding times without
 a flap, expires it on each side when the other goes silent, and forms
 none on an area mismatch. It runs in CI as `interop (FRR)`, a job the `ci`
@@ -1983,7 +1986,7 @@ hello key forms no adjacency on either side; a wrong area key leaves the
 adjacency up and each side without the other's LSP. Measured on the way:
 FRR 8.4.4's first LSP after start can go out with no TLV 10 although its
 area password is configured, and isis4r refuses that one. **Phase 2 gate
-1 began**: `test/integration/frr_lan_test.rb` brings a broadcast
+1 began**: `test/interop/frr_lan_test.rb` brings a broadcast
 adjacency up with FRR 8.4.4, has both sides agree on the Level 1 DIS and
 its LAN ID whichever side wins, follows a DIS change made by raising
 FRR's priority with no adjacency going down, and expires FRR when it goes
@@ -2057,7 +2060,7 @@ FRR holds isis4r's Level 2 LSP with both and its Level 1 LSP with 49.0001
 alone. Measured on the way: FRR 8.4.4's own Level 2 LSP lists only its
 manual areas, so it does not do 7.2.11. That closes the items gate 2
 lists. **The lab runs a second FRR** behind the first (`frr2:` in
-`FrrLab#start`, `test/integration/frr_two_routers_test.rb`), and with it
+`FrrLab#start`, `test/interop/frr_two_routers_test.rb`), and with it
 **Phase 2 gate 2 is met against FRR 8.4.4**, measured 2026-11-01: isis4r
 Level 1 in 49.0001, the first FRR Level 1 and 2, the second Level 2 only
 in 49.0002; isis4r's Level 1 database and the first FRR's hold the area's
@@ -2254,7 +2257,7 @@ request is answered between two turns of the protocol: what it shows
 (`daemon/views.rb`), policy changes, and an event stream. `exe/isis-cli`
 asks it. `docs/isisd.md` lists every method, held to the API by
 `test/docs/isisd_test.rb`. Measured 2026-11-02 against FRR 8.4.4
-(`test/integration/frr_isisd_test.rb`): isisd from its file brings the
+(`test/interop/frr_isisd_test.rb`): isisd from its file brings the
 adjacency up, names FRR by its hostname, and shows FRR's LSP at FRR's
 sequence and the route to FRR's loopback. Measured on the way: YAML
 reads an area 49.0010 as the number 49.001, so isisd reads the areas as
@@ -2288,7 +2291,7 @@ lifetimes. The actions, link down, up, flap and metric, overload,
 attached, prefix groups withdrawn and advertised, refresh, flush,
 restore, aging and the simulator's hellos, are tested on simulated time
 against a Router. Measured 2026-11-02 against FRR 8.4.4
-(`test/integration/frr_sim_test.rb`): through one adjacency with the
+(`test/interop/frr_sim_test.rb`): through one adjacency with the
 simulator, FRR holds all eight LSPs of a 2x3 grid, names each system by
 its hostname, and reaches the far corner at 50. Measured on the way: FRR
 8.4.4 routes over a link only one end lists, so it does not apply the
@@ -2390,8 +2393,9 @@ Fast reroute is TI-LFA (RFC 9855), specified in routescope's
 conventions it stands on, one pull request each: SR findings and receive
 policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
 #100), the label stack codec and the `to_hash` catalog (0c, #101),
-`isis4r-sim`'s HTTP API with `/api/fault` (0d), and `test/integration`
-renamed `test/interop`.
+`isis4r-sim`'s HTTP API with `/api/fault` (0d, #102), and
+`test/integration` renamed `test/interop`, the conventions' name for the
+tier (0e).
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
@@ -2414,7 +2418,7 @@ decisions here as they are made.
    needs root, iproute2 and FRR, runs only when `OSPFV2_FRR=1` is set, and
    runs on GitHub runners with FRR installed from apt (the `interop-frr`
    job in ospfv2's `ci.yml`). isis4r copies the pattern with `isisd` in
-   place of `ospfd`, gated by `ISIS_FRR=1`, under `test/integration/`. So a
+   place of `ospfd`, gated by `ISIS_FRR=1`, under `test/interop/`. So a
    gate is shown in CI against FRR, and the same test runs on a Linux VM
    by hand. **Built**: `test/support/frr_lab.rb` sets up the namespaces and
    FRR, and `test/support/isis_runner.rb` runs isis4r inside its
@@ -2514,7 +2518,7 @@ LSP octets in state would let a test compare bytes.
 `test/support/srl_lab.rb` deploys one SR Linux node with containerlab,
 its `ethernet-1/1` joined to a host end that the lab moves into isis4r's
 namespace as `veth0`, commits its configuration with `sr_cli`, and runs
-isis4r as FrrLab does. `test/integration/srl_p2p_test.rb` is one test,
+isis4r as FrrLab does. `test/interop/srl_p2p_test.rb` is one test,
 since the lab takes most of the time: the adjacency up on both sides,
 each LSP held at the originator's sequence and checksum, and each side's
 prefix installed through the other. `sudo env "PATH=$PATH" ISIS_SRL=1
