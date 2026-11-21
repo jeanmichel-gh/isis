@@ -2619,15 +2619,16 @@ Ruby.**
   withdraw) and nothing netlink specific, so a BSD routing socket
   adapter can sit behind the same interface later.
 
-**2026-11-21. bfd4r, as datalink-socket; Ruby 3.3.**
+**2026-11-21. bfd4r, as datalink-socket.**
 
 * The owner's decision (routescope `docs/design/bfd-clients.md`): the
   gemspec depends on `bfd4r`, the Gemfile takes it by path,
   `../bfd4r`, the Dockerfile as a build context (`--build-context
   bfd4r=../bfd4r`), and CI checks it out beside isis.
-* bfd4r requires Ruby 3.3, and bundler refuses it on 3.2 (measured
-  2026-11-21). So isis4r requires 3.3 too, and CI's matrix lost 3.1 and
-  3.2, both past their end of life.
+* Open: bfd4r's gemspec requires Ruby 3.3, and bundler refuses it on
+  3.2 (measured 2026-11-21), so isis's CI jobs on 3.1 and 3.2 cannot
+  install it. The owner decides between lowering bfd4r's floor and
+  raising isis's.
 
 ## Corrections
 

@@ -16,8 +16,7 @@ Gem::Specification.new do |spec|
   DESC
   spec.homepage = "https://github.com/jeanmichel-gh/isis"
   spec.licenses = ["GPL-3.0-or-later", "Ruby"]
-  # 3.3, as bfd4r requires; bundler refuses it on 3.2 (measured 2026-11-21).
-  spec.required_ruby_version = ">= 3.3"
+  spec.required_ruby_version = ">= 3.1"
 
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["rubygems_mfa_required"] = "true"

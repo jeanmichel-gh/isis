@@ -21,12 +21,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # From the gemspec's required_ruby_version (>= 3.3) to the newest,
+        # From the gemspec's required_ruby_version (>= 3.1) to the newest,
         # on every pull request and push. isis is public since 2026-11-15,
         # so its runs are free; while it was private a pull request ran
-        # 3.4 alone to save billed minutes (#81). 3.1 and 3.2 left with
-        # bfd4r, which requires 3.3 (2026-11-21).
-        ruby: ["3.3", "3.4", "4.0"]
+        # 3.4 alone to save billed minutes (#81).
+        ruby: ["3.1", "3.2", "3.3", "3.4", "4.0"]
     steps:
       - uses: actions/checkout@v6
         with:
