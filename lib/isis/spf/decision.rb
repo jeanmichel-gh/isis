@@ -48,6 +48,11 @@ module ISIS
       attr_accessor :segment_routing
       # A Forwarding::LabelTable the label table is installed through, or nil.
       attr_accessor :label_table
+      # The interfaces with ti_lfa, by name: with any, and segment routing,
+      # each run also computes TI-LFA's backups (Spf::Backups).
+      attr_accessor :ti_lfa
+      # The last run's Spf::Backups, or nil.
+      attr_reader :backups
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -65,6 +70,8 @@ module ISIS
         @summary = summary
         @segment_routing = segment_routing
         @labels = nil
+        @ti_lfa = []
+        @backups = nil
         @circuits = []
         @routes = {}
         @paths = {}
@@ -133,6 +140,7 @@ module ISIS
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
         old_labels = @labels
         label(calc) if @segment_routing
+        protect if @segment_routing && @ti_lfa.any?
         @leak.update(@routes) if level == 2 && @leak
         @summary.update(@routes) if level == 1 && @summary
         @log.info("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
@@ -169,6 +177,30 @@ module ISIS
           text = named[p] ? "#{named[p]}: #{p}" : p
           @log.warn("Level #{level} segment routing: #{text}", kind: :sr, level: level)
         end
+      end
+
+      # TI-LFA's backups for this run's routes. A reason a destination is
+      # left unprotected is logged once, when it first appears.
+      def protect
+        before = summary_text
+        @backups = Backups.new(database: @database, system_id: @system_id, routes: @routes, labels: @labels,
+                               adjacencies: @circuits.flat_map(&:spf_adjacencies), interfaces: @ti_lfa,
+                               clock: @scheduler).compute
+        text = summary_text
+        return if text == before
+
+        @log.info("Level #{level} TI-LFA: #{text}, #{@backups.trees} trees (RFC 9855)",
+                  kind: :ti_lfa, level: level, trees: @backups.trees)
+      end
+
+      def summary_text
+        return nil unless @backups
+
+        @backups.summaries.map do |s|
+          left = s.unprotected.map { |k, v| "#{v} #{k}" }
+          "#{s.interface} #{s.protected} protected, #{s.ecmp} by ECMP" \
+            "#{left.empty? ? '' : ", unprotected #{left.join(', ')}"}"
+        end.join("; ")
       end
 
       def add_default(attached)

@@ -57,6 +57,9 @@ module ISIS
 
       attr_reader :edges, :overloaded, :node_sids, :adj_sids, :pseudonodes
 
+      # How many trees were computed, for a reader that times the work.
+      attr_reader :trees
+
       # +links+ is { [from, to] => metric }, one entry per direction.
       def initialize(links, overloaded: [], node_sids: {}, adj_sids: {}, pseudonodes: [])
         @edges = Hash.new { |h, k| h[k] = {} }
@@ -68,6 +71,7 @@ module ISIS
         @node_sids = node_sids
         @adj_sids = adj_sids
         @pseudonodes = pseudonodes.to_a
+        @trees = 0
       end
 
       # A graph from links given once each, both directions at one metric.
@@ -134,6 +138,7 @@ module ISIS
       # Dijkstra from +root+, or with +reverse+ toward it, without
       # +failure+ when given. Every equal-cost parent is kept.
       def tree(root, failure: nil, reverse: false)
+        @trees += 1
         dist = { root => 0 }
         parents = { root => [] }
         tent = { root => 0 }

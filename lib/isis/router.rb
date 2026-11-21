@@ -49,6 +49,10 @@ module ISIS
   #                                 bfdd4r, with TLV 148 (RFC 6213)
   #       bfd_tlv: true             true or false: what TLV 148 says,
   #                                 whatever BFD does; for negative tests
+  #       ti_lfa: link              TI-LFA backups for the destinations behind
+  #                                 this interface's neighbour, against the
+  #                                 link failing (RFC 9855, docs/ti-lfa.md);
+  #                                 point-to-point and segment routing only
   #
   # An interface key not listed here is refused, naming the key and the
   # interface, so a misspelt one (bdf: true) does not quietly do nothing.
@@ -65,7 +69,10 @@ module ISIS
 
     # The keys an interface may give, as the class comment lists them.
     INTERFACE_KEYS = %i[name network ip_addresses metric priority hello_interval hello_multiplier
-                        adj_sid bfd bfd_tlv].freeze
+                        adj_sid bfd bfd_tlv ti_lfa].freeze
+
+    # What ti_lfa takes. Node protection is not built yet.
+    TI_LFA = %w[link].freeze
 
     # One configured interface: its transport and its circuits, one per
     # level on a broadcast interface, the same one for every level on a
@@ -112,9 +119,28 @@ module ISIS
                                "#{unknown.join(', ')}; the keys are #{INTERFACE_KEYS.join(', ')}"
         end
 
+        ti_lfa(i, name, network, config)
         i.merge(name: name, network: network)
       end
       config
+    end
+
+    # Refuses a ti_lfa that cannot apply, naming why.
+    def self.ti_lfa(interface, name, network, config)
+      mode = interface[:ti_lfa]
+      return if mode.nil? || mode == false
+
+      unless TI_LFA.include?(mode.to_s)
+        raise ArgumentError, "interface #{name}: ti_lfa is #{TI_LFA.join(' or ')}, not #{mode}" \
+                             "#{'; node protection is not built yet' if mode.to_s == 'node'}"
+      end
+      raise ArgumentError, "interface #{name}: ti_lfa needs segment_routing" unless config[:segment_routing]
+      raise ArgumentError, "interface #{name}: ti_lfa protects point-to-point interfaces" if network == "broadcast"
+    end
+
+    # The interfaces with ti_lfa, by name.
+    def ti_lfa_interfaces
+      @config[:interfaces].select { _1[:ti_lfa] }.map { _1[:name] }
     end
 
     def self.symbolize(value)
@@ -345,6 +371,7 @@ module ISIS
                             leak: level == 2 ? @leak : nil, summary: level == 1 ? @summary : nil,
                             segment_routing: @segment_routing)
       d.label_table = @label_table
+      d.ti_lfa = ti_lfa_interfaces
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))

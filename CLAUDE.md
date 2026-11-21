@@ -2399,8 +2399,9 @@ policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
 `isis4r-sim`'s HTTP API with `/api/fault` (0d, #102), and
 `test/integration` renamed `test/interop`, the conventions' name for the
 tier (0e, #103). Step 1, the computation (`Spf::Graph`, `Spf::TiLfa`,
-`docs/ti-lfa.md`), for a link and for a node; isisd does not run it
-until step 2.
+`docs/ti-lfa.md`), for a link and for a node (#104). Step 2a: isisd
+computes and shows the backups, `ti_lfa: link` per point-to-point
+interface (`Spf::Backups`, `show.ti_lfa`); step 2b installs them.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
