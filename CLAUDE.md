@@ -1788,7 +1788,11 @@ measured 2026-11-21 on FRR 10.2.1 in `routescope/labs/isis4r-bfd` with
 `test/lab/isis4r-bfd.sh`: BFD Up on both, and with 100% loss on the
 link the adjacency Down on both in 0.69 to 0.92 s, reason `bfd` on
 isisd, five runs in a row, each side timed from its peer's netem. Not in CI: 300 ms times 3 leaves little room under a
-second. Not yet: timers per interface (bfdd4r's defaults), BFD for
+second. The gate also sets each end's session AdminDown: f1's changes
+nothing; r1's flaps the adjacency because FRR 10.2.1's isisd drops it
+and sends TLV 240 Down (RFC 5882 4.2 says it SHOULD NOT), and isisd
+follows RFC 5303's table. The gate expects that flap and fails when it
+stops, so an FRR fix shows. Not yet: timers per interface (bfdd4r's defaults), BFD for
 IPv6 against an independent router, and a second peer that sends TLV
 148. The TE gate is not
 met by the link addresses below: they are two of RFC 5305's sub-TLVs,
