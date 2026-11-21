@@ -4,11 +4,14 @@ Topology Independent Loop-Free Alternate, RFC 9855: for a failure next
 to this system, a repair path to each destination it cuts, computed
 before the failure. The design is routescope's `docs/design/ti-lfa.md`.
 
-**Status.** isisd computes the backups and shows them: `ti_lfa: link` on
-a point-to-point interface, with segment routing (`docs/isisd.md`). It
-installs none yet: the backup routes in the kernel, and the switch when
-a link fails, come next (the design's step 2b). Node protection is
-computed by `Spf::TiLfa` but not configurable yet (step 3).
+**Status.** isisd computes the backups, shows them, and with
+`forwarding: true` installs each IP backup in the kernel beside its
+route: `ti_lfa: link` on a point-to-point interface, with segment routing
+(`docs/isisd.md`). When the link loses carrier the kernel takes the
+backups itself. Label routes, and a failure the link does not show
+(BFD, the hold timer), switch when isisd converges, as before; switching
+those sooner is the design's step 2c. Node protection is computed by
+`Spf::TiLfa` but not configurable yet (step 3).
 
 ## In isisd
 
@@ -31,6 +34,33 @@ next hops all go through that neighbour gets:
 
 A Prefix-SID's label route backs up with its prefix's labels. isisd logs
 the summary per interface when it changes, kind `ti_lfa`.
+
+## In the kernel
+
+With `forwarding: true`, each backup is a second IP route to the prefix,
+beside the route, at the route's priority plus 100 (`Netlink::
+BACKUP_OFFSET`): 121 for a Level 1 route at 21, 122 at Level 2. It leaves
+on the backup's adjacency and pushes its labels with one encap, top
+first, as `ip route ... encap mpls 20004/22002` writes them. A backup
+whose labels or next hop change is replaced, one no longer computed is
+withdrawn, and a flush at start takes both priorities.
+
+isisd sets `ignore_routes_with_linkdown` for IPv4 and IPv6 on `all`,
+`default` and each interface with `ti_lfa` (`Router::Host#ti_lfa`). Then
+when a link loses carrier, the kernel passes over the routes on it and
+takes each backup, with no daemon in the way. Measured on ospflab, Linux
+7.0, a veth whose far end goes down: the backup was taken 8 to 75 ms
+after, five runs, each check an `ip route get` of its own.
+
+A label route has no metric and no backup in the kernel, so it stays on
+the failed link until isisd converges. A failure that leaves carrier up
+(BFD, the hold timer) reaches the IP routes the same way: isisd
+converges at once and replaces them.
+
+`test/interop/kernel_backup_test.rb` installs a route and its backup
+through isisd's own adapter in network namespaces, takes the link down
+from the far end, and checks the kernel took the backup, and the route
+again when carrier is back. `rake interop` runs it.
 
 `test/unit/spf/backups_test.rb` runs real routers on simulated wires: in
 a triangle, a's backup to b leaves for c with `[20002]`, b's index in

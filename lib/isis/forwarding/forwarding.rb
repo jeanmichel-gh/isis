@@ -32,6 +32,39 @@ module ISIS
       end
     end
 
+    # One TI-LFA backup route (Spf::Backups): +kind+ :install, :replace or
+    # :withdraw, the +prefix+ and its +family+, and for an install the
+    # +adjacency+ it leaves on and the +labels+ it pushes, top first. An
+    # adapter puts it beside the route, at a worse priority, so the kernel
+    # takes it only when the route's next hop is gone (docs/ti-lfa.md).
+    BackupOperation = Struct.new(:kind, :prefix, :family, :adjacency, :labels, :level, keyword_init: true) do
+      def to_s
+        return "withdraw backup #{prefix}" if kind == :withdraw
+
+        "#{kind} backup #{prefix} via #{adjacency.circuit} push #{labels.empty? ? 'nothing' : labels.join('/')}"
+      end
+    end
+
+    # The backup operations that take +before+ to +after+, each a prefix
+    # => Spf::Backups result map or nil. Only a Backup is a route: ECMP and
+    # unprotected have none.
+    def self.backup_operations(before, after, level: nil)
+      routes = ->(map) { (map || {}).select { |_, b| b.is_a?(Spf::Backups::Backup) } }
+      was = routes.(before)
+      now = routes.(after)
+      (was.keys | now.keys).sort.filter_map do |prefix|
+        old = was[prefix]
+        new = now[prefix]
+        family = prefix.include?(":") ? :ipv6 : :ipv4
+        if new.nil?
+          BackupOperation.new(kind: :withdraw, prefix: prefix, family: family, level: level)
+        elsif old.nil? || old.adjacency != new.adjacency || old.labels != new.labels
+          BackupOperation.new(kind: old ? :replace : :install, prefix: prefix, family: family,
+                              adjacency: new.adjacency, labels: new.labels, level: level)
+        end
+      end
+    end
+
     # The operations that take +before+ to +after+, two Decision Process
     # route tables keyed by prefix. A route this system advertises itself
     # has no next hop and is not a forwarding entry, so it counts as

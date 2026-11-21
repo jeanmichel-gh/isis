@@ -139,6 +139,7 @@ module ISIS
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
         old_labels = @labels
+        old_backups = @backups
         label(calc) if @segment_routing
         protect if @segment_routing && @ti_lfa.any?
         @leak.update(@routes) if level == 2 && @leak
@@ -148,7 +149,7 @@ module ISIS
                   kind: :spf, level: level, run: @runs, systems: @paths.size, prefixes: @routes.size,
                   reasons: reasons.uniq.first(REASONS_KEPT), more: [reasons.uniq.size - REASONS_KEPT, 0].max)
         report(before, @routes, why)
-        install(before, @routes, old_labels)
+        install(before, @routes, old_labels, old_backups)
         @label_table&.update(level, @labels)
         @routes
       end
@@ -224,11 +225,13 @@ module ISIS
       # Each route operation, in prefix order, to the adapter.
       # The IP routes, each next hop with the label it pushes when there is
       # a label table.
-      def install(before, after, old_labels = nil)
+      # The routes, then TI-LFA's backups beside them, through the adapter.
+      def install(before, after, old_labels = nil, old_backups = nil)
         return unless @forwarding
 
         labels = [old_labels&.out_labels, @labels&.out_labels]
         Forwarding.operations(before, after, level: level, labels: labels).each { |op| @forwarding.apply(op) }
+        Forwarding.backup_operations(old_backups&.routes, @backups&.routes, level: level).each { |op| @forwarding.apply(op) }
       end
 
       def report(before, after, why)

@@ -258,6 +258,7 @@ module ISIS
         end
       end
       @label_table = build_label_table
+      link_down_routes
       @leak = both? ? Spf::Leak.new(originator: @originators[1], log: @log, policy: self.class.leak_policy(@config[:leak])) : nil
       @summary = both? ? Spf::Summary.new(originator: @originators[2], log: @log, summaries: @config.fetch(:summaries, [])) : nil
       @redistributions = build_redistributions
@@ -315,6 +316,18 @@ module ISIS
                                **circuit_options(c))]
       end
       Interface.new(name: c[:name], network: c[:network], transport: link[:transport], circuits: circuits)
+    end
+
+    # With ti_lfa on an interface and forwarding, the host passes over a
+    # route whose link is down, so the kernel takes the backup by itself
+    # when a link loses carrier (Host#ti_lfa). One that cannot is logged;
+    # the backups are still installed, and taken when isisd converges.
+    def link_down_routes
+      names = ti_lfa_interfaces
+      return if names.empty? || @adapters.empty? || !@host.respond_to?(:ti_lfa)
+
+      why = @host.ti_lfa(names)
+      @log.warn("TI-LFA: the kernel will not switch to a backup on carrier loss: #{why}") if why
     end
 
     # With segment routing and forwarding, one label table for both levels,

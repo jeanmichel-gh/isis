@@ -9,9 +9,11 @@ module ISIS
     # from /proc/net/if_inet6, and netlink for routes. Opening a raw
     # socket needs root or CAP_NET_RAW.
     class Host
-      def initialize(log:, sysfs: "/sys/class/net", if_inet6: "/proc/net/if_inet6", proc_mpls: "/proc/sys/net/mpls")
+      def initialize(log:, sysfs: "/sys/class/net", if_inet6: "/proc/net/if_inet6", proc_mpls: "/proc/sys/net/mpls",
+                     proc_net: "/proc/sys/net")
         @log = log
         @proc_mpls = proc_mpls
+        @proc_net = proc_net
         @sysfs = sysfs
         @if_inet6 = if_inet6
         @sockets = []
@@ -28,6 +30,24 @@ module ISIS
       # goes by Level 1 (RFC 1142 7.2.12).
       def forwarding(level, interfaces: {})
         Forwarding::Netlink.new(log: @log, priority: 20 + level, interfaces: interfaces)
+      end
+
+      # Make the host take TI-LFA's backup routes when a link loses carrier:
+      # ignore_routes_with_linkdown for IPv4 and IPv6, on all, default and
+      # each of +interfaces+, so a route whose link is down is passed over
+      # and the backup at a worse priority taken, with no daemon in the
+      # way. Measured on Linux 7.0 (routescope docs/design/ti-lfa.md, "What
+      # exists"): IPv6 needed all three. Returns nil, or why not.
+      def ti_lfa(interfaces)
+        %w[ipv4 ipv6].each do |family|
+          (%w[all default] + interfaces).each do |name|
+            path = File.join(@proc_net, family, "conf", name, "ignore_routes_with_linkdown")
+            File.write(path, "1\n") if File.exist?(path)
+          end
+        end
+        nil
+      rescue SystemCallError => e
+        "ignore_routes_with_linkdown: #{e.message}"
       end
 
       # Make the host take label routes for +interfaces+: MPLS input on each

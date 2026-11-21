@@ -241,6 +241,41 @@ class TestForwardingNetlink < Minitest::Test
     assert_includes body(m), "1000" "0000" "04000000" "080005000a000d03"
   end
 
+  # Two labels, top first: 20004 is 0x4e24, so 04e24000 without S; 22002 is
+  # 0x55f2, so 055f2100 with S (0x100). MPLS_IPTUNNEL_DST 0c00 0100 and the
+  # eight octets; RTA_ENCAP 1000 1680 around it. As iproute2 writes
+  # encap mpls 20004/22002.
+  ENCAP_TWO = "10001680" "0c000100" "04e24000" "055f2100" "0600150001000000"
+
+  def test_an_ip_route_pushes_two_labels
+    m = @nl.new_message(:ipv4, "192.0.2.2/32", [[3, "10.0.12.2", [20_004, 22_002]]])
+    assert_includes body(m), "0800040003000000" "080005000a000c02" + ENCAP_TWO
+  end
+
+  # A backup goes at the backup priority, 20 + 100 = 120 (7800 0000), and
+  # is withdrawn there, leaving the route at 20 alone.
+  def test_a_backup_at_its_own_priority
+    @socket.queue(ack(1))
+    a = adjacency("eth0-l1", "10.0.12.2")
+    op = ISIS::Forwarding::BackupOperation.new(kind: :install, prefix: "192.0.2.2/32", family: :ipv4, adjacency: a,
+                                               labels: [20_004, 22_002])
+    assert @nl.apply(op)
+    sent = hex(@socket.sent.first)
+    assert_includes sent, "0800060078000000"
+    assert_includes sent, ENCAP_TWO
+    @socket.queue(ack(2))
+    assert @nl.apply(ISIS::Forwarding::BackupOperation.new(kind: :withdraw, prefix: "192.0.2.2/32", family: :ipv4))
+    assert_equal "1900", hex(@socket.sent.last.byteslice(4, 2))
+    assert_includes hex(@socket.sent.last), "0800060078000000"
+  end
+
+  # A backup with no labels, the neighbour's own prefix past it, is a plain
+  # route.
+  def test_a_backup_with_no_labels
+    m = @nl.new_message(:ipv4, "192.0.2.3/32", [[3, "10.0.12.2", []]], priority: 120)
+    refute_includes hex(m), "1680"
+  end
+
   def entry(label, op, hops) = ISIS::Spf::Labels::Entry.new(label, op, :prefix_sid, "192.0.2.4/32", hops)
 
   # A label operation goes by the next hop's IPv4 address, through the
