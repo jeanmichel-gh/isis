@@ -23,7 +23,7 @@
 # Images: isis4r:latest, built in an isis checkout beside datalink-socket,
 # and FRR:
 #   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
-#   docker pull quay.io/frrouting/frr:10.2.1
+#   docker pull quay.io/frrouting/frr:10.7.1
 #   sudo containerlab deploy -t isis4r-sr.clab.yml
 name: isis4r-sr
 
@@ -70,14 +70,14 @@ topology:
         exec isis4r-sim -c /lab/sim.yml -l -"
     f1:
       kind: linux
-      image: quay.io/frrouting/frr:10.2.1
+      image: quay.io/frrouting/frr:10.7.1
       binds: [f1:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
         - sysctl -qw net.mpls.platform_labels=100000 net.mpls.conf.eth1.input=1
     f2:
       kind: linux
-      image: quay.io/frrouting/frr:10.2.1
+      image: quay.io/frrouting/frr:10.7.1
       binds: [f2:/etc/frr]
       exec:
         - sh -c "ip route del default dev eth0 2>/dev/null || true"
