@@ -250,11 +250,11 @@ module ISIS
         end.uniq
       end
 
-      # One label stack entry, RFC 3032 section 2.1: the label in the top
-      # 20 bits, then TC, the bottom-of-stack bit (0x100, one label here),
-      # and a TTL of 0, which the kernel fills in. Network order.
+      # One label stack entry, RFC 3032 section 2.1 (Mpls::LabelStack): the
+      # label, Exp 0, the bottom-of-stack bit (one label here), and a TTL of
+      # 0, which the kernel fills in.
       def stack(label)
-        [(label << 12) | 0x100].pack("N")
+        Mpls::LabelStack.new(label).encode
       end
 
       # The push of +label+, or nothing.

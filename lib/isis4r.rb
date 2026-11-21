@@ -10,6 +10,7 @@ require "datalink"
 
 require "isis/version"
 require "isis/common"
+require "isis/mpls/label_stack"
 require "isis/codepoints"
 require "isis/runtime/clock"
 require "isis/runtime/scheduler"
