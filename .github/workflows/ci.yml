@@ -179,6 +179,7 @@ jobs:
       - name: The image, and the unit tests in it
         working-directory: isis
         run: |
+          test/lab/bases.sh Dockerfile
           docker build --target test --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
           docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
       - name: containerlab and FRR

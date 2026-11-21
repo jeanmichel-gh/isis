@@ -155,7 +155,9 @@ docs/                      the guides, each with a test that asserts its
                            load-bearing claims
 routescope/labs/           labs of isis4r and FRR, as routescope reads them;
                            test/lab/ runs them. examples/containerlab/
-                           holds symlinks to them for one release
+                           holds symlinks to them for one release.
+                           test/lab/bases.sh tags the image's base before
+                           a build, so Docker Hub is not asked
 Dockerfile                 the isis4r image
 ```
 
