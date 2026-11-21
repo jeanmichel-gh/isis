@@ -108,7 +108,7 @@ sleep 3
 # AdminDown, or the session transitions from Up to Down because the
 # remote system is indicating that the session is in state AdminDown,
 # clients SHOULD NOT take any control protocol action."
-# r1's adjacency lines in its log, and f1's flap count, before and after.
+# r1's adjacency lines in its log before and after, and whether f1 lost its adjacency.
 r1_lines() { docker logs "clab-isis4r-bfd-r1" 2>&1 | grep -cE "$1" || true; }
 # Whether f1 had no adjacency Up at any moment of the next $1 seconds:
 # "down" or "up", into $W/f1_watch. FRR's "Adjacency flaps" cannot say:
@@ -125,7 +125,6 @@ f1_watch() {
 # Waits for the watcher, so not in a $( ), whose subshell cannot wait.
 f1_watched() { wait "$watcher" || true; f1_seen=$(head -1 "$W/f1_watch"); }
 r1_changes='eth1 adjacency with .* -> '
-r1_drops='eth1 adjacency with .* -> down'
 
 # f1's session AdminDown: r1 sees the remote AdminDown, and neither side
 # acts. Six seconds is two of r1's hold times.
@@ -142,25 +141,22 @@ echo "ok: f1's session AdminDown, the adjacency stays Up on both"
 eventually 60 r1_up "up/up" || fail "r1's BFD did not come back Up: $(r1_adjacency || true)"
 sleep 3
 
-# r1's session AdminDown. r1 must not act on it. FRR 10.2.1 does: its
-# isisd logs "changed from Up to Down, bfd session went down" and sends
-# TLV 240 Down, so r1 goes Up -> Initializing by RFC 5303 3.2's table
-# and back Up on the next hellos (measured 2026-11-21). That is FRR's,
-# against 4.2's SHOULD NOT, and expected here: the check fails when FRR
-# stops doing it, so a fix in a newer FRR shows.
-frr=$(vty "show version" | sed -n 's/^FRRouting \([^ ]*\).*/\1/p' | head -1)
-r1_before=$(r1_lines "$r1_changes"); r1_drops_before=$(r1_lines "$r1_drops"); f1_watch 8
+# r1's session AdminDown: f1 sees the remote AdminDown, and neither side
+# acts, and the AdminDown stays. FRR 10.2.1 did act: its bfdd told isisd
+# Down, and isisd dropped the adjacency and sent TLV 240 Down, so r1 went
+# Up -> Initializing by RFC 5303 3.2's table and let go of the session.
+# FRR 10.7.1's bfdd tells isisd Admin Down, which it does not act on
+# (measured 2026-11-21).
+r1_session() { on r1 bfd4r-cli show.sessions | ruby -rjson -e 'puts JSON.parse($stdin.read).map { _1["state"] }.join(",")'; }
+r1_before=$(r1_lines "$r1_changes"); f1_watch 8
 on r1 bfd4r-cli session.admin interface=eth1 peer=10.0.12.2 down=true >/dev/null
 sleep 6
-r1_after=$(r1_lines "$r1_changes"); r1_drops_after=$(r1_lines "$r1_drops"); f1_watched
-on r1 bfd4r-cli session.admin interface=eth1 peer=10.0.12.2 down=false >/dev/null || true
-[ "$r1_drops_after" = "$r1_drops_before" ] || fail "r1 took its adjacency Down on its own AdminDown (RFC 5882 4.2)"
-if [ "$f1_seen" = up ]; then
-  [ "$r1_after" = "$r1_before" ] || fail "r1's adjacency changed on its own AdminDown, and f1's did not (RFC 5882 4.2)"
-  fail "FRR $frr no longer drops its adjacency on its peer's AdminDown: FRR fixed it. Update this check, ABOUT.md and CLAUDE.md"
-fi
-echo "ok: r1's session AdminDown, r1 takes no action of its own"
-echo "known: FRR $frr drops its adjacency on its peer's AdminDown, against RFC 5882 4.2; r1 follows its TLV 240 Down"
+r1_after=$(r1_lines "$r1_changes"); f1_watched; r1_state=$(r1_session)
+on r1 bfd4r-cli session.admin interface=eth1 peer=10.0.12.2 down=false >/dev/null
+[ "$r1_after" = "$r1_before" ] || fail "r1's adjacency changed on its own AdminDown (RFC 5882 4.2)"
+[ "$f1_seen" = up ] || fail "f1's adjacency went Down on its peer's AdminDown (RFC 5882 4.2): $(cat "$W/f1_watch")"
+[ "$r1_state" = admin_down ] || fail "r1's session is $r1_state, not admin_down, after six seconds AdminDown"
+echo "ok: r1's session AdminDown, the adjacency stays Up on both, and the session stays AdminDown"
 eventually 60 r1_up "up/up" || fail "r1's adjacency did not come back with BFD: $(r1_adjacency || true)"
 echo "ok: the adjacency and BFD are Up again"
 cli show adjacencies

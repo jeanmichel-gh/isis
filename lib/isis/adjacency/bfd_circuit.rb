@@ -46,7 +46,7 @@ module ISIS
     # is not blocked (RFC 5882 4.1). It may still run BFD: FRR 10.5.1's
     # isisd has no TLV 148 and asks for a session once the adjacency is Up
     # (measured 2026-11-21: no TLV 148 code in its binary; FRR 10.2.1's
-    # hellos carry none in routescope/labs/isis4r-bfd). So on a circuit
+    # and 10.7.1's hellos carry none in routescope/labs/isis4r-bfd). So on a circuit
     # with BFD and with bfdd4r answering, an Up adjacency has a session too,
     # for each protocol both run, and RFC 5882 10.1.2 applies: "IS-IS ...
     # simulates an adjacency failure".
