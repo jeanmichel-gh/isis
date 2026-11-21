@@ -27,11 +27,16 @@ module ISIS
     # Each Adj-SID this system gave out pops and leaves on its adjacency
     # (RFC 8660 section 2.11, NEXT).
     #
-    # What cannot be computed is a problem, kept with the table and not
-    # raised: two prefixes with one index (both dropped; RFC 8660 section
-    # 2.5's tie-breaking is not done), an index past this system's SRGB, a
-    # Prefix-SID that is a label rather than an index, an algorithm its
-    # origin does not run, a neighbor without an SRGB.
+    # What breaks a clause is a finding, from ISIS::Validation, acted on
+    # under the receive policy (+policy+, :rfc by default): an SRGB that
+    # breaks RFC 8660 section 2.3, a second SR-Capabilities, a Prefix-SID
+    # with an invalid V and L, or that is a label, or for an algorithm its
+    # origin does not run, two prefixes with one index. Each finding's text
+    # is also a problem.
+    #
+    # What cannot be computed, though no sender broke a clause, is a
+    # problem only: an index past this system's SRGB, a neighbor without an
+    # SRGB. Both are kept with the table and not raised.
     class Labels
       IMPLICIT_NULL = 3
       EXPLICIT_NULL = { ipv4: 0, ipv6: 2 }.freeze
@@ -47,7 +52,8 @@ module ISIS
       # its Router ID and SRLB from TLV 242, and its Node-SID: +sid+ the
       # index, +prefix+ the prefix it is on. Each is nil when not
       # advertised.
-      Node = Struct.new(:srgb, :algorithms, :router_id, :srlb, :sid, :prefix) do
+      # +ignored+ is true when a :strict policy refused the node's SR data.
+      Node = Struct.new(:srgb, :algorithms, :router_id, :srlb, :sid, :prefix, :ignored) do
         # RFC 8660 section 2.4: index I across the ranges, or nil past the
         # end.
         def label(index)
@@ -55,12 +61,14 @@ module ISIS
         end
       end
 
-      attr_reader :entries, :out_labels, :problems, :nodes
+      attr_reader :entries, :out_labels, :problems, :nodes, :findings, :policy
 
       # +own+ is this system's SegmentRouting; +paths+ the SPF's, whose keys
       # are the nodes reachable at this level.
-      def initialize(own:, database:, paths:)
+      def initialize(own:, database:, paths:, policy: nil)
         @own = own
+        @policy = Validation.policy(policy || (own.receive_policy if own.respond_to?(:receive_policy)))
+        @findings = []
         @database = database
         @paths = paths
         @entries = {}
@@ -96,8 +104,7 @@ module ISIS
         end
         by_index.each do |index, list|
           if list.map(&:prefix).uniq.size > 1
-            problem("index #{index} is the Prefix-SID of #{list.map(&:prefix).sort.join(' and ')}: both left out " \
-                    "(RFC 8660 section 2.5's tie-breaking is not done)")
+            found(Validation.prefix_sid_duplicate(index, list.map(&:prefix).uniq))
             next
           end
           route = list.first
@@ -132,15 +139,21 @@ module ISIS
           lsps = @database.entries.select { |e| e.lsp && !e.purged? && e.lsp_id.byteslice(0, 7) == node }
                           .sort_by { |e| e.lsp_id.getbyte(-1) }.map(&:lsp)
           caps = lsps.flat_map { |l| l.tlvs.select { _1.is_a?(Tlv::RouterCapability) } }
-          gb = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrCapabilities) } }.first
+          all_gb = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrCapabilities) } }
+          gb = all_gb.first
           next unless gb
 
+          id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
           algos = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrAlgorithm) } }.first&.algorithms || [0]
-          srgb = valid_srgb(gb.ranges) ? gb.ranges : nil
-          problem("#{SystemId.from_bytes(node.byteslice(0, 6))}: its SRGB #{gb.ranges.inspect} is not valid, ignored") unless srgb
+          seen = Validation.sr_capabilities(all_gb.size, id) + Validation.srgb(gb.ranges, id)
+          seen.each { found(_1) }
+          actions = seen.map { Validation.action(_1, @policy) }
+          ignored = actions.include?(:ignore_node)
+          srgb = gb.ranges.empty? || ignored || actions.include?(:ignore_srgb) ? nil : gb.ranges
+          problem("#{id}: it advertises no SRGB range, ignored") if gb.ranges.empty?
           srlb = caps.flat_map { |t| t.subtlvs.select { _1.is_a?(SubTlv::SrLocalBlock) } }.first&.ranges
-          sid, prefix = node_sid(lsps)
-          @nodes[node] = Node.new(srgb, algos, caps.first.router_id&.to_s, srlb, sid, prefix)
+          sid, prefix = ignored ? nil : node_sid(lsps, algos)
+          @nodes[node] = Node.new(srgb, algos, caps.first.router_id&.to_s, srlb, sid, prefix, ignored)
         end
       end
 
@@ -148,39 +161,33 @@ module ISIS
       # N flag and an index, in its lowest-numbered LSP first. [index,
       # prefix], or nil. RFC 8667 section 2.1.1.1: N marks the prefix as
       # one that identifies the node.
-      def node_sid(lsps)
+      def node_sid(lsps, algorithms)
         lsps.each do |lsp|
           lsp.tlvs.each do |t|
             next unless t.is_a?(Tlv::ExtendedIpReachability) || t.is_a?(Tlv::Ipv6Reachability)
 
             t.entries.each do |e|
               s = e.subtlvs&.find { _1.is_a?(SubTlv::PrefixSid) && _1.algorithm.zero? }
-              return [s.index, e.prefix] if s&.index && s.flag?("N") && e.prefix
+              next unless s && e.prefix && s.flag?("N")
+              next if Validation.prefix_sid(s, algorithms, e.prefix).any? { Validation.action(_1, @policy) != :use }
+
+              return [s.index, e.prefix] if s.index
             end
           end
         end
         nil
       end
 
-      def valid_srgb(ranges)
-        return false if ranges.empty?
-
-        ranges.all? { |a, b| a >= 16 && b <= 0xfffff && a <= b } &&
-          ranges.combination(2).none? { |(a, b), (c, d)| a <= d && c <= b }
-      end
-
       # The route's Prefix-SID index, or nil when it has none it can use.
       def usable_index(route)
         sid = route.sid or return nil
-        unless sid.index
-          problem("#{route.prefix}: its Prefix-SID is a label, not an index; not used")
-          return nil
-        end
         origin = route.origin && @nodes[route.origin]
-        if origin && !origin.algorithms.include?(sid.algorithm)
-          problem("#{route.prefix}: algorithm #{sid.algorithm} is not one its origin runs (RFC 8667 section 2.1)")
-          return nil
-        end
+        return nil if origin&.ignored
+
+        seen = Validation.prefix_sid(sid, origin&.algorithms, route.prefix)
+        seen.each { found(_1) }
+        return nil if seen.any? { Validation.action(_1, @policy) != :use }
+
         sid.index
       end
 
@@ -226,6 +233,14 @@ module ISIS
 
       def problem(text)
         @problems << text unless @problems.include?(text)
+      end
+
+      # A finding, once, and its text as a problem.
+      def found(finding)
+        return if @findings.include?(finding)
+
+        @findings << finding
+        problem(finding.to_s)
       end
     end
   end

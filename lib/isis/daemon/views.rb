@@ -115,8 +115,8 @@ module ISIS
 
       # This system's segment routing and what it learned: its blocks and
       # Adj-SIDs, then per level each reachable system's SRGB and
-      # algorithms, and the problems the last run met. { enabled: false }
-      # without it.
+      # algorithms, the problems the last run met, its findings by name
+      # (Validation) and the receive policy. { enabled: false } without it.
       def segment_routing
         sr = @router.segment_routing or return { enabled: false }
         names = hostnames
@@ -140,7 +140,8 @@ module ISIS
               row.merge!(sid: n.sid, prefix: n.prefix, label: Spf::Labels.label_at(own, n.sid)) if n.sid
               row
             end
-            [l, { nodes: nodes, problems: table&.problems || [] }]
+            [l, { nodes: nodes, problems: table&.problems || [], findings: (table&.findings || []).map(&:to_hash),
+                  receive_policy: (table&.policy || sr.receive_policy).to_s }]
           end }
       end
 

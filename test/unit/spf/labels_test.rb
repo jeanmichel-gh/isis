@@ -116,7 +116,8 @@ class TestSpfLabels < Minitest::Test
   def test_an_index_used_twice
     _, b, = line(sids: { "a" => { sid: 7 }, "c" => { sid: 7 } })
     refute table(b).key?(18_007)
-    assert_equal 1, b.decisions[1].labels.problems.grep(/index 7 is the Prefix-SID of 10.255.0.1\/32 and 10.255.0.3\/32/).size
+    assert_equal [:prefix_sid_duplicate], b.decisions[1].labels.findings.map(&:name)
+    assert_equal 1, b.decisions[1].labels.problems.grep(/index 7: the Prefix-SID of 10.255.0.1\/32 and 10.255.0.3\/32/).size
   end
 
   # b runs no SR: a has no label for c's SID through it, and says why. Its
@@ -169,6 +170,8 @@ class TestSpfLabels < Minitest::Test
                    "b" => ["10.255.0.2", ["15000-15999"], 2, "10.255.0.2/32", 16_002],
                    "c" => ["10.255.0.3", ["15000-15999"], 3, "10.255.0.3/32", 16_003] }, rows)
     assert_equal [], sr[:levels][1][:problems]
+    assert_equal [], sr[:levels][1][:findings]
+    assert_equal "rfc", sr[:levels][1][:receive_policy]
   end
 
   # A Prefix-SID without the N flag is not a Node-SID: c's SID on a /24,
