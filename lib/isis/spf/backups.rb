@@ -23,11 +23,21 @@ module ISIS
     #   labels alone, and goes on from Q as IP.
     #
     # A label route for a Prefix-SID backs up with the same labels.
+    #
+    # With ti_lfa: node, the failure is the neighbour itself. A route the
+    # node failure leaves unprotected takes the link failure's backup
+    # where there is one, a fallback: the neighbour's own prefixes always
+    # do, since nothing avoids the node they are on. As FRR's
+    # "node-protection link-fallback".
     class Backups
       # A route's backup: the adjacency it leaves on, the labels top first,
-      # and the repair it encodes.
-      Backup = Struct.new(:adjacency, :labels, :repair) do
+      # and the repair it encodes. +fallback+ is true for a link backup
+      # taken because node protection found none.
+      Backup = Struct.new(:adjacency, :labels, :repair, :fallback) do
         def protected? = true
+
+        # :node or :link, what it protects against.
+        def protects = repair.failure.kind
       end
 
       # A route with no backup, and why: TiLfa's reasons, and :no_label
@@ -37,25 +47,27 @@ module ISIS
       end
 
       # Another primary next hop is left.
-      Ecmp = Struct.new(:failure) do
+      Ecmp = Struct.new(:failure, :fallback) do
         def protected? = true
       end
 
-      # What one protected adjacency gave.
-      Summary = Struct.new(:interface, :neighbor, :mode, :protected, :ecmp, :unprotected)
+      # What one protected adjacency gave: +fallback+ counts the routes
+      # protected against the link because the node left them unprotected.
+      Summary = Struct.new(:interface, :neighbor, :mode, :protected, :ecmp, :unprotected, :fallback)
 
       attr_reader :routes, :labels, :summaries, :trees, :seconds
 
       # +routes+, prefix => Route, and +labels+, the run's Spf::Labels;
       # +adjacencies+, [node ID, metric, Adjacency] for each adjacency Up;
-      # +interfaces+, the names with ti_lfa; +clock+ times the work.
+      # +interfaces+, name => :link or :node, the interfaces with ti_lfa (a
+      # list of names is :link for each); +clock+ times the work.
       def initialize(database:, system_id:, routes:, labels:, adjacencies:, interfaces:, clock: nil)
         @database = database
         @root = (Pdu.dotted_octets(system_id) + "\x00".b).b
         @all = routes
         @table = labels
         @adjacencies = adjacencies
-        @interfaces = interfaces
+        @interfaces = interfaces.is_a?(Hash) ? interfaces : interfaces.to_h { [_1, :link] }
         @clock = clock
         @routes = {}
         @labels = {}
@@ -69,9 +81,9 @@ module ISIS
         graph = Graph.from_database(@database)
         ti = TiLfa.new(graph, root: @root)
         @adjacencies.each do |node, _metric, adj|
-          next unless @interfaces.include?(adj.circuit)
+          mode = @interfaces[adj.circuit] or next
 
-          protect(graph, ti, ti.link(node.b), adj)
+          protect(graph, ti, node.b, adj, mode)
         end
         @trees = graph.trees
         @seconds = @clock ? @clock.now - started : 0.0
@@ -85,14 +97,25 @@ module ISIS
 
       private
 
-      def protect(graph, ti, failure, adj)
-        found = ti.protect(failure)
-        summary = Summary.new(adj.circuit, adj.neighbor, :link, 0, 0, Hash.new(0))
+      def protect(graph, ti, neighbor, adj, mode)
+        link = ti.link(neighbor)
+        found_link = ti.protect(link)
+        node = mode == :node ? ti.node(neighbor) : nil
+        found_node = node ? ti.protect(node) : nil
+        summary = Summary.new(adj.circuit, adj.neighbor, mode, 0, 0, Hash.new(0), 0)
         @all.each_value do |route|
           next if route.local? || route.origin.nil?
           next unless route.adjacencies.any? { _1.neighbor.b == adj.neighbor.b && _1.circuit == adj.circuit }
 
-          backup = backup_of(graph, route, found[route.origin.b], failure)
+          backup = backup_of(graph, route, (found_node || found_link)[route.origin.b], node || link)
+          if node && !backup.protected?
+            fallback = backup_of(graph, route, found_link[route.origin.b], link)
+            if fallback.protected?
+              fallback.fallback = true
+              summary.fallback += 1
+              backup = fallback
+            end
+          end
           @routes[route.prefix] = backup
           count(summary, backup)
           label_backup(route, backup)

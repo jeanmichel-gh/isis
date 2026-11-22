@@ -6,12 +6,12 @@ before the failure. The design is routescope's `docs/design/ti-lfa.md`.
 
 **Status.** isisd computes the backups, shows them, and with
 `forwarding: true` installs each IP backup in the kernel beside its
-route: `ti_lfa: link` on a point-to-point interface, with segment routing
-(`docs/isisd.md`). When the link loses carrier the kernel takes the
+route: `ti_lfa: link` or `node` on a point-to-point interface, with
+segment routing (`docs/isisd.md`). When the link loses carrier the kernel takes the
 backups itself. Label routes, and a failure the link does not show
 (BFD, the hold timer), switch when isisd converges, as before; switching
-those sooner is the design's step 2c. Node protection is computed by
-`Spf::TiLfa` but not configurable yet (step 3).
+those sooner is the design's step 2c. Node protection falls back to the
+link where nothing avoids the neighbour.
 
 ## In isisd
 
@@ -31,6 +31,15 @@ next hops all go through that neighbour gets:
 - **ECMP**, when another of its next hops is on another adjacency.
 - **unprotected**, with TiLfa's reason, or `no_label` when an SRGB gives
   no label for an index.
+
+With `ti_lfa: node` the failure is the neighbour, so the backups avoid
+it. A route the node failure leaves unprotected takes the link
+failure's backup where there is one, marked `fallback`, as FRR's
+`node-protection link-fallback`. The neighbour's own prefixes always
+fall back, since nothing avoids the node they are on (TiLfa's reason
+`neighbor`). In the test's square, e behind b at 10 and behind d at 30,
+e's node backup is d's Node-SID then d's Adj-SID to e, around b; b's own
+prefix falls back to the link's `[20004, 22002]`.
 
 A Prefix-SID's label route backs up with its prefix's labels. isisd logs
 the summary per interface when it changes, kind `ti_lfa`.

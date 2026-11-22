@@ -9,7 +9,7 @@ require_relative "../../support/sim_host"
 # RFC 9855 section 7.1 gives it. Every router has SR, SRGB 16000 for a,
 # 18000 b, 20000 c, 22000 d, and its loopback 10.255.0.N/32 has index N.
 class TestSpfBackups < Minitest::Test
-  BASE = { "a" => 16_000, "b" => 18_000, "c" => 20_000, "d" => 22_000 }.freeze
+  BASE = { "a" => 16_000, "b" => 18_000, "c" => 20_000, "d" => 22_000, "e" => 24_000 }.freeze
 
   def setup
     @clock = ISIS::Runtime::ManualClock.new
@@ -28,15 +28,15 @@ class TestSpfBackups < Minitest::Test
   end
 
   # Routers joined by +links+, [a, b, metric], each link a wire named for
-  # its ends; a's interface to b has ti_lfa: link.
-  def build(links, protect: %w[a ab])
+  # its ends; a's interface to b has ti_lfa, +mode+ link unless told.
+  def build(links, protect: %w[a ab], mode: "link")
     ifaces = Hash.new { |h, k| h[k] = [] }
     links.each_with_index do |(x, y, metric), i|
       name = "#{x}#{y}"
       [[x, 1], [y, 2]].each do |id, end_|
         i_conf = { name: name, ip_addresses: ["10.#{i}.0.#{end_}"], metric: metric, hello_interval: 1,
                    hello_multiplier: 3 }
-        i_conf[:ti_lfa] = "link" if [id, name] == protect
+        i_conf[:ti_lfa] = mode if [id, name] == protect
         ifaces[id] << i_conf
       end
     end
@@ -92,7 +92,8 @@ class TestSpfBackups < Minitest::Test
     views = ISIS::Daemon::Views.new(a)
     row = views.routes.find { _1[:prefix] == "10.255.0.2/32" }
     # c's end of the a-c link, the second link, is 10.1.0.2.
-    assert_equal({ address: "10.1.0.2", interface: "ac", labels: [20_004, 22_002], case: "pq_node" }, row[:backup])
+    assert_equal({ address: "10.1.0.2", interface: "ac", labels: [20_004, 22_002], case: "pq_node", protects: "link" },
+                 row[:backup])
     assert_equal({ ecmp: true }, views.routes.find { _1[:prefix] == "10.255.0.4/32" }[:backup])
     label = views.labels.find { _1[:label] == 16_002 }
     assert_equal [20_004, 22_002], label[:backup][:labels]
@@ -115,6 +116,42 @@ class TestSpfBackups < Minitest::Test
     refute ops.any? { _1.prefix == "10.255.0.4/32" }, "ECMP has no backup route"
   end
 
+  # Node protection, a square with e behind b and, at 30, behind d too:
+  #
+  #   a -- b -- e
+  #   |    |    |
+  #   c -- d ---+
+  #
+  # e's backup avoids b: P is d, the last of the path a c d e in c's
+  # P-space, Q is e, adjacent (5.3): d's Node-SID in c's SRGB, then d's
+  # Adj-SID to e; e is Q and advertises its prefix, so nothing after.
+  # b's own prefix has no node backup, nothing avoids b, so it falls back
+  # to the link's: d is the PQ node, then b's index in d's SRGB.
+  def test_node_protection_with_link_fallback
+    a = build([["a", "b", 10], ["a", "c", 10], ["c", "d", 10], ["d", "b", 10], ["b", "e", 10], ["d", "e", 30]],
+              mode: "node")
+    e = backup(a, "10.255.0.5/32")
+    graph = ISIS::Spf::Graph.from_database(a.databases[1])
+    d_to_e = graph.adj_sids[[(ISIS::Pdu.dotted_octets("0000.0000.000d") + "\x00").b,
+                             (ISIS::Pdu.dotted_octets("0000.0000.000e") + "\x00").b]]
+    assert_equal ["ac", [20_004, d_to_e], :p_and_q_adjacent, :node, nil],
+                 [e.adjacency.circuit, e.labels, e.repair.case, e.protects, e.fallback]
+    b = backup(a, "10.255.0.2/32")
+    assert_equal [[20_004, 22_002], :link, true], [b.labels, b.protects, b.fallback]
+    s = a.decisions[1].backups.summaries.first
+    assert_equal [:node, 1], [s.mode, s.fallback]
+    row = ISIS::Daemon::Views.new(a).routes.find { _1[:prefix] == "10.255.0.2/32" }
+    assert_equal ["link", true], row[:backup].values_at(:protects, :fallback)
+  end
+
+  # The same square protecting the link only: e's backup may cross b.
+  def test_link_protection_may_cross_the_neighbor
+    a = build([["a", "b", 10], ["a", "c", 10], ["c", "d", 10], ["d", "b", 10], ["b", "e", 10], ["d", "e", 30]])
+    e = backup(a, "10.255.0.5/32")
+    assert_equal :link, e.protects
+    assert_nil e.fallback
+  end
+
   # Without ti_lfa, nothing is computed and nothing shown.
   def test_off
     a = build([["a", "b", 10], ["a", "c", 10], ["b", "c", 10]], protect: [])
@@ -128,7 +165,7 @@ class TestSpfBackups < Minitest::Test
     refuse = lambda do |iface, conf = base|
       assert_raises(ArgumentError) { ISIS::Router.normalize(conf.merge(interfaces: [iface])) }.message
     end
-    assert_match(/ti_lfa is link, not node; node protection is not built yet/, refuse.({ name: "e1", ti_lfa: "node" }))
+    assert_match(/ti_lfa is link or node, not both/, refuse.({ name: "e1", ti_lfa: "both" }))
     assert_match(/ti_lfa protects point-to-point/, refuse.({ name: "e1", network: "broadcast", ti_lfa: "link" }))
     assert_match(/ti_lfa needs segment_routing/,
                  refuse.({ name: "e1", ti_lfa: "link" }, base.except(:segment_routing)))

@@ -111,12 +111,13 @@ On such an interface, while bfdd4r answers:
 whatever BFD does, for a test that wants a router that says one thing and
 does another; isis4r-sim takes it on its own interfaces.
 
-TI-LFA (RFC 9855) is per interface, with `ti_lfa: link`: after each SPF
-run, every route whose next hops all go through that interface's
-neighbour gets a backup, a next hop and the labels to push, computed
-before the link fails (`docs/ti-lfa.md`). It needs `segment_routing`, and
-a point-to-point interface; node protection is not built yet, so `node`
-is refused. `show.routes`, `show.labels` and `show.ti_lfa` show the
+TI-LFA (RFC 9855) is per interface, with `ti_lfa: link` or `node`: after
+each SPF run, every route whose next hops all go through that
+interface's neighbour gets a backup, a next hop and the labels to push,
+computed before the failure (`docs/ti-lfa.md`). `link` protects against
+the link failing; `node` against the neighbour failing, and where
+nothing avoids the neighbour, as for its own prefixes, against the link.
+It needs `segment_routing`, and a point-to-point interface. `show.routes`, `show.labels` and `show.ti_lfa` show the
 backups. With `forwarding: true`, each IP backup is installed beside its
 route at a worse priority, and isisd sets `ignore_routes_with_linkdown`,
 so the kernel takes it when the link loses carrier.
@@ -147,9 +148,9 @@ Every method:
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
-| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`), `{ ecmp: true }`, or `unprotected` and why |
+| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop); with TI-LFA a prefix's `backup` as on its route |
-| `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
+| `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |

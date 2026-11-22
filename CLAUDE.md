@@ -2406,7 +2406,8 @@ interface (`Spf::Backups`, `show.ti_lfa`, #107). Step 2b: the IP
 backups in the kernel at the route's priority plus 100, and
 `ignore_routes_with_linkdown`, so carrier loss switches them with no
 daemon (`test/interop/kernel_backup_test.rb`). Step 2c, the switch on a
-failure carrier does not show, is measured first.
+failure carrier does not show, is measured first. Step 3:
+`ti_lfa: node`, node protection with link fallback.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained
