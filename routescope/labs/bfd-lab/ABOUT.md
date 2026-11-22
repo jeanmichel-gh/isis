@@ -54,9 +54,8 @@ once a second.
 
 | Scenario | Run | failover | restore |
 | --- | --- | --- | --- |
-| loss-with-bfd | 1 | 2.6 s | 2.6 s |
-| loss-with-bfd | 2 | 2.8 s | 1.5 s |
-| loss-with-bfd | 3 | 2.5 s | 2.8 s |
+| loss-with-bfd | 1 | 2.8 s | 1.5 s |
+| loss-with-bfd | 2 | 2.5 s | 2.8 s |
 | loss-without-bfd | 1 | 28.8 s | 2.0 s |
 | loss-without-bfd | 2 | 30.5 s | 0.7 s |
 
