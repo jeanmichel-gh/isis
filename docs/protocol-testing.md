@@ -123,5 +123,6 @@ ISIS::Fault.topology_file(:ti_lfa_figure_1)  # as an isis4r-sim file (docs/simul
 file, reads the graph back from the simulator's database, so the
 Router Capabilities, Prefix-SIDs and Adj-SIDs are the ones a router
 learns, and computes TI-LFA at the PLR. Each must give what it expects.
-Step 6b of TI-LFA (routescope `docs/design/ti-lfa.md`) runs the same
-entries on real routers, isisd's and FRR's, and compares their repairs.
+`test/interop/frr_ti_lfa_test.rb` runs the same entries on real routers,
+isisd's and FRR's, and compares their repairs (`docs/ti-lfa.md`, "On
+real routers, against FRR").
