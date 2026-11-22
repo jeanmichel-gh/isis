@@ -317,12 +317,17 @@ period goes out at once, and after a recent change it waits
   settings, not the wait now running.
 - Step 3: bfd-lab sets `lsp_generation`, and its loss scenarios lose
   their 60 s wait. `loss-with-bfd` fails the link a second time right
-  after the restore, the case that took about 20 s before: 2.5 to
-  3.2 s, and 9.0 s when the run came straight after another and the
-  backoff had reached 8 s. The measures are in bfd-lab's `ABOUT.md`.
-  The scenario's BFD check now waits for the session to go, since
-  isisd lets go of it once the adjacency is down. The other labs keep
-  `minimum_lsp_interval: 1`, already short.
+  after the restore, the case that took about 20 s before: 6.6 to
+  8.8 s now. Two things set that time, both measured in bfd-lab's
+  `ABOUT.md`. The backoff doubles to 8 s when the run follows another.
+  And isisd's flooding holds a new LSP behind a point-to-point
+  circuit's 5 s retransmission timer (`MINIMUM_LSP_TRANSMISSION_INTERVAL`),
+  which this design did not cover. RFC 1142 7.3.21 describes
+  minimumLSPTransmissionInterval as the wait "before further
+  propagating another Link State PDU from the same source system", 5 s
+  by default; FRR 10.7.1 in this document's lab sent two LSPs 2.7 s
+  apart without it. The scenario's BFD check now waits for the session
+  to go, since isisd lets go of it once the adjacency is down.
 - Step 4 is not started.
 
 ## Decisions
