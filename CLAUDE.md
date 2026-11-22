@@ -151,7 +151,8 @@ test/fixtures/             PDUs captured from real routers, as hex, named
 test/functional/           tests that put PDUs on a real interface
 test/interop/              against FRR's isisd and SR Linux, in network
                            namespaces and containers: root, then
-                           ISIS_FRR=1 rake interop, ISIS_SRL=1 rake interop_srl
+                           ISIS_FRR=1 rake interop, ISIS_FRR=1 rake interop_ti_lfa,
+                           ISIS_SRL=1 rake interop_srl
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
 routescope/labs/           labs of isis4r and FRR, as routescope reads them;
@@ -2456,6 +2457,9 @@ decisions here as they are made.
    after: isisd 32 to 4 s, LAN 232 to 59 s, point to point 535 to 187
    s, simulator 106 to 63 s, two routers 349 to 84 s; the suite 1253 s
    one file after another before, 187 s five at a time after.
+   TI-LFA's topologies on real routers, `frr_ti_lfa_test.rb`, run apart:
+   `rake interop_ti_lfa`, and CI's `interop (TI-LFA)` job. They took the
+   FRR job from under 4 minutes to 9 to 11 in CI (2026-11-22).
 
 2. **routescope, for labs a person watches and drives.** routescope does
    not build labs. It is a web console over labs that docker compose or
