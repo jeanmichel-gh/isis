@@ -1,6 +1,7 @@
 # When isisd generates its own LSPs
 
-Status: a draft for the owner. No code until it is approved.
+Status: approved by the owner 2026-11-22: option 3, with the defaults
+proposed here. "Decisions" at the end records the answers.
 
 ## The problem
 
@@ -308,12 +309,18 @@ period goes out at once, and after a recent change it waits
 4. An interop check against FRR at its defaults, where FRR holds and
    isisd does not.
 
-## Open questions
+## Decisions
 
-1. Option 3, or another?
-2. The default: RFC 1142's fixed 30 s, or the backoff?
-3. The values of `initial`, `secondary` and `maximum`.
-4. Does a refresh count toward the hold in fixed mode? Today it does,
-   and so does FRR's.
-5. The pseudonode LSP follows the same rules (`Pseudonode` is an
-   `Originator`). Should it?
+The owner's answers, 2026-11-22: "option 3 with the defaults you
+proposed".
+
+1. Option 3, with option 2 in it: a refresh and the LSP made at start
+   do not count toward the backoff.
+2. The default stays RFC 1142's fixed hold, 30 s, counted per LSP
+   Number. The backoff is a setting.
+3. `initial` 0 s, `secondary` 1 s, `maximum` 30 s, when
+   `lsp_generation` is given without them.
+4. In fixed mode a refresh still counts, as today and as in FRR.
+5. The pseudonode LSP follows the same rules, as today: `Pseudonode` is
+   an `Originator`. This one was not asked in words; it is the
+   document's default.
