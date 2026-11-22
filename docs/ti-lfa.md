@@ -152,3 +152,38 @@ than its Adj-SIDs is left for later.
 
 `test/unit/spf/graph_test.rb` reads the graph from the LSPs the simulator
 generates for an SR grid, and protects the grid from one of its routers.
+
+## On real routers, against FRR
+
+`test/interop/frr_ti_lfa_test.rb` runs the fault catalog's topologies
+(`docs/protocol-testing.md`) on real routers: a network namespace per
+system, a veth pair per link, isisd at every system, and the PLR either
+isisd or FRR's isisd (`test/support/topology_lab.rb`). It reads each
+repair as the routers forward it: from the first hop, a label in a
+router's SRGB is a Node-SID, any other that router's Adj-SID. It reads
+only once every adjacency is up and the PLR holds every system's latest
+LSP; on real routers an LSP took 5 s to cross a line of them, and an
+earlier read gave other answers.
+
+isisd gives the RFC's repair for every entry, then the destination's
+Prefix-SID in Q's SRGB unless Q is the destination (7.1). The 31-label
+repair is too deep, so isisd falls back to the link's: through A0, then
+D's label, `fallback`.
+
+FRR 10.5.1 delivers each packet, by another route through the labels:
+
+| Entry | FRR 10.5.1 pushes, read as segments | RFC 9855 |
+| --- | --- | --- |
+| `ti_lfa_neighbor` | Node-SID(D), via N | the same |
+| `ti_lfa_pq_node` | Node-SID(B), Adj-SID(B-D) | Node-SID(B), D's Prefix-SID in B's SRGB |
+| `ti_lfa_p_and_q_adjacent` | Node-SID(B), Adj-SID(B-D) | the same |
+| `ti_lfa_figure_1` | Node-SID(R1), Adj-SID(R1-R2), Adj-SID(R2-R3), Adj-SID(R3-D) | the same, then D's Prefix-SID in R3's SRGB in place of Adj-SID(R3-D) |
+| `ti_lfa_figure_2` | Node-SID(R7), Adj-SID(R7-R8), Adj-SID(R8-R4), Adj-SID(R4-R5), Adj-SID(R5-D) | Adj-SID(R7-R8), Adj-SID(R8-R4), D's Prefix-SID in R4's SRGB |
+| `ti_lfa_no_path`, `ti_lfa_ecmp`, `ti_lfa_overload` | no backup | unprotected, or ECMP |
+| `ti_lfa_too_deep` | 32 labels: Node-SID(A0), 30 Adj-SIDs, Adj-SID(A30-D) | past the kernel's 30 labels |
+
+So FRR ends a repair with Adj-SIDs all the way to the destination, where
+7.1 asks the destination's Prefix-SID in Q's SRGB, and on Figure 2
+pushes its first hop's own Node-SID. The test holds FRR to this table on
+10.5.1 and skips FRR on another version. `ti_lfa_one_way` stays a unit
+test: two real routers report a link both ways or neither.
