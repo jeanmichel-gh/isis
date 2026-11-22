@@ -1805,7 +1805,11 @@ may change the adjacency (RFC 5882 4.2). The lab runs FRR 10.7.1 since
 2026-11-21 (isis4r-bfd: r1 Down 0.78 to 0.93 s, f1 0.66 to 0.79 s, four
 runs): 10.2.1's isisd dropped the adjacency on r1's AdminDown and sent
 TLV 240 Down, and isisd followed RFC 5303's table; 10.7.1's bfdd tells
-its isisd Admin Down, and it does not act. Not yet: timers per interface (bfdd4r's defaults), BFD for
+its isisd Admin Down, and it does not act. `routescope/labs/bfd-lab`,
+three isis4r routers with BFD on every link and bfd4r-sim (routescope
+`docs/design/bfd-lab.md`, step 8a), measures 100% loss on a link at
+isisd's default 30 s hold: failover 2.5 to 2.8 s with BFD, 28.8 to
+30.5 s with the sessions AdminDown (2026-11-22). Not yet: timers per interface (bfdd4r's defaults), BFD for
 IPv6 against an independent router, and a second peer that sends TLV
 148. The TE gate is not
 met by the link addresses below: they are two of RFC 5305's sub-TLVs,

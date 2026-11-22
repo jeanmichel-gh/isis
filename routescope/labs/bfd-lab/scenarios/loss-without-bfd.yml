@@ -1,0 +1,53 @@
+name: Loss on r1 to r2, without BFD
+description: >-
+  The same loss, with the link's two BFD sessions set AdminDown first.
+  RFC 5882 4.2: a router does not act on an AdminDown session, so isisd
+  waits out its 30 s hold time before it drops the adjacency.
+timeout: 240
+steps:
+  - expect: { isis_adjacencies: { node: r1, up: 2 } }
+    within: 60
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: up } }
+    within: 30
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2 } }
+    within: 30
+
+  - mark: BFD AdminDown on r1 to r2
+  - bfd: admin_down
+    node: r1
+    peer: 10.0.12.2
+  - bfd: admin_down
+    node: r2
+    peer: 10.0.12.1
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: admin_down } }
+    within: 5
+  - expect: { isis_adjacencies: { node: r1, up: 2 } }
+
+  # isisd sends its own LSP at most every 30 s (MINIMUM_LSP_GENERATION_INTERVAL,
+  # lib/isis/database/originator.rb), and holds a change until then. The
+  # last change, the link back up in an earlier run, may be held 30 s and
+  # then start 30 s more. Waiting 60 s first means the LSP that says the
+  # link is gone goes out at once, as it would on a quiet network.
+  - sleep: 60
+  - mark: 100% loss on r1 to r2
+  - netem: r1:eth1
+    loss: 100%
+  - expect: { ping: { node: r1, from: 10.255.0.1, to: 10.255.0.3, count: 3 } }
+    within: 90
+    measure: failover
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.13.2 } }
+
+  - mark: the loss cleared, BFD back
+  - netem: r1:eth1
+    clear: true
+  - bfd: admin_up
+    node: r1
+    peer: 10.0.12.2
+  - bfd: admin_up
+    node: r2
+    peer: 10.0.12.1
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2 } }
+    within: 60
+    measure: restore
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: up } }
+    within: 30

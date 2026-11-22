@@ -1,0 +1,3 @@
+# bfd4r-sim in bfd-lab (bfd4r docs/sim.md): r2's peer on its eth3.
+local: 10.0.24.2
+interface: eth1

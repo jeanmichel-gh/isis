@@ -1,0 +1,53 @@
+name: s1 misbehaves, r2 answers
+description: >-
+  bfd4r-sim on s1 runs behaviours and a fault against r2's session to
+  it (bfd4r docs/sim.md). Each step says the state RFC 5880 asks of r2.
+timeout: 120
+steps:
+  # A fresh peer session first, whatever an earlier run left.
+  - bfd: stop
+    node: s1
+    continue: true
+  - bfd: peer
+    node: s1
+    to: 10.0.24.1
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, interface: eth3, state: up } }
+    within: 30
+
+  - mark: s1 stops sending
+  - bfd: behave
+    node: s1
+    behaviour: silent
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, state: down } }
+    within: 5
+    measure: detect
+  - bfd: stop
+    node: s1
+  - bfd: peer
+    node: s1
+    to: 10.0.24.1
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, state: up } }
+    within: 15
+
+  - mark: s1 goes AdminDown
+  - bfd: behave
+    node: s1
+    behaviour: admin_down
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, state: down } }
+    within: 5
+  - bfd: stop
+    node: s1
+  - bfd: peer
+    node: s1
+    to: 10.0.24.1
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, state: up } }
+    within: 15
+
+  - mark: s1 sends one packet with TTL 254
+  # RFC 5881 5: a packet with a TTL other than 255 is discarded. s1's
+  # session goes on sending valid packets beside it, so r2 stays Up.
+  - bfd: fault
+    node: s1
+    case: ttl_254
+  - sleep: 2
+  - expect: { bfd_session: { node: r2, peer: 10.0.24.2, state: up } }
