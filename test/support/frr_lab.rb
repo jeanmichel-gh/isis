@@ -520,7 +520,10 @@ class FrrLab
               "ip_addresses" => config[:ip_addresses], "hello_interval" => config[:hello_interval],
               "hello_multiplier" => config[:hello_multiplier] }
     yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier)
-                 .merge(interfaces: [iface], minimum_lsp_interval: config.fetch(:minimum_lsp_interval, 1))
+                 .merge(interfaces: [iface])
+    # The lab's 1 s fixed hold, unless the test times generation itself:
+    # lsp_generation and minimum_lsp_interval are not given together.
+    yaml[:minimum_lsp_interval] = config.fetch(:minimum_lsp_interval, 1) unless config[:lsp_generation]
     File.write(isisd_config, JSON.parse(JSON.generate(yaml)).to_yaml)
     @isis_pid = Process.spawn("ip", "netns", "exec", @isis_ns, RbConfig.ruby, "#{ROOT}/exe/isisd",
                               "-c", isisd_config, "-s", isisd_socket, "-l", "-", "-d",
