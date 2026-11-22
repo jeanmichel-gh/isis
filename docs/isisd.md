@@ -120,7 +120,8 @@ nothing avoids the neighbour, as for its own prefixes, against the link.
 It needs `segment_routing`, and a point-to-point interface. `show.routes`, `show.labels` and `show.ti_lfa` show the
 backups. With `forwarding: true`, each IP backup is installed beside its
 route at a worse priority, and isisd sets `ignore_routes_with_linkdown`,
-so the kernel takes it when the link loses carrier.
+so the kernel takes it when the link loses carrier. `policy.ti_lfa`
+changes an interface's mode while isisd runs.
 
 ```yaml
 interfaces:
@@ -176,6 +177,7 @@ Every method:
 | `policy.summaries` | `summaries` | Level 1 summaries into Level 2, at both levels |
 | `policy.redistribute` | `kinds` | the host route kinds redistributed |
 | `policy.overload` | `on` | the overload bit in every level's LSP |
+| `policy.ti_lfa` | `interface`, `mode` | TI-LFA on one interface while running: `off`, `link` or `node`, checked as the file's `ti_lfa` is; each level runs again, so the backups are computed, installed or withdrawn at once |
 | `api.info` | | versions, every method, the last event number |
 | `events.subscribe` | `since` | turns the connection into a stream of events |
 | `events.unsubscribe` | | ends the stream |

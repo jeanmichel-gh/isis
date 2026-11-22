@@ -2411,7 +2411,8 @@ backups in the kernel at the route's priority plus 100, and
 `ignore_routes_with_linkdown`, so carrier loss switches them with no
 daemon (`test/interop/kernel_backup_test.rb`). Step 2c, the switch on a
 failure carrier does not show, is measured first. Step 3:
-`ti_lfa: node`, node protection with link fallback.
+`ti_lfa: node`, node protection with link fallback. Step 5b:
+`policy.ti_lfa`, the mode changed while isisd runs.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained

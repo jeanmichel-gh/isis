@@ -142,7 +142,13 @@ module ISIS
         old_labels = @labels
         old_backups = @backups
         label(calc) if @segment_routing
-        protect if @segment_routing && @ti_lfa.any?
+        # No interface protected any more: no backups, so the forwarding
+        # withdraws the last run's.
+        if @segment_routing && @ti_lfa.any?
+          protect
+        else
+          @backups = nil
+        end
         @leak.update(@routes) if level == 2 && @leak
         @summary.update(@routes) if level == 1 && @summary
         @log.info("Level #{level} SPF run #{@runs}: #{@paths.size} systems, #{@routes.size} prefixes, " \
