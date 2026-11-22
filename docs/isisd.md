@@ -166,7 +166,7 @@ Every method:
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
-| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
+| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop); with TI-LFA a prefix's `backup` as on its route |
 | `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
@@ -223,6 +223,43 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
   is true when any ATT bit is set.
 - `reachable` is true when the last SPF run at that level reached the
   node. `run` is that run's number.
+- SR (RFC 8667), only where the LSPs carry it, so a topology without SR
+  reads as before. routescope's `docs/design/bgp-ls-sr.md` is the design:
+  a BGP-LS Producer carries these in RFC 9085's TLVs.
+  - A node's `sr`, from its Router Capability TLV 242, in any fragment,
+    LSP Number 0 first: `srgb` and `flags` from SR-Capabilities (sub-TLV
+    2), `srlb` from SR Local Block (22), `algorithms` from SR-Algorithm
+    (19). A block is a list of `{start, size}`, in the order sent.
+  - A TLV 22 neighbor's `adj_sids` from Adj-SID (31) and `lan_adj_sids`
+    from LAN-Adj-SID (32), each as its sub-TLV gives it: `flags`, and
+    `label` or `index`, and `neighbor` for a LAN Adj-SID.
+  - A TLV 135 prefix's `prefix_sid` from Prefix-SID (3): `flags`,
+    `algorithm`, and `index` or `label`.
+
+  ```json
+  {
+    "sr": {
+      "srgb": [
+        {
+          "start": 17000,
+          "size": 8000
+        }
+      ],
+      "flags": [
+        "I"
+      ],
+      "srlb": [
+        {
+          "start": 15000,
+          "size": 1000
+        }
+      ],
+      "algorithms": [
+        0
+      ]
+    }
+  }
+  ```
 - Other sub-TLVs and IPv6 prefixes are not given.
 - A level the router does not run answers no nodes.
 

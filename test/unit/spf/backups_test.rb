@@ -92,8 +92,8 @@ class TestSpfBackups < Minitest::Test
     views = ISIS::Daemon::Views.new(a)
     row = views.routes.find { _1[:prefix] == "10.255.0.2/32" }
     # c's end of the a-c link, the second link, is 10.1.0.2.
-    assert_equal({ address: "10.1.0.2", interface: "ac", labels: [20_004, 22_002], case: "pq_node", protects: "link",
-                   path: %w[a c d b], p: "d", q: "d" }, row[:backup])
+    assert_equal({ address: "10.1.0.2", interface: "ac", labels: [20_004, 22_002], case: "pq_node", protects: "link" },
+                 row[:backup])
     assert_equal({ ecmp: true }, views.routes.find { _1[:prefix] == "10.255.0.4/32" }[:backup])
     label = views.labels.find { _1[:label] == 16_002 }
     assert_equal [20_004, 22_002], label[:backup][:labels]
@@ -142,9 +142,6 @@ class TestSpfBackups < Minitest::Test
     assert_equal [:node, 1], [s.mode, s.fallback]
     row = ISIS::Daemon::Views.new(a).routes.find { _1[:prefix] == "10.255.0.2/32" }
     assert_equal ["link", true], row[:backup].values_at(:protects, :fallback)
-    # e's repair goes round b: c, then d, P, then Q, e itself.
-    e_row = ISIS::Daemon::Views.new(a).routes.find { _1[:prefix] == "10.255.0.5/32" }
-    assert_equal [%w[a c d e], "d", "e"], e_row[:backup].values_at(:path, :p, :q)
   end
 
   # The same square protecting the link only: e's backup may cross b.
