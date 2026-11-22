@@ -338,5 +338,72 @@ class TestUpdateProcess < Minitest::Test
     assert_equal 9, e.sequence
     assert_equal ["h-eth0"], e.srm.to_a
   end
-end
 
+  # docs/design/lsp-flooding.md, option 1: on a point-to-point circuit the
+  # retransmission timer stops once nothing is flagged, so a new LSP after
+  # the acknowledgement goes at once. Measured against FRR 10.5.1 before
+  # this, the second LSP waited to 5 s after the first send though the
+  # first was acknowledged 0.2 s after it went.
+  def flood_version(h, sequence)
+    e = h.database.entry(lsp(sequence).lsp_id).store(lsp(sequence))
+    h.flood(e)
+    e
+  end
+
+  def sent_sequences(h)
+    h.sent.select { _1.is_a?(ISIS::Pdu::Lsp) }.map(&:sequence)
+  end
+
+  def test_a_new_lsp_after_the_acknowledgement_goes_at_once
+    h = host(false)
+    flood_version(h, 5)
+    @scheduler.run_until(0)
+    assert_equal [5], sent_sequences(h)
+    @scheduler.run_until(0.2)
+    h.receive_snp(snp(5))
+    @scheduler.run_until(1.5)
+    flood_version(h, 6)
+    @scheduler.run_until(1.5)
+    assert_equal [5, 6], sent_sequences(h)
+  end
+
+  # Before the acknowledgement it still waits for the timer: option 2 of
+  # the design would send it at once.
+  def test_a_new_lsp_before_the_acknowledgement_waits_for_the_timer
+    h = host(false)
+    flood_version(h, 5)
+    @scheduler.run_until(1.5)
+    flood_version(h, 6)
+    @scheduler.run_until(4.9)
+    assert_equal [5], sent_sequences(h)
+    @scheduler.run_until(5)
+    assert_equal [5, 6], sent_sequences(h)
+  end
+
+  # An LSP nobody acknowledges is still sent again every
+  # minimumLSPTransmissionInterval (RFC 1142 7.3.15.5), and an
+  # acknowledgement ends that.
+  def test_an_unacknowledged_lsp_is_sent_again
+    h = host(false)
+    flood_version(h, 5)
+    @scheduler.run_until(10)
+    assert_equal [5, 5, 5], sent_sequences(h)
+    h.receive_snp(snp(5))
+    @scheduler.run_until(30)
+    assert_equal [5, 5, 5], sent_sequences(h)
+  end
+
+  # The timer stops only when nothing at all is flagged on the circuit.
+  def test_the_timer_runs_while_another_lsp_is_flagged
+    h = host(false)
+    other = ISIS::Pdu::Lsp.new(level: 1, lsp_id: "0000.0000.00dd.00-00", lifetime: 1200, sequence: 3,
+                               tlvs: [ISIS::Tlv::AreaAddresses.new("49.0001")])
+    h.flood(h.database.entry(other.lsp_id).store(other))
+    flood_version(h, 5)
+    @scheduler.run_until(0.2)
+    h.receive_snp(snp(5))
+    @scheduler.run_until(5)
+    # Sent in LSP ID order, 00cc before 00dd; at 5 s only 00dd goes again.
+    assert_equal [5, 3, 3], sent_sequences(h)
+  end
+end
