@@ -42,6 +42,11 @@ fall back, since nothing avoids the node they are on (TiLfa's reason
 e's node backup is d's Node-SID then d's Adj-SID to e, around b; b's own
 prefix falls back to the link's `[20004, 22002]`.
 
+Each backup in `show.routes` and `show.labels` also names its repair
+path: `path`, the routers from this one to Q by hostname, a pseudonode
+as `name.NN`, then `p` and `q`. In the square, e's node backup has
+`path` `[a, c, d, e]`, `p` d and `q` e. routescope draws it on the map.
+
 A Prefix-SID's label route backs up with its prefix's labels. isisd logs
 the summary per interface when it changes, kind `ti_lfa`.
 
