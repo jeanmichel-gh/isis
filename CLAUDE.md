@@ -2402,7 +2402,11 @@ policies in `validation.rb` (0a, #97), the `ISIS::Fault` catalog (0b,
 tier (0e, #103). Step 1, the computation (`Spf::Graph`, `Spf::TiLfa`,
 `docs/ti-lfa.md`), for a link and for a node (#104). Step 2a: isisd
 computes and shows the backups, `ti_lfa: link` per point-to-point
-interface (`Spf::Backups`, `show.ti_lfa`); step 2b installs them.
+interface (`Spf::Backups`, `show.ti_lfa`, #107). Step 2b: the IP
+backups in the kernel at the route's priority plus 100, and
+`ignore_routes_with_linkdown`, so carrier loss switches them with no
+daemon (`test/interop/kernel_backup_test.rb`). Step 2c, the switch on a
+failure carrier does not show, is measured first.
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained

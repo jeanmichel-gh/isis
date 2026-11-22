@@ -10,7 +10,8 @@ Rake::TestTask.new(:test) do |t|
   t.warning = false
 end
 
-# Interop tests against FRR's isisd. They need root, FRR and iproute2, and
+# Interop tests against FRR's isisd, and against the Linux kernel's
+# forwarding (kernel_*_test.rb). They need root, FRR and iproute2, and
 # skip unless ISIS_FRR=1:
 #
 #   sudo env "PATH=$PATH" ISIS_FRR=1 rake interop
@@ -25,7 +26,7 @@ task :interop do
   require "rbconfig"
   require "tempfile"
   libs = ["lib", "test", File.expand_path("../datalink-socket/lib", __dir__), File.expand_path("../bfd4r", __dir__)].flat_map { |l| ["-I", l] }
-  files = FileList["test/interop/**/frr_*_test.rb"].sort_by { |f| -File.size(f) }
+  files = FileList["test/interop/**/frr_*_test.rb", "test/interop/**/kernel_*_test.rb"].sort_by { |f| -File.size(f) }
   jobs = Integer(ENV.fetch("ISIS_INTEROP_JOBS", files.size.to_s)).clamp(1, files.size)
   started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   queue = files.dup

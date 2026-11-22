@@ -33,6 +33,14 @@ class SimHost
   def bfd_client = @bfd_client || raise(ArgumentError, "this SimHost has no bfd_client")
 
   def routes = @routes || []
+
+  # The interfaces Router#link_down_routes asked to pass over when down.
+  attr_reader :link_down
+
+  def ti_lfa(names)
+    @link_down = names
+    nil
+  end
 end
 
 # A Recorder that also answers what the router asks of an adapter.

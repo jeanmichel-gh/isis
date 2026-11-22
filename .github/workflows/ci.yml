@@ -113,6 +113,18 @@ jobs:
             echo "no isisd profile"
           fi
           grep '^isisd ' /sys/kernel/security/apparmor/profiles || echo "isisd not confined"
+      # test/interop/kernel_backup_test.rb pushes labels on IP routes, which
+      # needs mpls_iptunnel. Load it, with linux-modules-extra for the
+      # running kernel if the image lacks the module.
+      - name: Load the MPLS modules
+        run: |
+          if ! sudo modprobe mpls_iptunnel 2>/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)"
+            sudo modprobe mpls_iptunnel
+          fi
+          sudo modprobe mpls_router
+          lsmod | grep '^mpls'
       - name: Interop tests against FRR
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop

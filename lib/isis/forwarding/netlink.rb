@@ -83,6 +83,13 @@ module ISIS
 
       attr_reader :table, :protocol, :priority, :errors
 
+      # A TI-LFA backup route sits this far above its route's priority, so
+      # the kernel takes it only when the route is gone or its link is
+      # down (with ignore_routes_with_linkdown): past both levels' own.
+      BACKUP_OFFSET = 100
+
+      def backup_priority = @priority + BACKUP_OFFSET
+
       # +interfaces+ maps a circuit name to its interface where the two
       # differ; otherwise the circuit's name is its interface. +socket+ is
       # for a test; by default one is opened on first use.
@@ -99,6 +106,7 @@ module ISIS
 
       def apply(operation)
         return apply_label(operation) if operation.is_a?(LabelOperation)
+        return apply_backup(operation) if operation.is_a?(BackupOperation)
 
         route = operation.route
         message =
@@ -120,6 +128,26 @@ module ISIS
       # hops go by their IPv4 address, else their IPv6 one; a label with no
       # next hop pops and looks the packet up again, through lo. A pop
       # toward a next hop is a label route with no new label.
+      # A backup route: one next hop, pushing its labels, at the backup
+      # priority.
+      def apply_backup(operation)
+        message =
+          if operation.kind == :withdraw
+            delete_message(operation.family, operation.prefix, priority: backup_priority)
+          else
+            a = operation.adjacency
+            gateway = a.next_hop(operation.family)
+            unless gateway
+              @log.warn("#{operation} not installed: the next hop has no #{operation.family} address")
+              return false
+            end
+            hop = [ifindex(@interfaces.fetch(a.circuit, a.circuit)), gateway, operation.labels]
+            new_message(operation.family, operation.prefix, [hop], priority: backup_priority)
+          end
+        @log.debug("netlink #{operation}, priority #{backup_priority}")
+        request(message, operation.to_s)
+      end
+
       def apply_label(operation)
         entry = operation.entry
         message =
@@ -146,10 +174,11 @@ module ISIS
       # Returns how many it removed. Label routes are flush_labels's.
       def flush
         mine = dump.select do |r|
-          r[:family] != :mpls && r[:protocol] == @protocol && r[:table] == @table && r[:priority] == @priority
+          r[:family] != :mpls && r[:protocol] == @protocol && r[:table] == @table &&
+            [@priority, backup_priority].include?(r[:priority])
         end
         mine.count do |r|
-          request(delete_message(r[:family], r[:prefix]), "flush #{r[:prefix]}")
+          request(delete_message(r[:family], r[:prefix], priority: r[:priority]), "flush #{r[:prefix]}")
         end
       end
 
@@ -180,10 +209,10 @@ module ISIS
       # RTA_ENCAP_TYPE LWTUNNEL_ENCAP_MPLS and a nested RTA_ENCAP holding
       # MPLS_IPTUNNEL_DST, as `ip route add ... encap mpls LABEL` sends it.
       # In a multipath route each next hop carries its own.
-      def new_message(family, prefix, hops)
+      def new_message(family, prefix, hops, priority: @priority)
         addr, len = split(prefix)
         attrs = attr(RTA_TABLE, [@table].pack("L")) + attr(RTA_DST, addr.hton) +
-                attr(RTA_PRIORITY, [@priority].pack("L"))
+                attr(RTA_PRIORITY, [priority].pack("L"))
         if hops.size == 1
           ifindex, gateway, label = hops.first
           attrs += attr(RTA_OIF, [ifindex].pack("l")) + attr(RTA_GATEWAY, IPAddr.new(gateway).hton) + encap(label)
@@ -196,10 +225,10 @@ module ISIS
 
       # RTM_DELROUTE for +prefix+. Scope RT_SCOPE_NOWHERE and type zero
       # match any, as `ip route del` sends.
-      def delete_message(family, prefix)
+      def delete_message(family, prefix, priority: @priority)
         addr, len = split(prefix)
         attrs = attr(RTA_TABLE, [@table].pack("L")) + attr(RTA_DST, addr.hton) +
-                attr(RTA_PRIORITY, [@priority].pack("L"))
+                attr(RTA_PRIORITY, [priority].pack("L"))
         header(RTM_DELROUTE, NLM_F_REQUEST | NLM_F_ACK, rtmsg(family, len, RT_SCOPE_NOWHERE, 0) + attrs)
       end
 
@@ -253,15 +282,17 @@ module ISIS
       # One label stack entry, RFC 3032 section 2.1 (Mpls::LabelStack): the
       # label, Exp 0, the bottom-of-stack bit (one label here), and a TTL of
       # 0, which the kernel fills in.
-      def stack(label)
-        Mpls::LabelStack.new(label).encode
+      # The labels as a stack, top first, S on the last (Mpls::LabelStack):
+      # one label, or a list.
+      def stack(labels)
+        Mpls::LabelStack.new(*Array(labels)).encode
       end
 
-      # The push of +label+, or nothing.
-      def encap(label)
-        return "".b if label.nil?
+      # The push of +labels+, one or a list, or nothing.
+      def encap(labels)
+        return "".b if labels.nil? || (labels.is_a?(Array) && labels.empty?)
 
-        attr(RTA_ENCAP | NLA_F_NESTED, attr(MPLS_IPTUNNEL_DST, stack(label))) +
+        attr(RTA_ENCAP | NLA_F_NESTED, attr(MPLS_IPTUNNEL_DST, stack(labels))) +
           attr(RTA_ENCAP_TYPE, [LWTUNNEL_ENCAP_MPLS].pack("S"))
       end
 

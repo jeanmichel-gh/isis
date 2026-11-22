@@ -117,7 +117,9 @@ neighbour gets a backup, a next hop and the labels to push, computed
 before the link fails (`docs/ti-lfa.md`). It needs `segment_routing`, and
 a point-to-point interface; node protection is not built yet, so `node`
 is refused. `show.routes`, `show.labels` and `show.ti_lfa` show the
-backups. isisd computes them but installs none yet.
+backups. With `forwarding: true`, each IP backup is installed beside its
+route at a worse priority, and isisd sets `ignore_routes_with_linkdown`,
+so the kernel takes it when the link loses carrier.
 
 ```yaml
 interfaces:

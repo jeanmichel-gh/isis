@@ -44,7 +44,7 @@ class TestSpfBackups < Minitest::Test
       n = id.ord - 96
       macs = list.to_h { |c| [c[:name], format("00:00:00:00:%02x:%02x", n, list.index(c) + 1)] }
       @routers[id] = ISIS::Router.new(
-        { system_id: "0000.0000.000#{id}", hostname: id, minimum_lsp_interval: 1, interfaces: list,
+        { system_id: "0000.0000.000#{id}", hostname: id, minimum_lsp_interval: 1, interfaces: list, forwarding: true,
           prefixes: [{ prefix: "10.255.0.#{n}/32", metric: 0, sid: n }],
           segment_routing: { srgb: [{ start: BASE[id], size: 8_000 }] } },
         clock: @clock, scheduler: @scheduler, log: @log, host: SimHost.new(@wires, macs)
@@ -101,6 +101,18 @@ class TestSpfBackups < Minitest::Test
     p = t[:levels][1][:protecting].first
     assert_equal ["ab", "b", "link", 1, 1], p.values_at(:interface, :neighbor, :mode, :protected, :ecmp)
     assert_operator t[:levels][1][:trees], :>, 0
+  end
+
+  # The backups go to the forwarding adapter beside the routes, and the
+  # host is asked to pass over routes whose link is down.
+  def test_installed
+    a = build([["a", "b", 10], ["a", "c", 10], ["c", "d", 10], ["d", "b", 10]])
+    host = a.instance_variable_get(:@host)
+    assert_equal ["ab"], host.link_down
+    ops = host.adapters[1].operations.grep(ISIS::Forwarding::BackupOperation)
+    op = ops.find { _1.prefix == "10.255.0.2/32" }
+    assert_equal [:install, "ac", [20_004, 22_002]], [op.kind, op.adjacency.circuit, op.labels]
+    refute ops.any? { _1.prefix == "10.255.0.4/32" }, "ECMP has no backup route"
   end
 
   # Without ti_lfa, nothing is computed and nothing shown.
