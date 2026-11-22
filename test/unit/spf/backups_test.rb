@@ -152,6 +152,48 @@ class TestSpfBackups < Minitest::Test
     assert_nil e.fallback
   end
 
+  # policy.ti_lfa while running: link to node, then off. Off, the backups
+  # go, and so do their routes; on again, they come back.
+  SQUARE_E = [["a", "b", 10], ["a", "c", 10], ["c", "d", 10], ["d", "b", 10], ["b", "e", 10], ["d", "e", 30]].freeze
+
+  def test_policy_ti_lfa
+    a = build(SQUARE_E)
+    assert_equal :link, backup(a, "10.255.0.5/32").protects
+    assert_equal({ interface: "ab", mode: "node" }, a.set_ti_lfa("ab", "node"))
+    run_for(2)
+    assert_equal :node, backup(a, "10.255.0.5/32").protects
+
+    ops = a.instance_variable_get(:@host).adapters[1].operations
+    seen = ops.size
+    a.set_ti_lfa("ab", "off")
+    run_for(2)
+    assert_nil a.decisions[1].backups
+    withdrawn = ops[seen..].grep(ISIS::Forwarding::BackupOperation).select { _1.kind == :withdraw }.map(&:prefix)
+    assert_equal %w[10.255.0.2/32 10.255.0.5/32], withdrawn.sort
+    assert_equal({ enabled: false }, ISIS::Daemon::Views.new(a).ti_lfa)
+
+    a.set_ti_lfa("ab", "link")
+    run_for(2)
+    assert_equal :link, backup(a, "10.255.0.5/32").protects
+  end
+
+  def test_policy_ti_lfa_refuses
+    a = build(SQUARE_E)
+    assert_match(/no interface ef; the interfaces are ab, ac/, assert_raises(ArgumentError) { a.set_ti_lfa("ef", "link") }.message)
+    assert_match(/mode is off, link or node, not both/, assert_raises(ArgumentError) { a.set_ti_lfa("ab", "both") }.message)
+  end
+
+  # Through the API, as routescope's isis: step will call it.
+  def test_policy_ti_lfa_through_the_api
+    a = build(SQUARE_E, protect: [])
+    call = ISIS::Daemon::Api::METHODS.fetch("policy.ti_lfa")
+    api = Struct.new(:router).new(a)
+    assert_equal({ interface: "ab", mode: "node" }, call.(api, { "interface" => "ab", "mode" => "node" }))
+    run_for(2)
+    assert_equal :node, backup(a, "10.255.0.5/32").protects
+    assert_raises(ArgumentError) { call.(api, { "interface" => "ab" }) }
+  end
+
   # Without ti_lfa, nothing is computed and nothing shown.
   def test_off
     a = build([["a", "b", 10], ["a", "c", 10], ["b", "c", 10]], protect: [])

@@ -220,6 +220,29 @@ module ISIS
       @summary&.summaries = list
     end
 
+    # TI-LFA on interface +name+, changed while running (policy.ti_lfa):
+    # "link", "node", or "off". Checked as the file's ti_lfa is. Each level
+    # runs SPF again, so the backups are computed, installed or withdrawn
+    # at once. Turned off, ignore_routes_with_linkdown stays as it was:
+    # with no backup route it changes nothing.
+    def set_ti_lfa(name, mode)
+      iface = @config[:interfaces].find { _1[:name] == name.to_s }
+      raise ArgumentError, "no interface #{name}; the interfaces are #{@config[:interfaces].map { _1[:name] }.join(', ')}" unless iface
+
+      mode = mode.to_s
+      raise ArgumentError, "mode is off, #{TI_LFA.join(' or ')}, not #{mode}" unless ["off", *TI_LFA].include?(mode)
+
+      value = mode == "off" ? nil : mode
+      self.class.ti_lfa({ ti_lfa: value }, iface[:name], iface[:network], @config)
+      iface[:ti_lfa] = value
+      @decisions.each_value do |d|
+        d.ti_lfa = ti_lfa_modes
+        d.changed("ti_lfa #{mode} on #{iface[:name]}")
+      end
+      link_down_routes if value
+      { interface: iface[:name], mode: mode }
+    end
+
     def redistribute=(kinds)
       @redistributions.each { |r| r.kinds = kinds }
     end

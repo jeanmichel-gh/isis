@@ -63,6 +63,11 @@ module ISIS
           a.router.redistribute = Array(p["kinds"])
           { redistribute: Array(p["kinds"]) }
         end,
+        # TI-LFA on one interface: off, link or node (docs/ti-lfa.md).
+        "policy.ti_lfa" => lambda do |a, p|
+          a.router.set_ti_lfa(p.fetch("interface") { raise ArgumentError, "policy.ti_lfa needs interface" },
+                              p.fetch("mode") { raise ArgumentError, "policy.ti_lfa needs mode: off, link or node" })
+        end,
         "policy.overload" => lambda do |a, p|
           on = p["on"] == true
           a.router.originators.each_value { |o| o.overload = on }

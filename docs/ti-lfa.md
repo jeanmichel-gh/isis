@@ -7,7 +7,8 @@ before the failure. The design is routescope's `docs/design/ti-lfa.md`.
 **Status.** isisd computes the backups, shows them, and with
 `forwarding: true` installs each IP backup in the kernel beside its
 route: `ti_lfa: link` or `node` on a point-to-point interface, with
-segment routing (`docs/isisd.md`). When the link loses carrier the kernel takes the
+segment routing (`docs/isisd.md`), or set while it runs with
+`policy.ti_lfa`. When the link loses carrier the kernel takes the
 backups itself. Label routes, and a failure the link does not show
 (BFD, the hold timer), switch when isisd converges, as before; switching
 those sooner is the design's step 2c. Node protection falls back to the
