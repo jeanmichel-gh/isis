@@ -1,7 +1,9 @@
 # When isisd generates its own LSPs
 
 Status: approved by the owner 2026-11-22: option 3, with the defaults
-proposed here. "Decisions" at the end records the answers.
+proposed here. "Decisions" at the end records the answers. Steps 1 and
+2 are built (#113), step 3 with bfd-lab; "As built" says what changed
+from this text.
 
 ## The problem
 
@@ -308,6 +310,25 @@ period goes out at once, and after a recent change it waits
    their 60 s wait and are run again through routescope, measured.
 4. An interop check against FRR at its defaults, where FRR holds and
    isisd does not.
+
+## As built
+
+- Steps 1 and 2, #113. `show.overview` shows the timer's mode and
+  settings, not the wait now running.
+- Step 3: bfd-lab sets `lsp_generation`, and its loss scenarios lose
+  their 60 s wait. `loss-with-bfd` fails the link a second time right
+  after the restore, the case that took about 20 s before: 6.6 to
+  8.8 s now. Two things set that time, both measured in bfd-lab's
+  `ABOUT.md`. The backoff doubles to 8 s when the run follows another.
+  And isisd's flooding holds a new LSP behind a point-to-point
+  circuit's 5 s retransmission timer (`MINIMUM_LSP_TRANSMISSION_INTERVAL`),
+  which this design did not cover. RFC 1142 7.3.21 describes
+  minimumLSPTransmissionInterval as the wait "before further
+  propagating another Link State PDU from the same source system", 5 s
+  by default; FRR 10.7.1 in this document's lab sent two LSPs 2.7 s
+  apart without it. The scenario's BFD check now waits for the session
+  to go, since isisd lets go of it once the adjacency is down.
+- Step 4 is not started.
 
 ## Decisions
 

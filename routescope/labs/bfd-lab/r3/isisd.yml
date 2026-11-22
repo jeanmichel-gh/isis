@@ -6,6 +6,9 @@ areas: [49.0001]
 level: 1
 metric_style: wide
 forwarding: true
+# A change to its own LSP goes out at once after a quiet time, then backs
+# off: 1, 2, 4 s and so on up to 30 s (docs/design/lsp-generation.md).
+lsp_generation: { initial: 0, secondary: 1, maximum: 30 }
 prefixes:
   - { prefix: 10.255.0.3/32, metric: 0 }
 interfaces:
