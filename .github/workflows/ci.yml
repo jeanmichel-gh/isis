@@ -129,6 +129,54 @@ jobs:
         working-directory: isis
         run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop
 
+  # TI-LFA's topologies on real routers (test/interop/frr_ti_lfa_test.rb):
+  # a namespace per system, up to 33 isisd at once. They took the FRR job
+  # from under 4 minutes to 9 to 11 (2026-11-22), near its limit, so they
+  # run here, beside it. The runner's FRR was 10.5.1, whose answers the
+  # test records, so both halves ran: 19 tests in 619 s (#122). On another
+  # FRR the FRR half skips.
+  interop-ti-lfa:
+    name: interop (TI-LFA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: isis
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jeanmichel-gh/datalink-socket
+          path: datalink-socket
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          repository: jeanmichel-gh/bfd4r
+          path: bfd4r
+          persist-credentials: false
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: isis
+          bundler-cache: true
+      - name: Install FRR and iproute2
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq frr iproute2
+      - name: FRR version
+        run: /usr/lib/frr/isisd --version | head -1
+      # As in the FRR job: 26.04's AppArmor profile keeps the lab's isisd
+      # from its pid file.
+      - name: Unload the isisd AppArmor profile
+        run: |
+          if [ -f /etc/apparmor.d/isisd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/isisd
+            echo "isisd profile unloaded"
+          else
+            echo "no isisd profile"
+          fi
+      - name: TI-LFA on real routers
+        working-directory: isis
+        run: sudo -E env "PATH=$PATH" ISIS_FRR=1 bundle exec rake interop_ti_lfa
+
   # The gates against a second independent implementation, Nokia SR
   # Linux, so a reading isis4r and FRR share cannot pass unseen.
   # containerlab runs SR Linux, and test/support/srl_lab.rb joins it to
@@ -203,12 +251,12 @@ jobs:
         run: sudo test/lab/isis4r-frr.sh clab
 
   # The one check to require before merging. It passes only if every
-  # matrix job, the FRR and SR Linux interop jobs and the lab job passed, so adding or removing a Ruby version never means
+  # matrix job, the FRR, TI-LFA and SR Linux interop jobs and the lab job passed, so adding or removing a Ruby version never means
   # editing the branch rules. A skipped job counts as a failure here.
   ci:
     name: ci
     if: always()
-    needs: [test, interop-frr, interop-srl, lab-containerlab]
+    needs: [test, interop-frr, interop-ti-lfa, interop-srl, lab-containerlab]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -216,9 +264,11 @@ jobs:
         run: |
           echo "test: ${{ needs.test.result }}"
           echo "interop-frr: ${{ needs.interop-frr.result }}"
+          echo "interop-ti-lfa: ${{ needs.interop-ti-lfa.result }}"
           echo "interop-srl: ${{ needs.interop-srl.result }}"
           echo "lab-containerlab: ${{ needs.lab-containerlab.result }}"
           test "${{ needs.test.result }}" = "success"
           test "${{ needs.interop-frr.result }}" = "success"
+          test "${{ needs.interop-ti-lfa.result }}" = "success"
           test "${{ needs.interop-srl.result }}" = "success"
           test "${{ needs.lab-containerlab.result }}" = "success"

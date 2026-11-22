@@ -14,7 +14,9 @@ require_relative "frr_lab"
 # exe/isisd in each, as the entry numbers them (Fault.topology_file):
 # system N is 0000.0000.NNNN, advertises 10.255.0.N/32 with Prefix-SID
 # index N, and has the SRGB 16000 + 1000 N. The PLR runs TI-LFA on its
-# interface to the failure's neighbor, as isisd or as FRR's isisd. Needs
+# interface to the failure's neighbor, as isisd or as FRR's isisd. isisd
+# logs at info, not debug: 33 of them logging every PDU in hex starve two
+# CPUs. Needs
 # what FrrLab needs; the tests that use it run only with ISIS_FRR=1.
 #
 #   lab = TopologyLab.new("t1", :ti_lfa_figure_1, plr: :frr).start
@@ -26,6 +28,10 @@ require_relative "frr_lab"
 class TopologyLab
   FRR = FrrLab::FRR
   ROOT = FrrLab::ROOT
+  # Hellos every second, held 10 s. With 3 s, the 33 routers of
+  # ti_lfa_too_deep on GitHub's two CPUs lost adjacencies, and S's repair
+  # never settled (#122); pinned to two CPUs here, the same.
+  HELLO_MULTIPLIER = 10
 
   attr_reader :entry, :systems, :dir
 
@@ -140,12 +146,22 @@ class TopologyLab
   # Whether every isisd has all its adjacencies up, and the PLR holds
   # every system's LSP as that system last made it. A system's own LSP
   # names only the adjacencies up when it was made.
-  def flooded?
-    return false unless (@systems - [plr]).all? { |n| isisd(n, "show.adjacencies").count { _1["state"] == "up" } == interfaces(n).size }
+  def flooded? = unflooded.empty?
 
-    own = own_sequences
+  # What keeps the lab from being whole: each isisd missing adjacencies,
+  # with how many are up, and each LSP the PLR holds at another sequence
+  # than its system's, as [held, own].
+  def unflooded
+    out = {}
+    (@systems - [plr]).each do |n|
+      up = isisd(n, "show.adjacencies").count { _1["state"] == "up" }
+      out["#{n} adjacencies"] = "#{up} of #{interfaces(n).size}" if up < interfaces(n).size
+    end
+    return out unless out.empty?
+
     held = plr_sequences
-    own.all? { |n, seq| seq && held[n] == seq }
+    own_sequences.each { |n, seq| out["#{n} LSP"] = [held[n], seq] unless seq && held[n] == seq }
+    out
   end
 
   # Waits until the PLR holds every system's LSP as the system made it,
@@ -156,15 +172,23 @@ class TopologyLab
   def settled_repair(timeout = 120)
     loopbacks = (@systems - [plr]).map { "10.255.0.#{number(_1)}/32" }
     deadline = Time.now + timeout
+    readings = []
     while Time.now < deadline
       if wait_for(deadline - Time.now) { flooded? && (loopbacks - plr_prefixes).empty? }
         first = plr_repair
         sleep 3
         second = plr_repair
         return second if first == second && flooded?
+
+        readings = [first, second]
       end
     end
-    raise "#{plr}'s repair did not settle:\n#{report}"
+    why = begin
+      { unflooded: unflooded, missing_routes: loopbacks - plr_prefixes, last_readings: readings }
+    rescue StandardError => e
+      e.message
+    end
+    raise "#{plr}'s repair did not settle in #{timeout} s: #{why.inspect}\n#{report}"
   end
 
   def destination_prefix = "10.255.0.#{number(@entry[:destination])}/32"
@@ -273,14 +297,14 @@ class TopologyLab
       "prefixes" => [{ "prefix" => "10.255.0.#{number(name)}/32", "metric" => 0, "sid" => number(name) }],
       "interfaces" => interfaces(name).map do |iface, address, metric, peer|
         i = { "name" => iface, "ip_addresses" => [address], "metric" => metric, "hello_interval" => 1,
-              "hello_multiplier" => 3 }
+              "hello_multiplier" => HELLO_MULTIPLIER }
         name == plr && peer == neighbor ? i.merge("ti_lfa" => failure_kind.to_s) : i
       end
     }
     file = File.join(@dir, "#{name}.yml")
     File.write(file, config.to_yaml)
     @pids << Process.spawn("ip", "netns", "exec", ns(name), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
-                           "-s", socket(name), "-l", "-", "-d", %i[out err] => File.join(@dir, "#{name}.log"))
+                           "-s", socket(name), "-l", "-", %i[out err] => File.join(@dir, "#{name}.log"))
   end
 
   # FRR 10.5.1 as the PLR: isisd and zebra, TI-LFA on the failure's
@@ -290,7 +314,7 @@ class TopologyLab
     FileUtils.mkdir_p([@run, @etc])
     stanzas = interfaces(name).map do |iface, _, metric, peer|
       lines = ["interface #{iface}", " ip router isis LAB", " isis network point-to-point", " isis metric #{metric}",
-               " isis hello-interval 1", " isis hello-multiplier 3"]
+               " isis hello-interval 1", " isis hello-multiplier #{HELLO_MULTIPLIER}"]
       if peer == neighbor
         lines << (failure_kind == :node ? " isis fast-reroute ti-lfa node-protection" : " isis fast-reroute ti-lfa")
       end

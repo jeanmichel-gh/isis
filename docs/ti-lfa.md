@@ -187,3 +187,8 @@ So FRR ends a repair with Adj-SIDs all the way to the destination, where
 pushes its first hop's own Node-SID. The test holds FRR to this table on
 10.5.1 and skips FRR on another version. `ti_lfa_one_way` stays a unit
 test: two real routers report a link both ways or neither.
+
+`sudo env "PATH=$PATH" ISIS_FRR=1 rake interop_ti_lfa` runs it, apart
+from `rake interop`, and so does CI's `interop (TI-LFA)` job. It took
+8.6 minutes here with both halves, and CI's FRR job from under 4
+minutes to 9 to 11 while it ran there (2026-11-22).
