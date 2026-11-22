@@ -1,6 +1,8 @@
 # When isisd sends an LSP on a point-to-point circuit
 
-Status: a draft for the owner. No code until it is approved.
+Status: approved by the owner 2026-11-22: option 1, for the beta.
+Option 2 may be preferred over time. "Decisions" at the end records
+the answers.
 
 ## The problem
 
@@ -222,7 +224,16 @@ is the annex's reading and FRR's behaviour. A test that wants today's
 hold replaces `send_srm_lsps` or `set_srm` on one circuit's update
 process.
 
-## Work, once approved
+## Work, as approved (option 1)
+
+1. `UpdateProcess`: when the last SRM flag on a point-to-point circuit
+   clears, cancel the timer. Tests on the manual clock: a new LSP after
+   the acknowledgement goes at once; one before it still waits for the
+   timer; an unacknowledged LSP is still sent again at 5 s; a LAN
+   circuit is unchanged.
+2. The measurement above, run again against FRR.
+
+## Work for option 2, if chosen later
 
 1. `UpdateProcess`: the last send per LSP and circuit, `set_srm` sending
    at once on a point-to-point circuit, the tick sending only what is
@@ -236,7 +247,19 @@ process.
 3. bfd-lab re-run through routescope, `failover_again` measured. The
    interop test of #125 tightened if the numbers allow it.
 
-## Open questions
+## Decisions
+
+The owner, 2026-11-22: "Go with option 1 with a note that over time
+option 2 might be preferred. For now we are aiming for beta ... good
+enough is enough for now, better is the enemy of good."
+
+1. Option 1. Option 2 stays written above for later: it is the one that
+   never holds a new version, whatever the neighbour's ack timing.
+2. to 4. Not taken up for now: a LAN keeps its 33 ms tick,
+   `lsp_transmission_interval` stays out of `isisd.yml`, and isisd's
+   PSNP timing is unchanged.
+
+## Open questions, as first asked
 
 1. Option 2, or another?
 2. Should a new LSP go at once on a LAN too, before the 33 ms tick?
