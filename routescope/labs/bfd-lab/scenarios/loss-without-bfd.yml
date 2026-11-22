@@ -2,7 +2,9 @@ name: Loss on r1 to r2, without BFD
 description: >-
   The same loss, with the link's two BFD sessions set AdminDown first.
   RFC 5882 4.2: a router does not act on an AdminDown session, so isisd
-  waits out its 30 s hold time before it drops the adjacency.
+  waits out its 30 s hold time before it drops the adjacency. Then
+  both routers let go of their sessions, and when the adjacency comes
+  back they ask for new ones, which come Up.
 timeout: 240
 steps:
   - expect: { isis_adjacencies: { node: r1, up: 2 } }
@@ -37,15 +39,19 @@ steps:
     measure: failover
   - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.13.2 } }
 
-  - mark: the loss cleared, BFD back
+  # isisd lets go of a link's BFD session when its adjacency goes down,
+  # and bfdd4r removes it a Detection Time later. Clearing the AdminDown
+  # then would race that removal, so the scenario waits for both to go:
+  # the sessions isisd asks for when the adjacency comes back are new,
+  # and come Up by themselves.
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: absent } }
+    within: 15
+  - expect: { bfd_session: { node: r2, peer: 10.0.12.1, state: absent } }
+    within: 15
+
+  - mark: the loss cleared
   - netem: r1:eth1
     clear: true
-  - bfd: admin_up
-    node: r1
-    peer: 10.0.12.2
-  - bfd: admin_up
-    node: r2
-    peer: 10.0.12.1
   - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2 } }
     within: 60
     measure: restore
