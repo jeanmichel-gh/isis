@@ -838,3 +838,163 @@ class TestOriginatorAreaPrefixes < Minitest::Test
     assert_equal "ec0e" "00000019" "00" "40" "20010db800010000", tlv(orig, 236)
   end
 end
+
+# When a change goes out: RFC 1142's fixed hold, per LSP Number, or the
+# backoff (GenerationTimer, docs/design/lsp-generation.md). One
+# originator, no circuits, on a manual clock.
+class TestOriginatorGenerationTiming < Minitest::Test
+  def setup
+    @clock = ISIS::Runtime::ManualClock.new
+    @scheduler = ISIS::Runtime::Scheduler.new(@clock)
+    TestLogs.heading(name)
+    @log = ISIS::Runtime::Log.new(clock: @clock, logger: TestLogs.logger(@clock), tracer: TestLogs.tracer(@clock))
+    @db = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: @log)
+  end
+
+  def originator(**opts)
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 prefixes: [{ prefix: "10.0.0.1/32", metric: 1 }], **opts)
+  end
+
+  def sequence(number = 0) = @db[@orig.lsp_id(number)].sequence
+
+  def add(prefix)
+    @orig.prefixes += [{ prefix: prefix, metric: 1 }]
+    @orig.changed("added #{prefix}")
+  end
+
+  def at(time)
+    @scheduler.run_until(time)
+  end
+
+  # bfd-lab's case: an adjacency up 2 s after the start. The fixed hold
+  # counts the start, so it waits to 30 s.
+  def test_fixed_holds_a_change_after_the_start
+    originator
+    @orig.start
+    at(2)
+    add("10.0.0.2/32")
+    at(29.9)
+    assert_equal 1, sequence
+    at(30)
+    assert_equal 2, sequence
+  end
+
+  # The backoff does not count the start: the change goes out at once.
+  def test_backoff_sends_a_change_after_the_start_at_once
+    originator(lsp_generation: { initial: 0, secondary: 1, maximum: 30 })
+    @orig.start
+    at(2)
+    add("10.0.0.2/32")
+    assert_equal 2, sequence
+  end
+
+  # A second change 0.2 s later waits to 1 s after the first; a third
+  # and a fourth meanwhile go with it. The next waits 2 s.
+  def test_backoff_holds_changes_that_follow
+    originator(lsp_generation: { initial: 0, secondary: 1, maximum: 30 })
+    @orig.start
+    at(10)
+    add("10.0.0.2/32")
+    at(10.2)
+    add("10.0.0.3/32")
+    at(10.5)
+    add("10.0.0.4/32")
+    at(10.99)
+    assert_equal 2, sequence
+    at(11)
+    assert_equal 3, sequence
+    add("10.0.0.5/32")
+    at(12.99)
+    assert_equal 3, sequence
+    at(13)
+    assert_equal 4, sequence
+  end
+
+  # After more than the maximum with no change, the next goes at once.
+  def test_backoff_resets_after_quiet
+    originator(lsp_generation: { initial: 0, secondary: 1, maximum: 30 })
+    @orig.start
+    at(10)
+    add("10.0.0.2/32")
+    at(10.5)
+    add("10.0.0.3/32")
+    at(11)
+    assert_equal 3, sequence
+    at(41.5)
+    add("10.0.0.4/32")
+    assert_equal 4, sequence
+  end
+
+  # A refresh opens a 30 s hold in fixed mode (7.3.21 reads "re-generating"
+  # as any generation, as FRR does), and none with the backoff.
+  def test_a_refresh_counts_only_in_fixed_mode
+    { nil => 3, { initial: 0, secondary: 1, maximum: 30 } => 4 }.each do |g, expected|
+      setup
+      originator(lsp_generation: g, refresh_interval: 100)
+      @orig.start
+      at(50)
+      add("10.0.0.2/32")
+      at(100)
+      assert_equal 3, sequence, "the refresh at 100 s, after the change at 50 s"
+      at(101)
+      add("10.0.0.3/32")
+      assert_equal expected, sequence, g ? "backoff" : "fixed"
+    end
+  end
+
+  # 7.3.4: the hold applies "to each LSP individually". LSP Number 2 went
+  # out at 10 s; a change to LSP Number 1 at 12 s does not wait on it.
+  def test_the_hold_is_per_lsp_number
+    list = (1..60).map { |i| { prefix: "10.1.0.#{i}/32", metric: 1 } }
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 buffer_size: 300, minimum_interval: 5, prefixes: list)
+    @orig.start
+    at(10)
+    @orig.prefixes += [{ prefix: "10.2.0.1/32", metric: 1 }]
+    @orig.changed("one more, in LSP Number 2")
+    assert_equal [1, 1, 2], [0, 1, 2].map { |n| sequence(n) }
+    at(12)
+    list = @orig.prefixes.dup
+    list[40] = { prefix: "10.3.0.1/32", metric: 1 }
+    @orig.prefixes = list
+    @orig.changed("one replaced, in LSP Number 1")
+    assert_equal [1, 2, 2], [0, 1, 2].map { |n| sequence(n) }
+  end
+
+  # LSPs a change touches go out together, at the latest of their times
+  # (7.3.4, the SRMflags "set as an atomic action").
+  def test_lsps_one_change_touches_go_out_together
+    list = (1..60).map { |i| { prefix: "10.1.0.#{i}/32", metric: 1 } }
+    @orig = ISIS::Originator.new(system_id: "0000.0000.000a", database: @db, scheduler: @scheduler, log: @log,
+                                 buffer_size: 300, minimum_interval: 5, prefixes: list)
+    @orig.start
+    at(10)
+    @orig.prefixes += [{ prefix: "10.2.0.1/32", metric: 1 }]
+    @orig.changed("one more, in LSP Number 2")
+    at(12)
+    # One fewer in LSP Number 1 moves the first of LSP Number 2 into it.
+    @orig.prefixes = @orig.prefixes.reject.with_index { |_, i| i == 40 }
+    @orig.changed("one gone from LSP Number 1")
+    assert_equal [1, 1, 2], [0, 1, 2].map { |n| sequence(n) }
+    at(14.99)
+    assert_equal [1, 1, 2], [0, 1, 2].map { |n| sequence(n) }
+    at(15)
+    assert_equal [1, 2, 3], [0, 1, 2].map { |n| sequence(n) }
+  end
+
+  # A test may put its own timer in place.
+  def test_the_timer_can_be_replaced
+    originator
+    @orig.generation_timer = Class.new do
+      def wait(_number, now:, since:) = since + 7 - now
+      def generated(*, **) = nil
+    end.new
+    @orig.start
+    add("10.0.0.2/32")
+    at(6.9)
+    assert_equal 1, sequence
+    at(7)
+    assert_equal 2, sequence
+  end
+end

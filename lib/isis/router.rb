@@ -31,7 +31,12 @@ module ISIS
   #   overload: false
   #   area_key: / hello_key:        HMAC-MD5 keys (RFC 5304)
   #   lsp_buffer_size: 1492
-  #   minimum_lsp_interval: 5
+  #   minimum_lsp_interval: 5       RFC 1142's fixed hold on a change, 30 s
+  #                                 when absent
+  #   lsp_generation:               the backoff in its place
+  #     {initial: 0, secondary: 1, maximum: 30}    (GenerationTimer::Backoff,
+  #                                 docs/design/lsp-generation.md); not with
+  #                                 minimum_lsp_interval
   #   forwarding: false             install routes through the host
   #   leak: [prefix, ...]           Level 2 routes leaked into Level 1
   #   summaries: [{prefix:, metric:}]
@@ -271,6 +276,22 @@ module ISIS
       @decisions = @levels.to_h { |l| [l, decision(l)] }
     end
 
+    # The backoff's settings, the defaults filled in, or nil for the fixed
+    # hold. A key it does not know, or minimum_lsp_interval beside it, is
+    # refused.
+    def lsp_generation
+      g = @config[:lsp_generation] or return nil
+      g = {} if g == true
+      raise ArgumentError, "lsp_generation is a map of #{GenerationTimer::Backoff::DEFAULTS.keys.join(', ')}" unless g.is_a?(Hash)
+
+      g = g.transform_keys(&:to_sym)
+      unknown = g.keys - GenerationTimer::Backoff::DEFAULTS.keys
+      raise ArgumentError, "lsp_generation: unknown #{unknown.size == 1 ? 'key' : 'keys'} #{unknown.join(', ')}" if unknown.any?
+      raise ArgumentError, "lsp_generation and minimum_lsp_interval are two ways to time the same thing; give one" if @config.key?(:minimum_lsp_interval)
+
+      GenerationTimer::Backoff::DEFAULTS.merge(g)
+    end
+
     def originator(level)
       c = @config
       Originator.new(system_id: @system_id, database: @databases[level], scheduler: @scheduler, log: @log,
@@ -280,6 +301,7 @@ module ISIS
                      prefixes: c.fetch(:prefixes, []), external_prefixes: c.fetch(:external_prefixes, []),
                      metric_style: c.fetch(:metric_style, "wide").to_sym, area_key: c[:area_key],
                      minimum_interval: c.fetch(:minimum_lsp_interval, Originator::MINIMUM_LSP_GENERATION_INTERVAL),
+                     lsp_generation: lsp_generation,
                      buffer_size: c.fetch(:lsp_buffer_size, Originator::LSP_BUFFER_SIZE),
                      is_type: both? ? 3 : nil, level1_database: level == 2 ? @databases[1] : nil,
                      overload: c.fetch(:overload, false), segment_routing: @segment_routing)

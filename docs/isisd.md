@@ -127,6 +127,23 @@ interfaces:
   - { name: eth1, ip_addresses: [10.0.12.1], ti_lfa: link }
 ```
 
+A change to this system's own LSP, an adjacency up or down among
+others, waits before it goes out. By default the wait is RFC 1142's
+fixed hold (7.3.21): at least `minimum_lsp_interval` seconds, 30 when
+absent, after the last generation of that LSP Number, the start and
+refreshes included. FRR 10.7.1 at its defaults does the same.
+`lsp_generation` puts a backoff in its place: the first change after a
+quiet time waits `initial`, the next `secondary` from the last, and each
+after that twice the one before, up to `maximum`; more than `maximum`
+with no change is quiet again. The start and refreshes do not count.
+`lsp_generation: {}` or `true` takes the defaults below. The two keys
+are not given together. `show.overview` says which is in use. The
+design and FRR's measured behaviour are `docs/design/lsp-generation.md`.
+
+```yaml
+lsp_generation: { initial: 0, secondary: 1, maximum: 30 }   # seconds; the defaults
+```
+
 An area is read as written: YAML would read `49.0010` as the number
 49.001, so isisd takes the text of each item under `areas` from the file.
 
@@ -143,7 +160,7 @@ Every method:
 
 | Method | Params | Answers |
 |---|---|---|
-| `show.overview` | | system ID, hostname, levels, areas, counts per level |
+| `show.overview` | | system ID, hostname, levels, areas, counts per level; `lsp_generation`, how a change to its own LSP is timed |
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |

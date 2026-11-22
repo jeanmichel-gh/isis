@@ -19,8 +19,8 @@ module ISIS
   # Neighbours: this system makes no adjacencies with end systems.
   #
   # Generation follows Originator's rules: refreshed every
-  # maximumLSPGenerationInterval, generated again on a change no sooner
-  # than minimumLSPGenerationInterval, and moved past a newer copy of
+  # maximumLSPGenerationInterval, generated again on a change when its
+  # GenerationTimer allows, the same kind as the system's own, and moved past a newer copy of
   # itself. start is becoming DIS and stop is resigning, which purges the
   # LSP network wide (7.2.3). After stop, this system no longer generates
   # it (7.3.15.1 c).
@@ -29,10 +29,12 @@ module ISIS
 
     def initialize(circuit:, database:, scheduler:, log:, metric_style: :wide, area_key: nil,
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
-                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, buffer_size: LSP_BUFFER_SIZE, is_type: nil)
+                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, lsp_generation: nil,
+                   buffer_size: LSP_BUFFER_SIZE, is_type: nil)
       super(system_id: circuit.system_id.unpack1("H*"), database: database, scheduler: scheduler, log: log, areas: [],
             protocols: [], metric_style: metric_style, area_key: area_key, refresh_interval: refresh_interval,
-            minimum_interval: minimum_interval, buffer_size: buffer_size, is_type: is_type)
+            minimum_interval: minimum_interval, lsp_generation: lsp_generation, buffer_size: buffer_size,
+            is_type: is_type)
       @circuit = circuit
       @lsp_base = circuit.own_lan_id.b
       @active = false

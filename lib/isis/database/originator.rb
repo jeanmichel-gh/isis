@@ -115,7 +115,10 @@ module ISIS
     MAXIMUM_AREA_ADDRESSES = 3
 
     attr_reader :system_id, :database, :circuits, :refresh_interval, :minimum_interval, :buffer_size, :numbers,
-                :lifetime
+                :lifetime, :lsp_generation
+    # The GenerationTimer that times a change, per LSP Number. A test may
+    # put its own in its place.
+    attr_accessor :generation_timer
     METRIC_STYLES = %i[wide narrow transition].freeze
 
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
@@ -127,7 +130,7 @@ module ISIS
                    ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
                    ipv6_addresses: [], ipv6_prefixes: [],
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
-                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL,
+                   minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, lsp_generation: nil,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
                    hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil)
       @system_id = Pdu.dotted_octets(system_id)
@@ -164,6 +167,11 @@ module ISIS
       # less for a simulator that wants its LSPs to age out within a test.
       @lifetime = lifetime
       @minimum_interval = minimum_interval
+      # nil, RFC 1142's fixed hold of minimum_interval; or a map of
+      # initial, secondary and maximum, the backoff
+      # (docs/design/lsp-generation.md).
+      @lsp_generation = lsp_generation
+      @generation_timer = GenerationTimer.build(minimum: minimum_interval, backoff: lsp_generation)
       @buffer_size = buffer_size
       @level1_database = level1_database
       @overload = overload
@@ -177,6 +185,8 @@ module ISIS
       @numbers = []
       @generated_at = nil
       @pending = nil
+      # When the first change of the round that @pending waits for came.
+      @since = nil
       @refresh_timer = nil
       @started = false
       @union = nil
@@ -217,13 +227,13 @@ module ISIS
     def start
       @started = true
       @union = area_addresses
-      generate("initialisation (RFC 1142 7.3.16.1)")
+      generate("initialisation (RFC 1142 7.3.16.1)", event: false)
       self
     end
 
     def stop
       [@refresh_timer, @pending].each { |t| t&.cancel }
-      @refresh_timer = @pending = nil
+      @refresh_timer = @pending = @since = nil
       @started = false
       self
     end
@@ -390,31 +400,24 @@ module ISIS
     end
 
     # Clause 7.3.6: an event "which would cause the information content to
-    # change". The LSP is generated again if its content did change, but
-    # not sooner than minimumLSPGenerationInterval after the last one: "A
-    # source Intermediate system shall wait at least this long before
-    # re-generating one of its own Link State PDUs" (7.3.21).
+    # change". The LSPs whose content did change are generated again, when
+    # the generation timer allows: by default not sooner than
+    # minimumLSPGenerationInterval after the last one, "A source
+    # Intermediate system shall wait at least this long before
+    # re-generating one of its own Link State PDUs" (7.3.21), per LSP
+    # Number (7.3.4). Changes while one waits go with it.
     def changed(reason)
       return if @pending
 
-      wait = @generated_at ? @generated_at + @minimum_interval - @scheduler.now : 0
-      if wait.positive?
-        @log.debug("#{lsp_id_s}: #{reason}; generating in #{wait.round(1)} s, the minimum interval " \
-                   "(RFC 1142 7.3.21)")
-        @pending = @scheduler.after(wait) do
-          @pending = nil
-          generate(reason, unless_unchanged: true)
-        end
-      else
-        generate(reason, unless_unchanged: true)
-      end
+      @since ||= @scheduler.now
+      attempt(reason)
     end
 
     # Clause 7.3.5: regenerate "at intervals of at most
     # maximumLSPGenerationInterval seconds", content changed or not. The
     # jitter clause 10.1 asks for is not applied yet.
     def refresh
-      generate("refresh, #{@refresh_interval} s since the last (RFC 1142 7.3.5)")
+      generate("refresh, #{@refresh_interval} s since the last (RFC 1142 7.3.5)", event: false)
     end
 
     # A received LSP with this system's ID that it still generates, clause
@@ -432,11 +435,48 @@ module ISIS
       number = lsp.lsp_id.getbyte(-1)
       @sequences[number] = [lsp.sequence, @sequences[number]].max
       generate("received #{lsp_id_s(number)} with sequence #{seq(lsp.sequence)} " \
-               "(RFC 1142 #{result == :newer ? '7.3.16.1' : '7.3.16.2'})", only: number)
+               "(RFC 1142 #{result == :newer ? '7.3.16.1' : '7.3.16.2'})", only: number, event: false)
       :regenerated
     end
 
     private
+
+    # Generate the LSPs a change touched, or wait for the latest of their
+    # times, so LSPs an entry moved between still go out together (7.3.4).
+    # When the wait is over, look again: what changed meanwhile may wait
+    # longer.
+    def attempt(reason)
+      groups = lsp_tlvs
+      numbers = (0...groups.size).reject { |n| unchanged?(n, groups[n]) }
+      now = @scheduler.now
+      wait = numbers.map { |n| @generation_timer.wait(n, now: now, since: @since) }.max
+      if wait&.positive?
+        @log.debug("#{lsp_id_s}: #{reason}; generating in #{wait.round(3)} s (#{timer_text})")
+        @pending = @scheduler.after(wait) do
+          @pending = nil
+          attempt(reason)
+        end
+        return
+      end
+
+      @since = nil
+      generate(reason, unless_unchanged: true, event: true)
+    end
+
+    def timer_text
+      case @generation_timer
+      when GenerationTimer::Fixed then "the minimum interval, RFC 1142 7.3.21"
+      when GenerationTimer::Backoff then "the backoff"
+      else @generation_timer.class.name
+      end
+    end
+
+    # Whether LSP Number +n+, built from +tlvs+ now, says what the one held
+    # says.
+    def unchanged?(n, tlvs)
+      held = @database[lsp_id(n)]
+      held&.lsp && !held.purged? && same_content?(held.lsp, build(sequence: 0, number: n, tlvs: tlvs))
+    end
 
     # The TLVs that open LSP Number 0 and only it: TLV 1, which "shall occur
     # only in the LSP with LSP Number zero" (7.3.4), and TLVs 129, 137, 132
@@ -569,16 +609,14 @@ module ISIS
     # moved between go out together (7.3.4: "the SRMflags ... for the two
     # new LSPs shall be set as an atomic action"). Returns the LSP Number 0
     # generated, or the first, or nil.
-    def generate(reason, unless_unchanged: false, only: nil)
+    def generate(reason, unless_unchanged: false, only: nil, event: true)
       groups = lsp_tlvs
       wanted = (0...groups.size).to_a
       numbers = only ? [only] & wanted : wanted
       generated = numbers.filter_map do |n|
+        next if unless_unchanged && unchanged?(n, groups[n])
+
         held = @database[lsp_id(n)]
-        if unless_unchanged && held&.lsp && !held.purged? &&
-           same_content?(held.lsp, build(sequence: 0, number: n, tlvs: groups[n]))
-          next
-        end
 
         lsp = build(sequence: @sequences[n] + 1, number: n, tlvs: groups[n])
         size = lsp.encode.bytesize
@@ -590,6 +628,7 @@ module ISIS
         @log.info("#{lsp_id_s(n)} sequence #{seq(lsp.sequence)} generated: #{reason}", kind: :origination,
                                                                                        lsp_id: lsp_id_s(n),
                                                                                        sequence: lsp.sequence, **refresh)
+        @generation_timer.generated(n, now: @scheduler.now, event: event)
         @database.entry(lsp_id(n)).store(lsp)
       end
       stale = only ? [] : @numbers - wanted

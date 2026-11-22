@@ -150,6 +150,7 @@ module ISIS
                                    metric_style: originator.metric_style, area_key: originator.area_key,
                                    refresh_interval: originator.refresh_interval,
                                    minimum_interval: originator.minimum_interval,
+                                   lsp_generation: originator.lsp_generation,
                                    buffer_size: originator.buffer_size, is_type: originator.is_type)
       originator.attach(self)
     end
