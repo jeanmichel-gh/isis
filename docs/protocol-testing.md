@@ -86,3 +86,42 @@ second prefix, and its neighbors.
 reads it with `Spf::Labels`: each makes its own finding and no other.
 Every rule has an entry, and every entry a rule, so the catalog and
 `validation.rb` cannot drift apart.
+
+### TI-LFA's topologies
+
+The catalog's second group, `ISIS::Fault::TOPOLOGIES`: topologies that
+are well formed but hard for TI-LFA (RFC 9855). Each names the section
+it tests, the point of local repair (PLR), the failure, the
+destination, and the repair the RFC expects, written by hand from the
+RFC: its case, first hop, P and Q, and its segments; or why there is
+none.
+
+| Entry | Section | Failure | Expects |
+| --- | --- | --- | --- |
+| `ti_lfa_neighbor` | RFC 9855 5.1 | link F at S, to D | `neighbor` via N, P N, Q N: no segment |
+| `ti_lfa_pq_node` | RFC 9855 5.2 | link F at S, to D | `pq_node` via A, P B, Q B: Node-SID(B) |
+| `ti_lfa_p_and_q_adjacent` | RFC 9855 5.3 | link F at S, to D | `p_and_q_adjacent` via A, P B, Q D: Node-SID(B), Adj-SID(B-D) |
+| `ti_lfa_figure_1` | RFC 9855 5.4 | node N1 at S, to D | `p_and_q_apart` via N2, P R1, Q R3: Node-SID(R1), Adj-SID(R1-R2), Adj-SID(R2-R3) |
+| `ti_lfa_figure_2` | RFC 9855 9 | node R3 at R2, to D | `p_and_q_apart` via R7, P R7, Q R4: Adj-SID(R7-R8), Adj-SID(R8-R4) |
+| `ti_lfa_no_path` | RFC 9855 5 | link F at S, to D | unprotected, `no_path` |
+| `ti_lfa_ecmp` | RFC 9855 5 | link F at S, to D | ECMP through A |
+| `ti_lfa_overload` | RFC 9855 5 | link F at S, to D | unprotected, `no_path` |
+| `ti_lfa_one_way` | RFC 9855 5 | link F at S, to D | unprotected, `no_path` |
+| `ti_lfa_too_deep` | RFC 9855 5.4 | node F at S, to D | unprotected, `too_deep` |
+
+Every system of an entry gets a loopback 10.255.0.N/32 with Prefix-SID
+index N and an SRGB of its own, 16000 + 1000 N, so a label taken from
+the wrong block shows.
+
+```ruby
+ISIS::Fault.topology_names               # the entries
+ISIS::Fault.topology(:ti_lfa_figure_1)   # its links, PLR, failure, destination, expect
+ISIS::Fault.topology_file(:ti_lfa_figure_1)  # as an isis4r-sim file (docs/simulator.md)
+```
+
+`test/unit/fault_topology_test.rb` runs each entry as an isis4r-sim
+file, reads the graph back from the simulator's database, so the
+Router Capabilities, Prefix-SIDs and Adj-SIDs are the ones a router
+learns, and computes TI-LFA at the PLR. Each must give what it expects.
+Step 6b of TI-LFA (routescope `docs/design/ti-lfa.md`) runs the same
+entries on real routers, isisd's and FRR's, and compares their repairs.

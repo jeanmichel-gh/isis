@@ -24,6 +24,29 @@ class TestProtocolTestingDoc < Minitest::Test
     end
   end
 
+  # The TI-LFA topologies: each with its section and the repair it
+  # expects, written as the table writes it.
+  def self.repair_text(expect)
+    if expect[:unprotected] then "unprotected, `#{expect[:unprotected]}`"
+    elsif expect[:ecmp] then "ECMP through #{expect[:ecmp].join(', ')}"
+    else
+      segs = expect[:segments].map { |k, *n| k == :node ? "Node-SID(#{n[0]})" : "Adj-SID(#{n.join('-')})" }
+      "`#{expect[:case]}` via #{expect[:first_hop]}, P #{expect[:p]}, Q #{expect[:q]}: " \
+        "#{segs.empty? ? 'no segment' : segs.join(', ')}"
+    end
+  end
+
+  def self.topology_row(e)
+    "| `#{e[:name]}` | #{e[:rfc]} | #{e[:failure][0]} #{e[:failure][1]} at #{e[:plr]}, to #{e[:destination]} | " \
+      "#{repair_text(e[:expect])} |"
+  end
+
+  def test_every_topology_with_its_repair_and_no_other
+    ISIS::Fault.topologies.each { |e| assert_includes DOC, self.class.topology_row(e), e[:name] }
+    listed = DOC.scan(/^\| `(ti_lfa_\w+)` \|/).flatten.map(&:to_sym)
+    assert_equal ISIS::Fault.topology_names, listed
+  end
+
   def test_every_policy
     listed = DOC.scan(/^\| `(rfc|strict|lenient)` \|/).flatten.map(&:to_sym)
     assert_equal ISIS::Validation::POLICIES, listed
