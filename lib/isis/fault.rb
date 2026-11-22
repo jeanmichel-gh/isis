@@ -7,6 +7,10 @@ module ISIS
   # injector, sends an entry to a router and checks what it did against
   # what the RFC expects.
   #
+  # Two groups. Segment routing's (CATALOG): an LSP with one wrong thing in
+  # its SR data. TI-LFA's topologies (TOPOLOGIES): well formed, each with
+  # the repair RFC 9855 expects.
+  #
   # The first entries are segment routing's: an LSP with one wrong thing
   # in its SR data, everything else what a correct system sends. Each
   # makes one finding of ISIS::Validation, named in the entry, so the
@@ -40,6 +44,66 @@ module ISIS
        ->(c) { Fault.sr(c, algorithms: [1]) }],
       [:prefix_sid_duplicate, :prefix_sid_duplicate, "one index on the loopback and on a second prefix",
        ->(c) { Fault.sr(c, more: [[c[:second], { flags: [], algorithm: 0, index: c[:index] }]]) }]
+    ].freeze
+
+    # The second group: topologies, well formed but hard for TI-LFA (RFC
+    # 9855), each with the RFC section it tests. Each entry: [name,
+    # description, rfc, the topology, the point of local repair (PLR),
+    # the failure as [:link or :node, the PLR's neighbor], the
+    # destination, and what RFC 9855 expects]. A topology is links
+    # [a, b, metric], both ways unless one_way, and the systems
+    # overloaded. expect is the repair: its case (5.1 to 5.4), its first
+    # hop, P and Q, and its segments, [:node, X] for X's Node-SID and
+    # [:adj, X, Y] for X's Adj-SID to Y; or { unprotected: reason }; or
+    # { ecmp: [the other first hops] }. Written by hand from the RFC,
+    # never computed.
+    #
+    # Every system gets a loopback 10.255.0.N/32 with Prefix-SID index N,
+    # and an SRGB of its own, 16000 + 1000 N, so a label from the wrong
+    # block shows (Fault.topology_file).
+    # A0 to A30. P is A0, the first hop, so no Node-SID: 30 Adj-SIDs and
+    # D's label, 31 labels, past the kernel's 30.
+    TOO_DEEP_CHAIN = 30
+
+    TOPOLOGIES = [
+      [:ti_lfa_neighbor, "the neighbor on the post-convergence path is in P and Q: no segment", "RFC 9855 5.1",
+       { links: [%w[S F 1], %w[F D 1], %w[S N 2], %w[N D 1]] }, "S", [:link, "F"], "D",
+       { case: :neighbor, first_hop: "N", p: "N", q: "N", segments: [] }],
+      [:ti_lfa_pq_node, "B is in A's P-space and in Q(D): B's Node-SID", "RFC 9855 5.2",
+       { links: [%w[S F 1], %w[F D 1], %w[S A 1], %w[A B 1], %w[B D 3]] }, "S", [:link, "F"], "D",
+       { case: :pq_node, first_hop: "A", p: "B", q: "B", segments: [[:node, "B"]] }],
+      [:ti_lfa_p_and_q_adjacent, "P is B, Q is D, adjacent: B's Node-SID then B's Adj-SID to D", "RFC 9855 5.3",
+       { links: [%w[S F 1], %w[F D 1], %w[S A 1], %w[A B 1], %w[B D 5]] }, "S", [:link, "F"], "D",
+       { case: :p_and_q_adjacent, first_hop: "A", p: "B", q: "D", segments: [[:node, "B"], [:adj, "B", "D"]] }],
+      [:ti_lfa_figure_1, "RFC 9855 Figure 1, node N1 fails: P R1 and Q R3 apart", "RFC 9855 5.4",
+       { links: [%w[S N1 1], %w[N1 D 1], %w[S N2 1], %w[S N3 1000], %w[N1 R1 1], %w[N1 R2 1], %w[D R3 1],
+                 %w[N2 R1 1], %w[R1 R2 1000], %w[R2 R3 1000], %w[N3 R1 1000]] }, "S", [:node, "N1"], "D",
+       { case: :p_and_q_apart, first_hop: "N2", p: "R1", q: "R3",
+         segments: [[:node, "R1"], [:adj, "R1", "R2"], [:adj, "R2", "R3"]] }],
+      [:ti_lfa_figure_2, "RFC 9855 Figure 2, R2 protects against node R3: Adj-SIDs R7-R8 and R8-R4",
+       "RFC 9855 9",
+       { links: [%w[S R2 1], %w[R2 R3 1], %w[R3 R4 1], %w[R4 R5 1], %w[R5 D 1], %w[R2 R7 1000], %w[R3 R7 1],
+                 %w[R3 R8 1], %w[R7 R8 1000], %w[R8 R4 1000], %w[R7 R9 1000], %w[R8 R10 1], %w[R9 R10 1]] },
+       "R2", [:node, "R3"], "D",
+       { case: :p_and_q_apart, first_hop: "R7", p: "R7", q: "R4", segments: [[:adj, "R7", "R8"], [:adj, "R8", "R4"]] }],
+      [:ti_lfa_no_path, "the failure cuts the destination off", "RFC 9855 5",
+       { links: [%w[S F 1], %w[F D 1]] }, "S", [:link, "F"], "D", { unprotected: :no_path }],
+      [:ti_lfa_ecmp, "another primary first hop survives: no repair list", "RFC 9855 5",
+       { links: [%w[S F 1], %w[F D 1], %w[S A 1], %w[A D 1]] }, "S", [:link, "F"], "D", { ecmp: ["A"] }],
+      [:ti_lfa_overload, "the only other path crosses B, overloaded: no transit, so no repair",
+       "RFC 9855 5",
+       { links: [%w[S F 1], %w[F D 1], %w[S A 1], %w[A B 1], %w[B D 5]], overloaded: ["B"] }, "S", [:link, "F"], "D",
+       { unprotected: :no_path }],
+      [:ti_lfa_one_way, "the only other path has a link only A reports: it does not count, so no repair",
+       "RFC 9855 5",
+       { links: [%w[S F 1], %w[F D 1], %w[S A 1], %w[A B 1 one_way], %w[B D 3]] }, "S", [:link, "F"], "D",
+       { unprotected: :no_path }],
+      [:ti_lfa_too_deep, "P and Q #{TOO_DEEP_CHAIN} hops apart: #{TOO_DEEP_CHAIN + 1} labels, past the kernel's 30",
+       "RFC 9855 5.4",
+       { links: [%w[S F 1], %w[F D 1], %w[S A0 1], ["A#{TOO_DEEP_CHAIN}", "D", "1"]] +
+                (0..TOO_DEEP_CHAIN).map { |i| ["A#{i}", "F", "1"] } +
+                (0...TOO_DEEP_CHAIN).map { |i| ["A#{i}", "A#{i + 1}", "1000"] } },
+       "S", [:node, "F"], "D", { unprotected: :too_deep }]
     ].freeze
 
     module_function
@@ -100,6 +164,47 @@ module ISIS
     # The same, as octets.
     def wire(name, **opts)
       build(name, **opts).encode
+    end
+
+    def topology_names = TOPOLOGIES.map(&:first)
+
+    # The topology entries, as Hashes.
+    def topologies
+      TOPOLOGIES.map do |name, description, rfc, topology, plr, failure, destination, expect|
+        { name: name, description: description, rfc: rfc, links: topology[:links],
+          overloaded: topology.fetch(:overloaded, []), plr: plr, failure: failure, destination: destination,
+          expect: expect }
+      end
+    end
+
+    def topology(name)
+      topologies.find { |e| e[:name] == name } or
+        raise ArgumentError, "unknown topology #{name.inspect}; the topologies are #{topology_names.join(', ')}"
+    end
+
+    # The systems of a topology entry, in the order they are numbered:
+    # system N is 0000.0000.NNNN (N in hex), its loopback 10.255.0.N/32
+    # with Prefix-SID index N, its SRGB 16000 + 1000 N.
+    def topology_systems(name)
+      topology(name)[:links].flat_map { |a, b,| [a, b] }.uniq
+    end
+
+    # A topology entry as an isis4r-sim file (docs/simulator.md), every
+    # system simulated at Level 1. The simulator's own system stands
+    # apart, linked to none, so a test reads the LSPs from its database.
+    def topology_file(name, simulator: { "system_id" => "0000.0000.ff00", "hostname" => "sim", "areas" => ["49.0001"],
+                                          "level" => 1, "interfaces" => [] })
+      t = topology(name)
+      routers = topology_systems(name).each_with_index.map do |n, i|
+        r = { "name" => n, "system_id" => format("0000.0000.%04x", i + 1), "loopback" => "10.255.0.#{i + 1}",
+              "sid" => i + 1, "srgb" => [{ "start" => 16_000 + (1_000 * (i + 1)), "size" => 1_000 }] }
+        t[:overloaded].include?(n) ? r.merge("overload" => true) : r
+      end
+      links = t[:links].map do |a, b, metric, way|
+        l = { "from" => a, "to" => b, "metric" => Integer(metric) }
+        way == "one_way" ? l.merge("one_way" => true) : l
+      end
+      { "simulator" => simulator, "segment_routing" => {}, "routers" => routers, "links" => links }
     end
 
     # A system's SR TLVs, correct unless told: one SR-Capabilities per
