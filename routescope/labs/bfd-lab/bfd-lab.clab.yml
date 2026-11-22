@@ -60,7 +60,7 @@ topology:
       binds: [r3:/etc/isis4r]
       entrypoint: sh
       cmd: >-
-        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        -c "until ip link show eth1 >/dev/null 2>&1; do sleep 0.2; done;
         ip addr add 10.0.13.2/30 dev eth1; ip addr add 10.0.23.2/30 dev eth2;
         ip addr add 10.255.0.3/32 dev lo; ip route del default dev eth0 2>/dev/null;
         echo 1 > /proc/sys/net/ipv4/ip_forward;
