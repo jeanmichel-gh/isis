@@ -90,7 +90,6 @@ module ISIS
         @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
           labels = @router.decisions[l].labels
           backups = @router.decisions[l].backups
-          names = backups ? hostnames : {}
           @router.decisions[l].routes.values.map do |r|
             row = { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
                     up_down: r.up_down ? true : false,
@@ -101,7 +100,7 @@ module ISIS
                     end }
             row[:sid] = r.sid.index if r.sid&.index
             backup = backups&.routes&.[](r.prefix)
-            row.merge!(backup_fields(backup, r.family, names)) if backup
+            row.merge!(backup_fields(backup, r.family)) if backup
             row
           end
         end
@@ -123,7 +122,7 @@ module ISIS
                         interface: interface_of(a.circuit), label: out }
                     end }
             backup = @router.decisions[l].backups&.label(e.label)
-            row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4, names)) if backup
+            row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4)) if backup
             row
           end
         end
@@ -249,12 +248,41 @@ module ISIS
       def topology_node(node, lsps, names, reachable)
         id = node_s(node)
         zero = lsps.first
-        { id: id, hostname: names[id[0...-3]],
-          areas: zero.tlvs.grep(Tlv::AreaAddresses).flat_map(&:areas).map(&:to_s),
-          overload: zero.overload?, attached: !zero.attached.empty?, reachable: reachable,
-          neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps),
-          interface_addresses: topology_addresses(lsps, Tlv::IpInterfaceAddresses),
-          ipv6_interface_addresses: topology_addresses(lsps, Tlv::Ipv6InterfaceAddresses) }
+        h = { id: id, hostname: names[id[0...-3]],
+              areas: zero.tlvs.grep(Tlv::AreaAddresses).flat_map(&:areas).map(&:to_s),
+              overload: zero.overload?, attached: !zero.attached.empty?, reachable: reachable,
+              neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps),
+              interface_addresses: topology_addresses(lsps, Tlv::IpInterfaceAddresses),
+              ipv6_interface_addresses: topology_addresses(lsps, Tlv::Ipv6InterfaceAddresses) }
+        sr = topology_sr(lsps)
+        sr ? h.merge(sr: sr) : h
+      end
+
+      # The node's SR, from the sub-TLVs of its Router Capability TLV 242
+      # (RFC 8667 section 3): SR-Capabilities (2) as the SRGB with its
+      # flags, SR Local Block (22) and SR-Algorithm (19). Each from the
+      # first fragment that carries it, LSP Number 0 first. nil when the
+      # node advertises none, so a topology without SR reads as before.
+      # routescope docs/design/bgp-ls-sr.md: what a BGP-LS Producer puts in
+      # RFC 9085's TLVs 1034, 1036 and 1035.
+      def topology_sr(lsps)
+        subs = lsps.flat_map { _1.tlvs.to_a.grep(Tlv::RouterCapability) }.flat_map { _1.subtlvs.to_a }
+        cap = subs.grep(SubTlv::SrCapabilities).first
+        srlb = subs.grep(SubTlv::SrLocalBlock).first
+        algo = subs.grep(SubTlv::SrAlgorithm).first
+        return nil unless cap || srlb || algo
+
+        h = {}
+        h[:srgb] = blocks(cap) if cap
+        h[:flags] = Array(cap.to_hash[:flags]) if cap
+        h[:srlb] = blocks(srlb) if srlb
+        h[:algorithms] = algo.algorithms.to_a if algo
+        h
+      end
+
+      # A label block's ranges as [{ start:, size: }], in the order sent.
+      def blocks(subtlv)
+        subtlv.ranges.map { |lo, hi| { start: lo, size: hi - lo + 1 } }
       end
 
       # TLV 132's addresses, or TLV 232's, from every LSP of the node, LSP
@@ -287,6 +315,12 @@ module ISIS
           address = entry.subtlvs.grep(klass).filter_map(&:address).first
           h[key] = address.to_s if address
         end
+        # Adj-SID (31) and LAN-Adj-SID (32), RFC 8667 sections 2.2.1 and
+        # 2.2.2, each as its sub-TLV gives it; only when the entry has one.
+        lan = Array(entry.subtlvs).grep(SubTlv::LanAdjSid)
+        adj = Array(entry.subtlvs).grep(SubTlv::AdjSid) - lan
+        h[:adj_sids] = adj.map(&:to_hash) unless adj.empty?
+        h[:lan_adj_sids] = lan.map(&:to_hash) unless lan.empty?
         h
       end
 
@@ -307,7 +341,10 @@ module ISIS
           wide.flat_map(&:entries).filter_map do |e|
             next unless e.prefix
 
-            { prefix: e.prefix, metric: e.metric, up_down: e.up_down ? true : false, style: "wide" }
+            h = { prefix: e.prefix, metric: e.metric, up_down: e.up_down ? true : false, style: "wide" }
+            # Prefix-SID (3), RFC 8667 section 2.1: the first, when it has one.
+            sid = Array(e.subtlvs).grep(SubTlv::PrefixSid).first
+            sid ? h.merge(prefix_sid: sid.to_hash) : h
           end
         end
       end
@@ -331,28 +368,17 @@ module ISIS
       # A circuit's name is the interface's, with -l1 or -l2 on a LAN at
       # both levels.
       # A route's or label's backup as fields: backup, its next hop and
-      # labels, the repair's path from this system to the destination, P
-      # and Q, each by hostname (a pseudonode as its DIS's, with its octet);
-      # or unprotected and why. +names+ is #hostnames, read once.
-      def backup_fields(backup, family, names = hostnames)
+      # labels, or unprotected and why.
+      def backup_fields(backup, family)
         case backup
         when Spf::Backups::Backup
           a = backup.adjacency
-          rep = backup.repair
-          name = ->(node) { node_name(node, names) }
           b = { address: a.next_hop(family), interface: interface_of(a.circuit), labels: backup.labels,
-                case: rep.case.to_s, protects: backup.protects.to_s,
-                path: rep.path.map(&name), p: name.(rep.p), q: name.(rep.q) }
+                case: backup.repair.case.to_s, protects: backup.protects.to_s }
           { backup: backup.fallback ? b.merge(fallback: true) : b }
         when Spf::Backups::Ecmp then { backup: { ecmp: true } }
         else { unprotected: backup.reason.to_s }
         end
-      end
-
-      def node_name(node, names)
-        id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
-        base = names.fetch(id, id)
-        node.getbyte(-1).zero? ? base : format("%<base>s.%<octet>02x", base: base, octet: node.getbyte(-1))
       end
 
       def interface_of(name)

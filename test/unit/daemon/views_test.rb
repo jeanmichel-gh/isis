@@ -201,6 +201,36 @@ class TestDaemonViews < Minitest::Test
     topology[:nodes].find { _1[:id] == id }
   end
 
+# SR from the LSPs, as RFC 8667 advertises it (routescope
+# docs/design/bgp-ls-sr.md): the node's SRGB, flags, SRLB and algorithms
+# from TLV 242, here in fragment 1; each neighbor's Adj-SIDs and LAN
+# Adj-SIDs; each prefix's Prefix-SID. A node without SR has no sr key,
+# and an entry without a SID no SID key.
+def test_topology_gives_sr_when_the_lsps_carry_it
+  views, a = topology_fixture
+  cap = ISIS::SegmentRouting.new(router_id: "10.255.0.7", srgb: [[17000, 8000]], srlb: [15000, 1000]).capability
+  lan = { neighbor: "0000.0000.000b", flags: %w[V L], label: 15002 }
+  store_lsp(a, "0000.0000.0007.00-00",
+            [ISIS::Tlv::AreaAddresses.new("49.0001"),
+             ISIS::Tlv::ExtendedIsReachability.new([{ neighbor: "0000.0000.000a.00", metric: 10,
+                                                      subtlvs: [{ adj_sid: { flags: %w[V L], label: 15000 } }] },
+                                                    { neighbor: "0000.0000.000c.01", metric: 10,
+                                                      subtlvs: [{ lan_adj_sid: lan }] }]),
+             ISIS::Tlv::ExtendedIpReachability.new([{ prefix: "10.255.0.7/32", metric: 0,
+                                                      subtlvs: [{ prefix_sid: { flags: ["N"], algorithm: 0, index: 7 } }] },
+                                                    { prefix: "10.0.17.0/24", metric: 10 }])])
+  store_lsp(a, "0000.0000.0007.00-01", [cap])
+  t = views.topology(level: 1)
+  g = topology_node(t, "0000.0000.0007.00")
+  assert_equal({ srgb: [{ start: 17_000, size: 8000 }], flags: ["I"], srlb: [{ start: 15_000, size: 1000 }],
+                 algorithms: [0] }, g[:sr])
+  assert_equal [[{ flags: %w[V L], label: 15_000 }], nil], g[:neighbors].map { _1[:adj_sids] }
+  assert_equal [nil, [lan]], g[:neighbors].map { _1[:lan_adj_sids] }
+  assert_equal [{ flags: ["N"], algorithm: 0, index: 7 }, nil], g[:prefixes].map { _1[:prefix_sid] }
+  assert_nil topology_node(t, "0000.0000.000c.00")[:sr], "no TLV 242, no sr"
+  JSON.generate(t)
+end
+
   def test_topology_lists_each_node_once_and_leaves_out_a_purge
     views, = topology_fixture
     t = views.topology(level: 1)
