@@ -72,7 +72,7 @@ module ISIS
       when :equal
         # Clause 7.3.15.1 e 2: clear SRM, and on a non-broadcast circuit
         # set SSN.
-        entry.srm.delete(@name)
+        clear_srm(entry)
         set_ssn(entry) unless broadcast?
         @log.debug("LSP #{id} sequence #{seq(lsp.sequence)} equals the held one#{broadcast? ? '' : ', acknowledged'}",
                    circuit: @name)
@@ -133,7 +133,7 @@ module ISIS
                   circuit: @name, kind: :database, lsp_id: id, sequence: lsp.sequence, result: :purged)
       when :equal
         # b 2: clear SRM, and on a non-broadcast circuit set SSN.
-        held.srm.delete(@name)
+        clear_srm(held)
         set_ssn(held) unless broadcast?
         @log.debug("purge of #{id} sequence #{seq(lsp.sequence)} equals the held one", circuit: @name)
       when :older
@@ -316,7 +316,7 @@ module ISIS
       result = Database.compare(entry, sequence: lsp.sequence, lifetime: lsp.lifetime, checksum: lsp.checksum)
       case result
       when :equal
-        entry.srm.delete(@name)
+        clear_srm(entry)
         set_ssn(entry) unless broadcast?
         @log.debug("own LSP #{id} sequence #{seq(lsp.sequence)} equals ours", circuit: @name)
       when :older
@@ -362,7 +362,7 @@ module ISIS
       when :equal
         # b 1: on a non-broadcast circuit the neighbour has it, so it is
         # acknowledged.
-        held.srm.delete(@name) unless broadcast?
+        clear_srm(held) unless broadcast?
       when :older
         # b 2: the neighbour's is older, so send ours.
         held.ssn.delete(@name)
@@ -370,7 +370,7 @@ module ISIS
       when :newer
         # b 3: the neighbour's is newer, so ask for it.
         set_ssn(held)
-        held.srm.delete(@name) unless broadcast?
+        clear_srm(held) unless broadcast?
         @log.debug("#{held.lsp_id_s} reported newer (#{seq(reported.sequence)} against #{seq(held.sequence)}), " \
                    "requesting it (RFC 1142 7.3.15.2 b 3)", circuit: @name)
       when :confused
@@ -401,7 +401,7 @@ module ISIS
     def stored_from_c(entry)
       entry.ssn.clear
       @database.circuits.each { |c| c.flood(entry) unless c.equal?(self) }
-      entry.srm.delete(@name)
+      clear_srm(entry)
       set_ssn(entry) unless broadcast?
     end
 
@@ -416,6 +416,21 @@ module ISIS
 
     def schedule_srm(delay)
       @srm_timer ||= @scheduler.after(delay) { send_srm_lsps }
+    end
+
+    # Clear SRM for this circuit. On a point-to-point circuit, once nothing
+    # is flagged, the retransmission timer stops, so the next LSP flagged
+    # goes at once instead of waiting out minimumLSPTransmissionInterval
+    # from the last send (docs/design/lsp-flooding.md, option 1). A new LSP
+    # flagged while another awaits its acknowledgement still waits for the
+    # timer; option 2 there would send it at once.
+    def clear_srm(entry)
+      entry.srm.delete(@name)
+      return if broadcast? || @srm_timer.nil?
+      return if @database.entries.any? { |e| e.srm.include?(@name) }
+
+      @srm_timer.cancel
+      @srm_timer = nil
     end
 
     # Nothing is owed on this circuit any more: no LSPs to send, no flags.
