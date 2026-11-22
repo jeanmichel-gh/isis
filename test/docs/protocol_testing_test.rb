@@ -47,6 +47,16 @@ class TestProtocolTestingDoc < Minitest::Test
     assert_equal ISIS::Fault.topology_names, listed
   end
 
+  def self.packet_row(e)
+    "| `#{e[:name]}` | #{e[:rfc]} | #{e[:description]} | #{e[:expect] == :repair ? 'the repair' : 'record'} |"
+  end
+
+  def test_every_packet_with_its_expect_and_no_other
+    ISIS::Fault.packets.each { |e| assert_includes DOC, self.class.packet_row(e), e[:name] }
+    listed = DOC.scan(/^\| `(packet_\w+)` \|/).flatten.map(&:to_sym)
+    assert_equal ISIS::Fault.packet_names, listed
+  end
+
   def test_every_policy
     listed = DOC.scan(/^\| `(rfc|strict|lenient)` \|/).flatten.map(&:to_sym)
     assert_equal ISIS::Validation::POLICIES, listed

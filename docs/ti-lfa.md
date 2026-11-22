@@ -192,3 +192,34 @@ test: two real routers report a link both ways or neither.
 from `rake interop`, and so does CI's `interop (TI-LFA)` job. It took
 8.6 minutes here with both halves, and CI's FRR job from under 4
 minutes to 9 to 11 while it ran there (2026-11-22).
+
+## Packets at the PLR
+
+`test/interop/kernel_ti_lfa_test.rb` sends the fault catalog's packets
+(`docs/protocol-testing.md`, "Packets at the PLR") at a real PLR during a
+repair. The topology is `ti_lfa_pq_node`, isisd everywhere. S installs
+its routes, label routes and backups in the kernel, and a host H sits
+behind S. S's isisd is stopped (SIGSTOP) before the link to F loses
+carrier. So what follows is the kernel's alone, as in the first
+milliseconds of a failure, before isisd reconverges. A, the repair's
+first hop, and H capture what comes of each. Measured on Linux 7.0:
+
+| Packet | During the repair |
+| --- | --- |
+| `packet_ip` | reaches A with B's label in A's SRGB, then D's in B's: the repair and 7.1's last label, TTL 63 |
+| `packet_prefix_sid` | dropped: its label route still leaves on the failed link |
+| `packet_ip_ttl_1` | ICMP time exceeded back to H |
+| `packet_mpls_ttl_1` | dropped, with no ICMP |
+| `packet_unknown_label` | dropped |
+| `packet_adj_sid` | dropped: the Adj-SID's label route leaves on the failed link |
+
+`packet_prefix_sid` is a gap. RFC 9855 6.1 keeps the node segment and
+pushes the repair, but a label route has no backup in the kernel: it
+switches only when isisd replaces it, after it reconverges. The test
+names the gap, and fails when the packet takes the repair, so the day
+it closes is seen. `packet_adj_sid` is as decided: isisd does not
+protect Adj-SIDs, which RFC 9855 6.2 asks only "for which protection
+was enabled".
+
+It is a `kernel_` test, so `rake interop` runs it, and CI's `interop
+(FRR)` job, which loads the MPLS modules. It took 33 s here.

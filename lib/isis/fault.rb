@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "ipaddr"
+
 module ISIS
   # The catalog of crafted inputs, as bgp4r's BGP::Fault, vtep4r's
   # VXLAN::Fault and bfd4r's BFD::Fault (routescope
@@ -106,7 +108,79 @@ module ISIS
        "S", [:node, "F"], "D", { unprotected: :too_deep }]
     ].freeze
 
+    # The third group: packets that reach the PLR while it repairs, sent by
+    # a host behind it. Each entry: [name, description, rfc, what is sent,
+    # expect]. What is sent: :ip, an IPv4 UDP packet to the destination;
+    # [:labels, ...], an MPLS packet whose labels are :destination (its
+    # Prefix-SID in the PLR's SRGB), :adj (the PLR's Adj-SID to the failed
+    # neighbor) or :unknown (a label the PLR holds no route for), over the
+    # same UDP packet; ttl is the TTL of the top label, or of the IP header.
+    # expect is :repair, the repair list then the destination's label in
+    # Q's SRGB (RFC 9855 6.1 and 7.1); or :record, an edge the RFC leaves
+    # open, where what happens is recorded. Each packet's UDP source port
+    # is PACKET_PORT plus its place in the list, so a reply that quotes
+    # only the headers still names it.
+    PACKET_PORT = 40_000
+
+    PACKETS = [
+      [:packet_ip, "an IPv4 packet to the destination", "RFC 9855 5", { send: :ip, ttl: 64 }, :repair],
+      [:packet_prefix_sid, "the destination's Prefix-SID, as the PLR's SRGB gives it, over IPv4",
+       "RFC 9855 6.1, 7.1", { send: [:labels, :destination], ttl: 64 }, :repair],
+      [:packet_ip_ttl_1, "an IPv4 packet to the destination with a TTL of 1", "RFC 9855 5",
+       { send: :ip, ttl: 1 }, :record],
+      [:packet_mpls_ttl_1, "the destination's Prefix-SID with a TTL of 1", "RFC 9855 6.1",
+       { send: [:labels, :destination], ttl: 1 }, :record],
+      [:packet_unknown_label, "a label the PLR holds no route for", "RFC 9855 6",
+       { send: [:labels, :unknown], ttl: 64 }, :record],
+      [:packet_adj_sid, "the PLR's Adj-SID to the failed neighbor, over IPv4; isisd does not protect Adj-SIDs",
+       "RFC 9855 6.2", { send: [:labels, :adj], ttl: 64 }, :record]
+    ].freeze
+
     module_function
+
+    def packet_names = PACKETS.map(&:first)
+
+    # The packet entries, as Hashes, with their UDP source port.
+    def packets
+      PACKETS.each_with_index.map do |(name, description, rfc, what, expect), i|
+        { name: name, description: description, rfc: rfc, send: what[:send], ttl: what[:ttl], expect: expect,
+          port: PACKET_PORT + i }
+      end
+    end
+
+    def packet_entry(name)
+      packets.find { |e| e[:name] == name } or
+        raise ArgumentError, "unknown packet #{name.inspect}; the packets are #{packet_names.join(', ')}"
+    end
+
+    # The packet +name+ as an Ethernet payload: [ether_type, octets].
+    # +labels+ gives the labels by role: { destination:, adj:, unknown: }.
+    def packet(name, src:, dst:, labels: {})
+      e = packet_entry(name)
+      kind, *roles = Array(e[:send])
+      ip = ipv4_udp(src: src, dst: dst, ttl: kind == :ip ? e[:ttl] : 64, port: e[:port], payload: name.to_s)
+      return [0x0800, ip] if kind == :ip
+
+      stack = Mpls::LabelStack.new(entries: roles.each_with_index.map do |role, i|
+        { label: labels.fetch(role), exp: 0, bottom: i == roles.size - 1, ttl: i.zero? ? e[:ttl] : 64 }
+      end)
+      [0x8847, stack.encode + ip]
+    end
+
+    # The packet's UDP source port in a frame or in what an ICMP error
+    # quotes of it, or nil: the entry it names.
+    def packet_named_by(port) = packets.find { _1[:port] == port }&.fetch(:name)
+
+    # An IPv4 header with no options and its checksum, and a UDP datagram
+    # to port 9 with no checksum.
+    def ipv4_udp(src:, dst:, ttl:, port:, payload:)
+      udp = [port, 9, 8 + payload.bytesize, 0].pack("n4") + payload.b
+      header = [0x45, 0, 20 + udp.bytesize, 0, 0, ttl, 17, 0, *[src, dst].map { IPAddr.new(_1).hton }].pack("CCnnnCCna4a4")
+      sum = header.unpack("n*").sum
+      sum = (sum & 0xffff) + (sum >> 16) while sum > 0xffff
+      header[10, 2] = [~sum & 0xffff].pack("n")
+      header + udp
+    end
 
     def names
       CATALOG.map(&:first)
