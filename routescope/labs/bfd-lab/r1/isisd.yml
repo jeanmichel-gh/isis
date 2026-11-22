@@ -1,0 +1,13 @@
+# r1 in bfd-lab (routescope/labs/bfd-lab): hellos at isisd's defaults,
+# BFD on every link.
+system_id: 0000.0000.0001
+hostname: r1
+areas: [49.0001]
+level: 1
+metric_style: wide
+forwarding: true
+prefixes:
+  - { prefix: 10.255.0.1/32, metric: 0 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.12.1], metric: 10, bfd: true }
+  - { name: eth2, ip_addresses: [10.0.13.1], metric: 30, bfd: true }

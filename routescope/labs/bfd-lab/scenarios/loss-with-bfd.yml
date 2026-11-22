@@ -1,0 +1,39 @@
+name: Loss on r1 to r2, with BFD
+description: >-
+  100% loss on the r1 to r2 link, which stays up. BFD on both ends
+  sees it within its 900 ms detection time, isisd drops the adjacency,
+  and r1's traffic to r3 moves to the direct link.
+timeout: 180
+steps:
+  - expect: { isis_adjacencies: { node: r1, up: 2 } }
+    within: 60
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: up } }
+    within: 30
+  - expect: { bfd_session: { node: r2, peer: 10.0.12.1, state: up } }
+    within: 30
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2 } }
+    within: 30
+
+  # isisd sends its own LSP at most every 30 s (MINIMUM_LSP_GENERATION_INTERVAL,
+  # lib/isis/database/originator.rb), and holds a change until then. The
+  # last change, the link back up in an earlier run, may be held 30 s and
+  # then start 30 s more. Waiting 60 s first means the LSP that says the
+  # link is gone goes out at once, as it would on a quiet network.
+  - sleep: 60
+  - mark: 100% loss on r1 to r2
+  - netem: r1:eth1
+    loss: 100%
+  - expect: { ping: { node: r1, from: 10.255.0.1, to: 10.255.0.3, count: 3 } }
+    within: 60
+    measure: failover
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: down } }
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.13.2 } }
+
+  - mark: the loss cleared
+  - netem: r1:eth1
+    clear: true
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2 } }
+    within: 60
+    measure: restore
+  - expect: { bfd_session: { node: r1, peer: 10.0.12.2, state: up } }
+    within: 30

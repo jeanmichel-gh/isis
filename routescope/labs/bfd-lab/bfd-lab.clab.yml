@@ -1,0 +1,81 @@
+# BFD's main lab: three isis4r routers in a triangle, BFD on every link,
+# and bfd4r-sim on a stub link (routescope docs/design/bfd-lab.md).
+#
+#             r2 10.255.0.2 ---- s1 bfd4r-sim
+#            /  \          eth3   10.0.24.0/30
+#   eth1    / 10 \ 10    eth2
+#          /      \
+#   r1 -------------- r3
+#   10.255.0.1  30  10.255.0.3
+#   eth2         eth1
+#
+# Level 1, area 49.0001. r1 to r3 goes via r2 at metric 20; the direct
+# link, at 30, is the backup. Links: r1 eth1 - r2 eth1 10.0.12.0/30,
+# r2 eth2 - r3 eth2 10.0.23.0/30, r1 eth2 - r3 eth1 10.0.13.0/30,
+# r2 eth3 - s1 eth1 10.0.24.0/30.
+#
+# IS-IS hellos at isisd's defaults, 3 s x 10, a 30 s hold; BFD at
+# bfdd4r's 300 ms x 3. Each router runs isisd under with-bfdd4r. r2 also
+# asks its bfdd4r for a session to s1, as client "lab", since s1 is not
+# an IS-IS neighbor. s1 runs bfd4r-sim, and opens its peer session to
+# r2 when it starts.
+#
+# Image: isis4r:latest, built in an isis checkout beside datalink-socket
+# and bfd4r:
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
+name: bfd-lab
+
+topology:
+  defaults:
+    kind: linux
+    image: isis4r:latest
+  nodes:
+    # isisd opens its interfaces when it starts, so each waits for
+    # containerlab to wire the last one, and has its addresses first.
+    r1:
+      labels: { graph-level: 1, routescope.protocols: isis }
+      binds: [r1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.1/30 dev eth1; ip addr add 10.0.13.1/30 dev eth2;
+        ip addr add 10.255.0.1/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward;
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
+    r2:
+      labels: { graph-level: 2, routescope.protocols: isis }
+      binds: [r2:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth3 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.12.2/30 dev eth1; ip addr add 10.0.23.1/30 dev eth2;
+        ip addr add 10.0.24.1/30 dev eth3;
+        ip addr add 10.255.0.2/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward;
+        (until bfd4r-cli session.add interface=eth3 peer=10.0.24.2 local=10.0.24.1 client=lab >/dev/null 2>&1;
+        do sleep 1; done) &
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
+    r3:
+      labels: { graph-level: 3, routescope.protocols: isis }
+      binds: [r3:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth2 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.13.2/30 dev eth1; ip addr add 10.0.23.2/30 dev eth2;
+        ip addr add 10.255.0.3/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward;
+        exec with-bfdd4r isisd -c /etc/isis4r/isisd.yml -l -"
+    s1:
+      labels: { graph-level: 3, routescope.kind: bfd4r-sim }
+      binds: [s1:/etc/bfd4r]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth1 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.24.2/30 dev eth1; ip route del default dev eth0 2>/dev/null;
+        ruby /etc/bfd4r/peer.rb &
+        exec bfd4r-sim -f /etc/bfd4r/sim.yml"
+  links:
+    - endpoints: ["r1:eth1", "r2:eth1"]
+    - endpoints: ["r2:eth2", "r3:eth2"]
+    - endpoints: ["r1:eth2", "r3:eth1"]
+    - endpoints: ["r2:eth3", "s1:eth1"]
