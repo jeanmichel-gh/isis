@@ -1,7 +1,7 @@
 # When isisd sends an LSP on a point-to-point circuit
 
-Status: approved by the owner 2026-11-22: option 1, for the beta.
-Option 2 may be preferred over time. "Decisions" at the end records
+Status: approved by the owner 2026-11-22: option 1, for the beta, built
+in #127. Option 2 may be preferred over time. "Decisions" at the end records
 the answers.
 
 ## The problem
@@ -232,6 +232,13 @@ process.
    timer; an unacknowledged LSP is still sent again at 5 s; a LAN
    circuit is unchanged.
 2. The measurement above, run again against FRR.
+
+## As built
+
+Option 1 is #127: `UpdateProcess#clear_srm` stops the timer once nothing
+on a point-to-point circuit is flagged. Measured against FRR 10.5.1 with
+the script above, 2026-11-22, one run at a load average of 58 on 6 CPUs:
+the second LSP went 27 ms after it was made, where it waited 3.5 s.
 
 ## Work for option 2, if chosen later
 
