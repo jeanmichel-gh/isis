@@ -90,6 +90,7 @@ module ISIS
         @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
           labels = @router.decisions[l].labels
           backups = @router.decisions[l].backups
+          names = backups ? hostnames : {}
           @router.decisions[l].routes.values.map do |r|
             row = { level: l, prefix: r.prefix.to_s, metric: r.metric, external: r.external ? true : false,
                     up_down: r.up_down ? true : false,
@@ -100,7 +101,7 @@ module ISIS
                     end }
             row[:sid] = r.sid.index if r.sid&.index
             backup = backups&.routes&.[](r.prefix)
-            row.merge!(backup_fields(backup, r.family)) if backup
+            row.merge!(backup_fields(backup, r.family, names)) if backup
             row
           end
         end
@@ -122,7 +123,7 @@ module ISIS
                         interface: interface_of(a.circuit), label: out }
                     end }
             backup = @router.decisions[l].backups&.label(e.label)
-            row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4)) if backup
+            row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4, names)) if backup
             row
           end
         end
@@ -330,17 +331,28 @@ module ISIS
       # A circuit's name is the interface's, with -l1 or -l2 on a LAN at
       # both levels.
       # A route's or label's backup as fields: backup, its next hop and
-      # labels, or unprotected and why.
-      def backup_fields(backup, family)
+      # labels, the repair's path from this system to the destination, P
+      # and Q, each by hostname (a pseudonode as its DIS's, with its octet);
+      # or unprotected and why. +names+ is #hostnames, read once.
+      def backup_fields(backup, family, names = hostnames)
         case backup
         when Spf::Backups::Backup
           a = backup.adjacency
+          rep = backup.repair
+          name = ->(node) { node_name(node, names) }
           b = { address: a.next_hop(family), interface: interface_of(a.circuit), labels: backup.labels,
-                case: backup.repair.case.to_s, protects: backup.protects.to_s }
+                case: rep.case.to_s, protects: backup.protects.to_s,
+                path: rep.path.map(&name), p: name.(rep.p), q: name.(rep.q) }
           { backup: backup.fallback ? b.merge(fallback: true) : b }
         when Spf::Backups::Ecmp then { backup: { ecmp: true } }
         else { unprotected: backup.reason.to_s }
         end
+      end
+
+      def node_name(node, names)
+        id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
+        base = names.fetch(id, id)
+        node.getbyte(-1).zero? ? base : format("%<base>s.%<octet>02x", base: base, octet: node.getbyte(-1))
       end
 
       def interface_of(name)
