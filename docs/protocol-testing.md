@@ -126,3 +126,33 @@ learns, and computes TI-LFA at the PLR. Each must give what it expects.
 `test/interop/frr_ti_lfa_test.rb` runs the same entries on real routers,
 isisd's and FRR's, and compares their repairs (`docs/ti-lfa.md`, "On
 real routers, against FRR").
+
+### Packets at the PLR
+
+The catalog's third group, `ISIS::Fault::PACKETS`: packets that reach
+the point of local repair while it repairs, sent by a host behind it.
+`expect` is the repair, the repair list then the destination's label in
+Q's SRGB (RFC 9855 6.1 and 7.1), or `record` for an edge the RFC leaves
+open, where what happens is recorded.
+
+| Entry | Section | Sends | Expects |
+| --- | --- | --- | --- |
+| `packet_ip` | RFC 9855 5 | an IPv4 packet to the destination | the repair |
+| `packet_prefix_sid` | RFC 9855 6.1, 7.1 | the destination's Prefix-SID, as the PLR's SRGB gives it, over IPv4 | the repair |
+| `packet_ip_ttl_1` | RFC 9855 5 | an IPv4 packet to the destination with a TTL of 1 | record |
+| `packet_mpls_ttl_1` | RFC 9855 6.1 | the destination's Prefix-SID with a TTL of 1 | record |
+| `packet_unknown_label` | RFC 9855 6 | a label the PLR holds no route for | record |
+| `packet_adj_sid` | RFC 9855 6.2 | the PLR's Adj-SID to the failed neighbor, over IPv4; isisd does not protect Adj-SIDs | record |
+
+```ruby
+ISIS::Fault.packet_names                 # the entries
+ISIS::Fault.packet(:packet_prefix_sid, src: "10.9.0.2", dst: "10.255.0.3",
+                   labels: { destination: 17_003 })   # [0x8847, octets]
+ISIS::Fault.packet_named_by(40_001)      # the entry a UDP source port names
+```
+
+Each packet's UDP source port names its entry, so an ICMP error that
+quotes only its headers still does. `test/unit/fault_packet_test.rb`
+checks each is built as its entry says. `test/interop/kernel_ti_lfa_test.rb`
+sends them at a real PLR during a repair (`docs/ti-lfa.md`, "Packets at
+the PLR").

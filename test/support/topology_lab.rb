@@ -35,15 +35,21 @@ class TopologyLab
 
   attr_reader :entry, :systems, :dir
 
-  def initialize(prefix, name, plr: :isisd)
+  # +sender+ puts a host H behind the PLR, its eth "toS" at 10.9.0.2 on
+  # the PLR's "toH" at 10.9.0.1, with a default route through the PLR.
+  # +forwarding+ has the PLR's isisd install its routes, label routes and
+  # backups in the kernel, the PLR forward IPv4 and take labels from H.
+  def initialize(prefix, name, plr: :isisd, sender: false, forwarding: false)
     @prefix = prefix
     @entry = ISIS::Fault.topology(name)
     @systems = ISIS::Fault.topology_systems(name)
     @plr_kind = plr
+    @sender = sender
+    @forwarding = forwarding
     @dir = Dir.mktmpdir("isis4r-#{prefix}")
     @run = "/var/run/frr/#{prefix}"
     @etc = "/etc/frr/#{prefix}"
-    @pids = []
+    @pids = {}
   end
 
   def plr = @entry[:plr]
@@ -77,8 +83,107 @@ class TopologyLab
       sh "ip -n #{ns(b)} link set to#{a} up"
     end
     @systems.each { |s| sh "ip -n #{ns(s)} addr add 10.255.0.#{number(s)}/32 dev lo" }
+    link_sender if @sender
+    prepare_forwarding if @forwarding
     @systems.each { |s| s == plr && @plr_kind == :frr ? start_frr(s) : start_isisd(s) }
     self
+  end
+
+  def sender_ns = "#{@prefix}-H"
+
+  # Stops and resumes a system's isisd (SIGSTOP, SIGCONT): with the
+  # PLR's stopped, the kernel alone forwards what reaches it.
+  def freeze(name) = Process.kill("STOP", @pids.fetch(name))
+  def thaw(name) = Process.kill("CONT", @pids.fetch(name))
+
+  # Takes +to+'s end of the link from +from+ down, so +from+'s end loses
+  # carrier.
+  def far_end_down(from, to) = sh("ip -n #{ns(to)} link set to#{from} down")
+
+  # "ip route get" in +name+'s namespace, its first line.
+  def route_get(name, address) = `ip -n #{ns(name)} route get #{address}`.lines.first.to_s
+
+  def mac(netns, interface) = JSON.parse(`ip -n #{netns} -j link show #{interface}`).first["address"]
+
+  # Runs Ruby in +netns+ with isis4r's and datalink's library.
+  def ruby_in(netns, code, out: nil)
+    args = ["ip", "netns", "exec", netns, RbConfig.ruby, *$LOAD_PATH.flat_map { ["-I", _1] }, "-e", code]
+    out ? Process.spawn(*args, %i[out err] => out) : system(*args, exception: true)
+  end
+
+  # What +netns+ receives on +interface+ while the block runs, not what
+  # it sends: each frame as [ether_type, payload octets]. The capture
+  # starts first and stops a second after the block.
+  def capture(netns, interface)
+    file = File.join(@dir, "capture-#{netns}-#{interface}.jsonl")
+    code = <<~RUBY
+      require "datalink"; require "json"
+      $stdout.sync = true
+      Datalink::Socket.open(#{interface.inspect}, recv_timeout: 0.2) do |s|
+        loop do
+          r = s.recv
+          next if r.packet_type == :outgoing
+
+          f = r.frame
+          puts JSON.generate([f.ether_type, f.payload.unpack1("H*")])
+        rescue Datalink::TimeoutError
+          next
+        end
+      end
+    RUBY
+    pid = ruby_in(netns, code, out: file)
+    sleep 1.5
+    yield
+    sleep 1
+    Process.kill("TERM", pid)
+    Process.wait(pid)
+    File.readlines(file).filter_map do |l|
+      type, hex = JSON.parse(l)
+      [type, [hex].pack("H*")]
+    rescue JSON::ParserError
+      nil
+    end
+  end
+
+  # A captured frame, read as the catalog's packets are built: the entry
+  # its UDP source port names, the labels on it top first, its IP TTL;
+  # or an ICMP error, its type and code and the entry it quotes. nil for
+  # anything else (IS-IS, ARP).
+  def self.read_frame(type, payload)
+    labels = []
+    if type == 0x8847
+      stack = ISIS::Mpls::LabelStack.new(ISIS::Octets.new(payload.dup))
+      labels = stack.labels
+      payload = payload.byteslice((4 * labels.size)..)
+    elsif type != 0x0800
+      return nil
+    end
+    ihl = (payload.getbyte(0) & 0xf) * 4
+    body = payload.byteslice(ihl..)
+    case payload.getbyte(9)
+    when 17
+      { packet: ISIS::Fault.packet_named_by(body.unpack1("n")), labels: labels, ttl: payload.getbyte(8) }
+    when 1
+      quoted = body.byteslice(8..)
+      port = quoted.byteslice((quoted.getbyte(0) & 0xf) * 4, 2).unpack1("n")
+      { icmp: body.unpack("CC"), quotes: ISIS::Fault.packet_named_by(port) }
+    end
+  end
+
+  # Sends +frames+, each [ether_type, payload], from H to the PLR.
+  def send_from_sender(frames)
+    dst = mac(ns(plr), "toH")
+    src = mac(sender_ns, "toS")
+    list = frames.map { |t, octets| [t, octets.unpack1("H*")] }
+    ruby_in(sender_ns, <<~RUBY)
+      require "datalink"
+      Datalink::Socket.open("toS") do |s|
+        #{list.inspect}.each do |type, hex|
+          s.send(Datalink::Frame.new(dst: #{dst.inspect}, src: #{src.inspect}, ether_type: type, payload: [hex].pack("H*")))
+          sleep 0.05
+        end
+      end
+    RUBY
   end
 
   def stop
@@ -287,11 +392,32 @@ class TopologyLab
     Array(JSON.parse(vtysh(cmd))).flat_map { |area| Array(area.dig("level-1", "ipv4")) }
   end
 
+  def link_sender
+    sh "ip netns add #{sender_ns}"
+    sh "ip link add toH netns #{ns(plr)} type veth peer name toS netns #{sender_ns}"
+    sh "ip -n #{ns(plr)} addr add 10.9.0.1/24 dev toH"
+    sh "ip -n #{sender_ns} addr add 10.9.0.2/24 dev toS"
+    sh "ip -n #{ns(plr)} link set toH up"
+    sh "ip -n #{sender_ns} link set lo up"
+    sh "ip -n #{sender_ns} link set toS up"
+    sh "ip -n #{sender_ns} route add default via 10.9.0.1"
+  end
+
+  # The PLR's kernel: a label table that holds every SRGB of the entry
+  # (isisd checks it, Router::Host#mpls), IPv4 forwarding, and labels
+  # taken from H, whose link isisd does not run on.
+  def prepare_forwarding
+    n = ns(plr)
+    sh "ip netns exec #{n} sysctl -qw net.mpls.platform_labels=100000"
+    sh "ip netns exec #{n} sysctl -qw net.ipv4.ip_forward=1"
+    sh "ip netns exec #{n} sysctl -qw net.mpls.conf.toH.input=1" if @sender
+  end
+
   def start_isisd(name)
     failure_kind, neighbor = @entry[:failure]
     config = {
       "system_id" => system_id(name), "hostname" => name, "areas" => ["49.0001"], "level" => 1,
-      "metric_style" => "wide", "minimum_lsp_interval" => 1, "forwarding" => false,
+      "metric_style" => "wide", "minimum_lsp_interval" => 1, "forwarding" => @forwarding && name == plr,
       "overload" => @entry[:overloaded].include?(name),
       "segment_routing" => { "srgb" => [{ "start" => srgb(name), "size" => 1_000 }] },
       "prefixes" => [{ "prefix" => "10.255.0.#{number(name)}/32", "metric" => 0, "sid" => number(name) }],
@@ -303,8 +429,8 @@ class TopologyLab
     }
     file = File.join(@dir, "#{name}.yml")
     File.write(file, config.to_yaml)
-    @pids << Process.spawn("ip", "netns", "exec", ns(name), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
-                           "-s", socket(name), "-l", "-", %i[out err] => File.join(@dir, "#{name}.log"))
+    @pids[name] = Process.spawn("ip", "netns", "exec", ns(name), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
+                                "-s", socket(name), "-l", "-", %i[out err] => File.join(@dir, "#{name}.log"))
   end
 
   # FRR 10.5.1 as the PLR: isisd and zebra, TI-LFA on the failure's
@@ -349,7 +475,8 @@ class TopologyLab
   end
 
   def cleanup
-    @pids.each do |pid|
+    @pids.each_value do |pid|
+      Process.kill("CONT", pid)
       Process.kill("TERM", pid)
       Process.wait(pid)
     rescue Errno::ESRCH, Errno::ECHILD
@@ -367,7 +494,7 @@ class TopologyLab
       end
     end
     sleep 0.3
-    @systems.each { |s| system("ip netns del #{ns(s)} 2>/dev/null") }
+    (@systems.map { ns(_1) } + [sender_ns]).each { |n| system("ip netns del #{n} 2>/dev/null") }
     FileUtils.rm_rf([@run, @etc])
   end
 
