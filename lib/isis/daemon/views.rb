@@ -21,8 +21,16 @@ module ISIS
           lsps: r.levels.to_h { |l| [l, r.databases[l].entries.count { !_1.placeholder? }] },
           routes: r.levels.to_h { |l| [l, r.decisions[l].routes.size] },
           spf_runs: r.levels.to_h { |l| [l, r.decisions[l].runs] },
-          overload: r.originators.values.first&.overload || false
+          overload: r.originators.values.first&.overload || false,
+          lsp_generation: lsp_generation(r.originators.values.first)
         }
+      end
+
+      # How a change to this system's own LSP is timed: fixed, RFC 1142's
+      # hold, or the backoff (docs/design/lsp-generation.md).
+      def lsp_generation(originator)
+        t = originator&.generation_timer
+        t.respond_to?(:to_h) ? t.to_h : nil
       end
 
       def interfaces

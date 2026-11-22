@@ -163,6 +163,31 @@ class TestRouter < Minitest::Test
     end
   end
 
+  # lsp_generation turns on the backoff, the defaults filled in, for the
+  # system's LSPs and a LAN's pseudonode alike; without it, RFC 1142's
+  # fixed hold (docs/design/lsp-generation.md).
+  def test_lsp_generation
+    r = router({ system_id: "0000.0000.000c", lsp_generation: { "secondary" => 2 },
+                 interfaces: [{ name: "x", network: "broadcast" }] }, { "x" => "00:00:00:00:00:0c" })
+    t = r.originators.fetch(1).generation_timer
+    assert_instance_of ISIS::GenerationTimer::Backoff, t
+    assert_equal [0, 2, 30], [t.initial, t.secondary, t.maximum]
+    assert_instance_of ISIS::GenerationTimer::Backoff, r.interface("x").circuits.fetch(1).pseudonode.generation_timer
+    t = router({ system_id: "0000.0000.000d" }, {}).originators.fetch(1).generation_timer
+    assert_instance_of ISIS::GenerationTimer::Fixed, t
+    assert_equal 30, t.minimum
+  end
+
+  def test_lsp_generation_refusals
+    e = assert_raises(ArgumentError) { router({ system_id: "0000.0000.000c", lsp_generation: { inital: 0 } }, {}) }
+    assert_equal "lsp_generation: unknown key inital", e.message
+    e = assert_raises(ArgumentError) do
+      router({ system_id: "0000.0000.000c", lsp_generation: {}, minimum_lsp_interval: 1 }, {})
+    end
+    assert_match(/give one/, e.message)
+    assert_raises(ArgumentError) { router({ system_id: "0000.0000.000c", lsp_generation: 5 }, {}) }
+  end
+
   # A misspelt interface key is refused, naming the key and the interface,
   # where it used to be kept and do nothing. String keys, as YAML reads.
   def test_an_unknown_interface_key_is_refused

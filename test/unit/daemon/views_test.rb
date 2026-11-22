@@ -63,6 +63,16 @@ class TestDaemonViews < Minitest::Test
     assert_operator o[:spf_runs][1], :>, 0
   end
 
+  # How a change to its own LSP is timed: the fixed hold here, the backoff
+  # with lsp_generation.
+  def test_overview_lsp_generation
+    views, = p2p_pair
+    assert_equal({ mode: "fixed", minimum: 1 }, views.overview[:lsp_generation])
+    r = router({ system_id: "0000.0000.000c", lsp_generation: { maximum: 10 } }, {})
+    assert_equal({ mode: "backoff", initial: 0, secondary: 1, maximum: 10 },
+                 ISIS::Daemon::Views.new(r).overview[:lsp_generation])
+  end
+
   def test_database_marks_its_own_and_names_each
     views, = p2p_pair
     rows = views.database.sort_by { _1[:lsp_id] }
