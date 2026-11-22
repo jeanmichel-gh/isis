@@ -1,9 +1,9 @@
 # When isisd generates its own LSPs
 
 Status: approved by the owner 2026-11-22: option 3, with the defaults
-proposed here. "Decisions" at the end records the answers. Steps 1 and
-2 are built (#113), step 3 with bfd-lab; "As built" says what changed
-from this text.
+proposed here. "Decisions" at the end records the answers. Built: steps 1
+and 2 in #113, step 3 in #116, step 4 with its interop test. "As built"
+says what changed from this text.
 
 ## The problem
 
@@ -328,7 +328,15 @@ period goes out at once, and after a recent change it waits
   by default; FRR 10.7.1 in this document's lab sent two LSPs 2.7 s
   apart without it. The scenario's BFD check now waits for the session
   to go, since isisd lets go of it once the adjacency is down.
-- Step 4 is not started.
+- Step 4: `test/interop/frr_lsp_generation_test.rb`. isisd with the
+  backoff and FRR at its defaults on one link. Three changes to
+  isisd's LSP in a row, each as soon as FRR holds the one before: FRR
+  held each at isisd's sequence and checksum within 3.7 to 7.5 s (the
+  bound is 10 s; fixed at 30 s the second and third would wait about
+  30 s). Two metric changes in a row on FRR: the second reached isisd
+  29.2 to 29.8 s later, FRR's lsp-gen-interval. FRR 10.5.1 on ospflab,
+  2026-11-22, five runs at a load average of 33 to 77 on 6 CPUs. FRR's
+  first change took 1.7 to 12.0 s; why it varies is not known.
 
 ## Decisions
 
