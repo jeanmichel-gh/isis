@@ -52,6 +52,8 @@ module ISIS
   #       ti_lfa: link              TI-LFA backups for the destinations behind
   #                                 this interface's neighbour, against the
   #                                 link failing (RFC 9855, docs/ti-lfa.md);
+  #                                 node: against the neighbour failing, and
+  #                                 the link's where no node backup exists;
   #                                 point-to-point and segment routing only
   #
   # An interface key not listed here is refused, naming the key and the
@@ -71,8 +73,8 @@ module ISIS
     INTERFACE_KEYS = %i[name network ip_addresses metric priority hello_interval hello_multiplier
                         adj_sid bfd bfd_tlv ti_lfa].freeze
 
-    # What ti_lfa takes. Node protection is not built yet.
-    TI_LFA = %w[link].freeze
+    # What ti_lfa takes.
+    TI_LFA = %w[link node].freeze
 
     # One configured interface: its transport and its circuits, one per
     # level on a broadcast interface, the same one for every level on a
@@ -131,8 +133,7 @@ module ISIS
       return if mode.nil? || mode == false
 
       unless TI_LFA.include?(mode.to_s)
-        raise ArgumentError, "interface #{name}: ti_lfa is #{TI_LFA.join(' or ')}, not #{mode}" \
-                             "#{'; node protection is not built yet' if mode.to_s == 'node'}"
+        raise ArgumentError, "interface #{name}: ti_lfa is #{TI_LFA.join(' or ')}, not #{mode}"
       end
       raise ArgumentError, "interface #{name}: ti_lfa needs segment_routing" unless config[:segment_routing]
       raise ArgumentError, "interface #{name}: ti_lfa protects point-to-point interfaces" if network == "broadcast"
@@ -140,7 +141,12 @@ module ISIS
 
     # The interfaces with ti_lfa, by name.
     def ti_lfa_interfaces
-      @config[:interfaces].select { _1[:ti_lfa] }.map { _1[:name] }
+      ti_lfa_modes.keys
+    end
+
+    # Each interface with ti_lfa, and its mode, :link or :node.
+    def ti_lfa_modes
+      @config[:interfaces].select { _1[:ti_lfa] }.to_h { [_1[:name], _1[:ti_lfa].to_sym] }
     end
 
     def self.symbolize(value)
@@ -384,7 +390,7 @@ module ISIS
                             leak: level == 2 ? @leak : nil, summary: level == 1 ? @summary : nil,
                             segment_routing: @segment_routing)
       d.label_table = @label_table
-      d.ti_lfa = ti_lfa_interfaces
+      d.ti_lfa = ti_lfa_modes
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))

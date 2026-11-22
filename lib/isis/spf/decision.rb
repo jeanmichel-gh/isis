@@ -48,8 +48,9 @@ module ISIS
       attr_accessor :segment_routing
       # A Forwarding::LabelTable the label table is installed through, or nil.
       attr_accessor :label_table
-      # The interfaces with ti_lfa, by name: with any, and segment routing,
-      # each run also computes TI-LFA's backups (Spf::Backups).
+      # The interfaces with ti_lfa, name => :link or :node: with any, and
+      # segment routing, each run also computes TI-LFA's backups
+      # (Spf::Backups).
       attr_accessor :ti_lfa
       # The last run's Spf::Backups, or nil.
       attr_reader :backups
@@ -70,7 +71,7 @@ module ISIS
         @summary = summary
         @segment_routing = segment_routing
         @labels = nil
-        @ti_lfa = []
+        @ti_lfa = {}
         @backups = nil
         @circuits = []
         @routes = {}
@@ -199,7 +200,8 @@ module ISIS
 
         @backups.summaries.map do |s|
           left = s.unprotected.map { |k, v| "#{v} #{k}" }
-          "#{s.interface} #{s.protected} protected, #{s.ecmp} by ECMP" \
+          "#{s.interface} (#{s.mode}) #{s.protected} protected, #{s.ecmp} by ECMP" \
+            "#{s.fallback.positive? ? ", #{s.fallback} by the link" : ''}" \
             "#{left.empty? ? '' : ", unprotected #{left.join(', ')}"}"
         end.join("; ")
       end

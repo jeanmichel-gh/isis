@@ -135,7 +135,8 @@ module ISIS
                   protecting: (b&.summaries || []).map do |s|
                     id = SystemId.from_bytes(s.neighbor).to_s
                     { interface: interface_of(s.interface), neighbor: hosts.fetch(id, id), mode: s.mode.to_s,
-                      protected: s.protected, ecmp: s.ecmp, unprotected: s.unprotected.transform_keys(&:to_s) }
+                      protected: s.protected, ecmp: s.ecmp, fallback: s.fallback,
+                      unprotected: s.unprotected.transform_keys(&:to_s) }
                   end }]
           end }
       end
@@ -326,8 +327,9 @@ module ISIS
         case backup
         when Spf::Backups::Backup
           a = backup.adjacency
-          { backup: { address: a.next_hop(family), interface: interface_of(a.circuit), labels: backup.labels,
-                      case: backup.repair.case.to_s } }
+          b = { address: a.next_hop(family), interface: interface_of(a.circuit), labels: backup.labels,
+                case: backup.repair.case.to_s, protects: backup.protects.to_s }
+          { backup: backup.fallback ? b.merge(fallback: true) : b }
         when Spf::Backups::Ecmp then { backup: { ecmp: true } }
         else { unprotected: backup.reason.to_s }
         end
