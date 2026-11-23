@@ -256,15 +256,19 @@ module ISIS
       # or all of them, so its neighbours' adjacencies time out. A circuit
       # already sending is not started again, which would run a second
       # hello timer beside the first.
-      # A fault of the catalog (ISIS::Fault) in simulated system +name+'s
-      # LSPs: the entry's Router Capability in place of the system's own,
-      # and its reachability, a +prefix+ of its own with +index+, after the
-      # system's. The system needs segment routing. Answers the entry, the
-      # context it was built for, and its TLVs. +plan+ builds and injects
-      # nothing.
+      # A fault of the catalog (ISIS::Fault) in system +router+'s LSPs, a
+      # simulated system's or the simulator's own: the entry's Router
+      # Capability in place of the system's own, and its reachability, a
+      # +prefix+ of its own with +index+, after the system's. The system
+      # needs segment routing. In the simulator's own LSPs, its neighbours
+      # take the entry's SRGB as their next hop's; what the simulator
+      # forwards is not changed. Answers the entry, the context it was
+      # built for, and its TLVs. +plan+ builds and injects nothing.
       def fault(name, router:, prefix: nil, index: nil, plan: false)
-        sys = live(router)
-        sr = segment_routing(sys) or raise ArgumentError, "#{router} has no segment routing, so no SR fault applies"
+        sys = system(router)
+        live(router) unless sys.simulator?
+        sr = sys.simulator? ? @originators[sys.name].values.first.segment_routing : segment_routing(sys)
+        raise ArgumentError, "#{router} has no segment routing, so no SR fault applies" unless sr
         if @behaviour && @behaviour[:name] == :srgb_change && @behaviour[:params][:router].to_s == sys.name
           raise ArgumentError, "#{sys.name}'s SRGB is moved by srgb_change; stop it first"
         end
@@ -289,7 +293,7 @@ module ISIS
 
       # Takes the injected TLVs out of +name+'s LSPs, or every system's.
       def fault_clear(name = nil)
-        names = name ? [simulated(name).name] : @originators.keys
+        names = name ? [system(name).name] : @originators.keys
         names.each { |n| @originators[n].each_value { |o| o.inject([], "simulator: fault cleared") if o.injected&.any? } }
         event(:fault, "faults cleared in #{name || 'every system'}")
         { cleared: names }

@@ -2,6 +2,7 @@
 
 require_relative "../test_helper"
 require_relative "../support/topology_lab"
+require_relative "../support/fault_matrix"
 
 # The catalog's TI-LFA topologies (ISIS::Fault::TOPOLOGIES) on real
 # routers, in network namespaces (test/support/topology_lab.rb): isisd
@@ -79,12 +80,19 @@ class TestFrrTiLfa < Minitest::Test
   ON_REAL_ROUTERS.each do |name|
     define_method(:"test_isisd_#{name}") do
       entry = ISIS::Fault.topology(name)
-      assert_equal self.class.isisd_expects(entry), repair(name, :isisd), entry[:description]
+      got = repair(name, :isisd)
+      FaultMatrix.record(:topology, name, :isisd, FaultMatrix.topology_cell(got, FaultMatrix.rfc_repair(entry)))
+      assert_equal self.class.isisd_expects(entry), got, entry[:description]
     end
 
     define_method(:"test_frr_#{name}") do
-      skip "FRR's answers are recorded on #{FRR_VERSION}; this is #{frr_version}" unless frr_version == FRR_VERSION
-      assert_equal FRR.fetch(name), repair(name, :frr), ISIS::Fault.topology(name)[:description]
+      skip "FRR's answers are recorded on #{FRR_VERSION}; this is #{frr_version}" unless
+        frr_version == FRR_VERSION || ENV["ISIS_MATRIX_OUT"]
+      entry = ISIS::Fault.topology(name)
+      got = repair(name, :frr)
+      FaultMatrix.record(:topology, name, :frr, FaultMatrix.topology_cell(got, FaultMatrix.rfc_repair(entry)))
+      skip "FRR #{frr_version} recorded for the matrix, not held to #{FRR_VERSION}'s answers" unless frr_version == FRR_VERSION
+      assert_equal FRR.fetch(name), got, entry[:description]
     end
   end
 

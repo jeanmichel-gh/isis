@@ -91,10 +91,31 @@ class TopologyLab
 
   def sender_ns = "#{@prefix}-H"
 
-  # Stops and resumes a system's isisd (SIGSTOP, SIGCONT): with the
-  # PLR's stopped, the kernel alone forwards what reaches it.
-  def freeze(name) = Process.kill("STOP", @pids.fetch(name))
-  def thaw(name) = Process.kill("CONT", @pids.fetch(name))
+  # Stops and resumes a system's isisd (SIGSTOP, SIGCONT), or an FRR
+  # PLR's isisd and zebra: with the PLR's stopped, the kernel alone
+  # forwards what reaches it.
+  def freeze(name) = daemon_pids(name).each { Process.kill("STOP", _1) }
+  def thaw(name) = daemon_pids(name).each { Process.kill("CONT", _1) }
+
+  def daemon_pids(name)
+    return [@pids.fetch(name)] unless name == plr && @plr_kind == :frr
+
+    %w[isisd zebra].map { File.read("#{@run}/#{_1}.pid").to_i }
+  end
+
+  # The PLR's Adj-SID toward +neighbor+: isisd's own, or the lowest of
+  # FRR's label routes that pop onto the link to it.
+  def plr_adj_sid(neighbor)
+    return adj_sid(plr, neighbor) unless @plr_kind == :frr
+
+    iface = "to#{neighbor}"
+    hop = `ip -n #{ns(neighbor)} -j addr show #{"to#{plr}"}`.then { JSON.parse(_1).first["addr_info"].first["local"] }
+    JSON.parse(vtysh("show mpls table json")).filter_map do |label, e|
+      next unless Array(e["nexthops"]).any? { _1["nexthop"] == hop && _1["outLabel"] == 3 }
+
+      Integer(label)
+    end.min or raise "no Adj-SID of #{plr} on #{iface}"
+  end
 
   # Takes +to+'s end of the link from +from+ down, so +from+'s end loses
   # carrier.

@@ -2,6 +2,7 @@
 
 require_relative "../test_helper"
 require_relative "../support/topology_lab"
+require_relative "../support/fault_matrix"
 
 # The catalog's packets at the PLR (ISIS::Fault::PACKETS), on real
 # routers in network namespaces (test/support/topology_lab.rb): the
@@ -55,20 +56,23 @@ class TestKernelTiLfa < Minitest::Test
   def destination = @lab.destination_prefix.split("/").first
 
   def labels
-    adj = @lab.isisd("S", "show.segment_routing")["adj_sids"].find { _1["neighbor"] == "F" && _1["family"] == "ipv4" }
-    { destination: @lab.srgb("S") + @lab.number("D"), adj: adj.fetch("label"), unknown: 99_999 }
+    { destination: @lab.srgb("S") + @lab.number("D"), adj: @lab.plr_adj_sid("F"), unknown: 99_999 }
   end
 
-  # Stops S's isisd, takes S-F's carrier, waits for the kernel to take
-  # the backup, sends every packet from H and returns, per entry, what
-  # reached A and what came back to H.
-  def during_repair
-    @lab = TopologyLab.new("kp#{Process.pid % 1000}", TOPOLOGY, sender: true, forwarding: true).start
+  # Stops S's daemons, takes S-F's carrier, waits for isisd's kernel to
+  # take the backup (FRR's installs none), sends every packet from H and
+  # returns, per entry, what reached A and what came back to H.
+  def during_repair(plr = :isisd)
+    @lab = TopologyLab.new("kp#{Process.pid % 1000}", TOPOLOGY, plr: plr, sender: true, forwarding: true).start
     @lab.settled_repair(180)
     frames = ISIS::Fault.packet_names.map { ISIS::Fault.packet(_1, src: "10.9.0.2", dst: destination, labels: labels) }
     @lab.freeze("S")
     @lab.far_end_down("S", "F")
-    assert @lab.wait_for(5) { @lab.route_get("S", destination).include?("dev toA") }, "the kernel takes the backup"
+    if plr == :isisd
+      assert @lab.wait_for(5) { @lab.route_get("S", destination).include?("dev toA") }, "the kernel takes the backup"
+    else
+      sleep 1
+    end
     at_h = nil
     at_a = @lab.capture(@lab.ns("A"), "toS") { at_h = @lab.capture(@lab.sender_ns, "toS") { @lab.send_from_sender(frames) } }
     at_a = at_a.filter_map { TopologyLab.read_frame(*_1) }.select { _1[:packet] }
@@ -82,14 +86,18 @@ class TestKernelTiLfa < Minitest::Test
     @lab&.thaw("S")
   end
 
+  def repair
+    e = ISIS::Fault.topology(TOPOLOGY)[:expect]
+    e[:segments] + (e[:q] == "D" ? [] : [[:node, "D"]])
+  end
+
   # Every packet, in one failure: the repair for those the RFC asks it
   # of, and the rest as recorded.
   def test_the_packets_at_the_plr_during_a_repair
     got = during_repair
-    e = ISIS::Fault.topology(TOPOLOGY)[:expect]
-    repair = e[:segments] + (e[:q] == "D" ? [] : [[:node, "D"]])
     ISIS::Fault.packets.each do |p|
       name = p[:name]
+      FaultMatrix.record(:packet, name, :isisd, FaultMatrix.packet_cell(p, got[name], repair))
       if p[:expect] == :repair && !GAPS.key?(name)
         assert_equal({ segments: repair, ttl: 63 }, got[name][:at_a], "#{name}: the repair, RFC 9855 6.1 and 7.1")
       elsif p[:expect] == :repair
@@ -98,6 +106,33 @@ class TestKernelTiLfa < Minitest::Test
         assert_equal RECORDED.fetch(name), got[name], "#{name}, as recorded"
       end
     end
+  end
+
+  FRR_VERSION = "10.5.1"
+
+  # What Linux did under FRR 10.5.1 as the PLR, measured 2026-11-23. FRR
+  # installs no backup in the kernel: when S-F loses carrier, the routes
+  # through F go, and nothing reaches A. An IP packet gets ICMP
+  # destination unreachable (3/0) back; a labelled one is dropped.
+  RECORDED_FRR = {
+    packet_ip: { at_a: nil, back: [[3, 0], :packet_ip] },
+    packet_prefix_sid: { at_a: nil, back: nil },
+    packet_ip_ttl_1: { at_a: nil, back: [[3, 0], :packet_ip_ttl_1] },
+    packet_mpls_ttl_1: { at_a: nil, back: nil },
+    packet_unknown_label: { at_a: nil, back: nil },
+    packet_adj_sid: { at_a: nil, back: nil }
+  }.freeze
+
+  def frr_version = `#{FrrLab::FRR}/isisd --version`[/version (\S+)/, 1]
+
+  # The same packets with FRR's isisd as the PLR, recorded.
+  def test_the_packets_at_frr_s_plr
+    got = during_repair(:frr)
+    ISIS::Fault.packets.each do |p|
+      FaultMatrix.record(:packet, p[:name], :frr, FaultMatrix.packet_cell(p, got[p[:name]], repair))
+    end
+    skip "FRR's packets are recorded on #{FRR_VERSION}; this is #{frr_version}" unless frr_version == FRR_VERSION
+    assert_equal RECORDED_FRR, got
   end
 
   def test_every_packet_is_expected_or_recorded

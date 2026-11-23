@@ -192,3 +192,12 @@ Q:
   the expired copy.
 - `srgb_change` on Q: the repair's last label moves 100000 up with the
   block, and the Adj-SID before it stays. Stopped, both are back.
+
+## The fault matrix
+
+`docs/fault-matrix.md` shows what isisd and FRR's isisd do with each SR
+entry, topology and packet beside what the RFC expects. `rake
+fault_matrix` writes it, as root with FRR, from what the interop tests
+measured: `frr_sr_fault_test.rb`, `frr_ti_lfa_test.rb` and
+`kernel_ti_lfa_test.rb`. `test/docs/fault_matrix_test.rb` fails when the
+catalog gains an entry the matrix does not show.

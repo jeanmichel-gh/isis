@@ -100,8 +100,19 @@ class TestSimFaultInjection < Minitest::Test
   def test_refusals
     start
     assert_raises(ArgumentError) { @sim.fault(:nope, router: "r2c3") }
-    assert_raises(ArgumentError) { @sim.fault(:srgb_overlap, router: "s1") }
     assert_raises(ArgumentError) { @sim.fault(:srgb_overlap, router: "nobody") }
+  end
+
+  # In the simulator's own LSP: s1 is the dut's next hop, and its SRGB
+  # the one at fault. Cleared, the finding goes.
+  def test_in_the_simulators_own_lsp
+    start
+    assert_equal "s1", @sim.fault(:srgb_overlap, router: "s1")[:router]
+    run_for(5)
+    assert_equal [:srgb_overlap], findings
+    @sim.fault_clear("s1")
+    run_for(5)
+    assert_empty findings
   end
 
   # Octets sent as they are: an LSP of a system nobody simulates, built by

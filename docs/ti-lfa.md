@@ -189,7 +189,8 @@ pushes its first hop's own Node-SID. The test holds FRR to this table on
 test: two real routers report a link both ways or neither.
 
 `sudo env "PATH=$PATH" ISIS_FRR=1 rake interop_ti_lfa` runs it, apart
-from `rake interop`, and so does CI's `interop (TI-LFA)` job. It took
+from `rake interop`, and so does `rake fault_matrix` in CI's `interop
+(TI-LFA)` job (`docs/fault-matrix.md`). It took
 8.6 minutes here with both halves, and CI's FRR job from under 4
 minutes to 9 to 11 while it ran there (2026-11-22).
 
@@ -221,8 +222,11 @@ it closes is seen. `packet_adj_sid` is as decided: isisd does not
 protect Adj-SIDs, which RFC 9855 6.2 asks only "for which protection
 was enabled".
 
-It is a `kernel_` test, so `rake interop` runs it, and CI's `interop
-(FRR)` job, which loads the MPLS modules. It took 33 s here.
+`rake fault_matrix` runs it, in CI's `interop (TI-LFA)` job, which
+loads the MPLS modules; `rake interop` leaves it out. It took 33 s here.
+With FRR's isisd as the PLR it runs again: FRR 10.5.1 installs no
+backup in the kernel, so every packet is lost, an IP one with ICMP
+destination unreachable back to H (`docs/fault-matrix.md`).
 
 ## Behaviours
 
