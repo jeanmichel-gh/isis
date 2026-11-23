@@ -86,6 +86,25 @@ class TestDaemonHttp < Minitest::Test
     body = get("/api/catalog").last
     assert_equal ISIS::Fault.names, body[:faults].map { _1[:name] }
     assert_equal %w[link], body[:actions]["/api/link.down"]
+    assert_equal ISIS::Fault.behaviour_names, body[:behaviours].map { _1[:name] }
+  end
+
+  # A behaviour started, seen in the status, refused while it runs,
+  # stopped; each POST needs the header.
+  def test_a_behaviour_then_stopped
+    assert_equal 403, post("/api/behave", { "name" => "srgb_change", "router" => "r1c2" }, {}).first
+    assert_equal 403, post("/api/behave.stop", {}, {}).first
+    status, body = post("/api/behave", { "name" => "srgb_change", "router" => "r1c2", "start" => 200_000 })
+    assert_equal 200, status, body
+    assert_equal [:srgb_change, 200_000], [body[:behaviour], body[:srgb][:to][0][0]]
+    assert_equal "srgb_change", get("/api/status").last[:behaviour].to_s
+    status, body = post("/api/behave", { "name" => "flap" })
+    assert_equal 400, status
+    assert_match(/srgb_change runs/, body[:error])
+    assert_equal [200, { stopped: :srgb_change }], post("/api/behave.stop")
+    assert_nil get("/api/status").last[:behaviour]
+    assert_equal 400, post("/api/behave", {}).first
+    assert_equal 400, post("/api/behave", { "name" => "flap", "router" => "r1c2" }).first
   end
 
   def test_events

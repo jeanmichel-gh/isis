@@ -40,6 +40,8 @@ module ISIS
         "/api/fault" => [%w[case router prefix index], ->(h, p) { h.fault(p, plan: false) }],
         "/api/plan" => [%w[case router prefix index], ->(h, p) { h.fault(p, plan: true) }],
         "/api/fault.clear" => [%w[router], ->(h, p) { h.simulator.fault_clear(p["router"]) }],
+        "/api/behave" => [%w[name circuit count down up router start], ->(h, p) { h.behave(p) }],
+        "/api/behave.stop" => [[], ->(h, _) { h.simulator.behave_stop }],
         "/api/send" => [%w[octets circuit], lambda do |h, p|
           hex = p.fetch("octets") { raise ArgumentError, "send needs octets, in hex" }.to_s
           raise ArgumentError, "octets is not hex" unless hex.match?(/\A(\h\h)+\z/)
@@ -87,11 +89,12 @@ module ISIS
         { version: VERSION, api: Api::VERSION, system_id: @simulator.router.system_id_s,
           systems: @simulator.topology.systems.size, links: @simulator.topology.links.size,
           generating: @simulator.generating?, aging: @simulator.aging?, faults: @simulator.faults.size,
+          behaviour: @simulator.behaviour&.fetch(:name),
           paths: { get: READS.keys, post: ACTIONS.keys } }
       end
 
       def catalog
-        { faults: Fault.catalog.map { _1.except(:build) },
+        { faults: Fault.catalog.map { _1.except(:build) }, behaviours: Fault.behaviours,
           actions: ACTIONS.transform_values(&:first) }
       end
 
@@ -100,6 +103,12 @@ module ISIS
         router = params.fetch("router") { raise ArgumentError, "fault needs router, a simulated system's name" }
         index = params["index"] && Integer(params["index"])
         @simulator.fault(name, router: router, prefix: params["prefix"], index: index, plan: plan)
+      end
+
+      # A behaviour of the catalog: name, and its own parameters.
+      def behave(params)
+        name = params.fetch("name") { raise ArgumentError, "behave needs name, one of #{Fault.behaviour_names.join(', ')}" }
+        @simulator.behave(name, **params.except("name").transform_keys(&:to_sym))
       end
 
       # The answer to one request: [status, body].

@@ -9,9 +9,11 @@ module ISIS
   # injector, sends an entry to a router and checks what it did against
   # what the RFC expects.
   #
-  # Two groups. Segment routing's (CATALOG): an LSP with one wrong thing in
-  # its SR data. TI-LFA's topologies (TOPOLOGIES): well formed, each with
-  # the repair RFC 9855 expects.
+  # Four groups. Segment routing's (CATALOG): an LSP with one wrong thing
+  # in its SR data. TI-LFA's topologies (TOPOLOGIES): well formed, each
+  # with the repair RFC 9855 expects. Packets at the PLR (PACKETS).
+  # Behaviours (BEHAVIOURS): misbehaviour over time, a script the
+  # simulator runs.
   #
   # The first entries are segment routing's: an LSP with one wrong thing
   # in its SR data, everything else what a correct system sends. Each
@@ -136,7 +138,51 @@ module ISIS
        "RFC 9855 6.2", { send: [:labels, :adj], ttl: 64 }, :record]
     ].freeze
 
+    # The fourth group: behaviours, misbehaviour over time, each a named
+    # script isis4r-sim runs (Sim::Simulator#behave). Each entry: [name,
+    # what the simulator does, rfc, what the RFC expects of the routers
+    # that learn it, its parameters with their defaults]. A parameter
+    # whose default is nil and that the entry names as required must be
+    # given.
+    BEHAVIOURS = [
+      [:flap, "stops its hellos on circuit for down seconds, then sends them for up seconds, count times; " \
+              "every interface without circuit",
+       "RFC 9855 1",
+       "the router across circuit uses its repair from each loss until it converges, and computes its " \
+       "backups again once the adjacency is back; after the last, they are those it had before",
+       { circuit: nil, count: 3, down: 10, up: 10 }, []],
+      [:stale_lsp, "router's neighbours report their links to it down, while its own LSP stays as it was, " \
+                   "never refreshed, until it expires",
+       "RFC 1142 7.2.8.2, 7.3.16.4",
+       "no route and no repair crosses router, since only router reports its links; its LSP expires " \
+       "after its lifetime",
+       { router: nil }, [:router]],
+      [:srgb_change, "router's LSP 0 carries its SRGB moved to start, 100000 labels up unless given, while " \
+                     "its Prefix-SIDs keep their indexes; what router forwards is not changed",
+       "RFC 8660 2.4, RFC 9855 7.1",
+       "a label in router's SRGB moves with the block: a repair's last label when router is Q, " \
+       "and a route's label when router is the next hop",
+       { router: nil, start: nil }, [:router]]
+    ].freeze
+
+    # How far srgb_change moves a block unless told.
+    SRGB_MOVE = 100_000
+
     module_function
+
+    def behaviour_names = BEHAVIOURS.map(&:first)
+
+    # The behaviours, as Hashes.
+    def behaviours
+      BEHAVIOURS.map do |name, description, rfc, expect, params, required|
+        { name: name, description: description, rfc: rfc, expect: expect, params: params, required: required }
+      end
+    end
+
+    def behaviour(name)
+      behaviours.find { |e| e[:name] == name.to_s.to_sym } or
+        raise ArgumentError, "unknown behaviour #{name.inspect}; the behaviours are #{behaviour_names.join(', ')}"
+    end
 
     def packet_names = PACKETS.map(&:first)
 

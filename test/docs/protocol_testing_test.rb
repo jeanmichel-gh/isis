@@ -57,6 +57,23 @@ class TestProtocolTestingDoc < Minitest::Test
     assert_equal ISIS::Fault.packet_names, listed
   end
 
+  def self.behaviour_row(e)
+    params = e[:params].map do |k, v|
+      if e[:required].include?(k) then "`#{k}`"
+      elsif v.nil? then "`#{k}`, optional"
+      else "`#{k}` #{v}"
+      end
+    end
+    "| `#{e[:name]}` | #{e[:rfc]} | #{params.join('; ')} | #{e[:description]} | #{e[:expect]} |"
+  end
+
+  def test_every_behaviour_and_no_other
+    ISIS::Fault.behaviours.each { |e| assert_includes DOC, self.class.behaviour_row(e), e[:name] }
+    section = DOC[/^### Behaviours\n(.*?)(?=\n## |\z)/m, 1]
+    listed = section.scan(/^\| `(\w+)` \|/).flatten.map(&:to_sym)
+    assert_equal ISIS::Fault.behaviour_names, listed
+  end
+
   def test_every_policy
     listed = DOC.scan(/^\| `(rfc|strict|lenient)` \|/).flatten.map(&:to_sym)
     assert_equal ISIS::Validation::POLICIES, listed

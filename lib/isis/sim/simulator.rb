@@ -57,16 +57,20 @@ module ISIS
       end
 
       # One simulated system's originators answering for it in a database's
-      # generators, while the simulator generates it. Flushed, or with aging
-      # off, it answers for nothing, so copies that arrive are taken as any
-      # other system's.
+      # generators, while the simulator generates it. Flushed, with aging
+      # off, or stale (the stale_lsp behaviour), it answers for nothing, so
+      # copies that arrive are taken as any other system's, and its LSP
+      # expires as theirs do.
       class Generator
-        def initialize(simulator, originator)
+        def initialize(simulator, originator, name)
           @simulator = simulator
           @originator = originator
+          @name = name
         end
 
-        def generates?(lsp_id) = @simulator.generating? && @originator.generates?(lsp_id)
+        def generates?(lsp_id)
+          @simulator.generating? && !@simulator.stale?(@name) && @originator.generates?(lsp_id)
+        end
 
         def receive_own(result, lsp) = @originator.receive_own(result, lsp)
       end
@@ -99,6 +103,8 @@ module ISIS
         @flaps = []
         @faults = []
         @sent = []
+        @behaviour = nil
+        @stale = []
         @originators = { topology.simulator.name => @router.levels.to_h { |l| [l, @router.originators[l]] } }
         topology.systems.each { |s| @originators[s.name] = build_originators(s) }
         attach_links
@@ -116,6 +122,7 @@ module ISIS
       def stop
         @flaps.each(&:cancel)
         @flaps.clear
+        @behaviour&.fetch(:timers)&.each(&:cancel)
         each_simulated(&:stop)
         @router.stop
         self
@@ -176,7 +183,7 @@ module ISIS
 
       # The OL bit in +name+'s LSP Number 0 (RFC 1142 7.3.19.1).
       def router_overload(name, on)
-        s = simulated(name)
+        s = live(name)
         s.overload = on ? true : false
         @originators[s.name].each_value { |o| o.overload = s.overload }
         event(:router, "#{s.name} overload #{s.overload ? 'set' : 'cleared'}")
@@ -185,7 +192,7 @@ module ISIS
 
       # The default metric ATT bit in +name+'s Level 1 LSP Number 0 (7.2.9.2).
       def router_attached(name, on)
-        s = simulated(name)
+        s = live(name)
         s.attached = on ? true : false
         @originators[s.name][1]&.attached = s.attached
         event(:router, "#{s.name} attached #{s.attached ? 'set' : 'cleared'}")
@@ -256,8 +263,11 @@ module ISIS
       # context it was built for, and its TLVs. +plan+ builds and injects
       # nothing.
       def fault(name, router:, prefix: nil, index: nil, plan: false)
-        sys = simulated(router)
+        sys = live(router)
         sr = segment_routing(sys) or raise ArgumentError, "#{router} has no segment routing, so no SR fault applies"
+        if @behaviour && @behaviour[:name] == :srgb_change && @behaviour[:params][:router].to_s == sys.name
+          raise ArgumentError, "#{sys.name}'s SRGB is moved by srgb_change; stop it first"
+        end
         n = @faults.size + 1
         first, size = sr.srgb.first
         ctx = { system_id: sys.system_id.to_s, loopback: prefix || "10.255.250.#{n % 250}/32",
@@ -287,6 +297,117 @@ module ISIS
 
       attr_reader :faults, :sent
 
+      # The behaviour running, { name:, params:, at: }, or nil.
+      def behaviour = @behaviour&.slice(:name, :params, :at)
+
+      # Whether simulated system +name+ is stale: the stale_lsp behaviour
+      # holds its LSP as it was.
+      def stale?(name) = @stale.include?(name)
+
+      # Runs behaviour +name+ of the catalog (Fault::BEHAVIOURS) with
+      # +params+, its defaults filling the rest. One at a time: another
+      # is refused until behave_stop. flap ends on its own; stale_lsp and
+      # srgb_change hold until behave_stop, which undoes what they did.
+      # Answers the entry, the parameters it runs with, and what it
+      # changed.
+      def behave(name, **params)
+        e = Fault.behaviour(name)
+        raise ArgumentError, "behaviour #{@behaviour[:name]} runs; stop it first" if @behaviour
+
+        unknown = params.keys - e[:params].keys
+        raise ArgumentError, "#{e[:name]} takes #{e[:params].keys.join(', ')}, not #{unknown.join(', ')}" unless unknown.empty?
+
+        p = e[:params].merge(params.compact)
+        e[:required].each { |k| raise ArgumentError, "#{e[:name]} needs #{k}" if p[k].nil? }
+        @behaviour = { name: e[:name], params: p, at: @scheduler.now.round(3), timers: [], undo: nil }
+        begin
+          done = send(:"behave_#{e[:name]}", p)
+        rescue StandardError
+          @behaviour = nil
+          raise
+        end
+        event(:behaviour, "behaviour #{e[:name]} started (#{p.compact.map { |k, v| "#{k} #{v}" }.join(', ')})")
+        { behaviour: e[:name], description: e[:description], expect: e[:expect], rfc: e[:rfc], params: p }
+          .merge(done || {})
+      end
+
+      # Ends the behaviour running, undoing what it did: hellos sent again,
+      # a stale system generated again, a moved SRGB put back.
+      def behave_stop
+        return { stopped: nil } unless @behaviour
+
+        b = @behaviour
+        @behaviour = nil
+        b[:timers].each(&:cancel)
+        b[:undo]&.call
+        event(:behaviour, "behaviour #{b[:name]} stopped")
+        { stopped: b[:name] }
+      end
+
+      # Hellos stopped on +circuit+, or every interface, then started,
+      # count times; the behaviour ends with the last start.
+      def behave_flap(p)
+        count = Integer(p[:count])
+        down = Float(p[:down])
+        up = Float(p[:up])
+        raise ArgumentError, "flap needs a count of 1 or more, and down and up over 0" unless count.positive? && down.positive? && up.positive?
+
+        circuit = p[:circuit]&.to_s
+        each_interface(circuit) { nil }
+        count.times do |i|
+          t = i * (down + up)
+          @behaviour[:timers] << @scheduler.after(t) { neighbor_stop(circuit: circuit) }
+          @behaviour[:timers] << @scheduler.after(t + down) do
+            neighbor_start(circuit: circuit)
+            finish(:flap) if i == count - 1
+          end
+        end
+        @behaviour[:undo] = -> { neighbor_start(circuit: circuit) }
+        { ends_in: ((count * down) + ((count - 1) * up)).round(3) }
+      end
+
+      # The far ends of +router+'s links report them down; its own
+      # originators stop, so its LSP is neither refreshed nor generated
+      # again, and its Generator answers for nothing.
+      def behave_stale_lsp(p)
+        s = live(p[:router])
+        raise ArgumentError, "nothing to make stale: the simulated systems are not generated now" unless @generating
+
+        links = @topology.links.select { |l| l.up? && [l.from, l.to].include?(s.name) }
+        far = links.map { |l| l.from == s.name ? l.to : l.from }.uniq
+        @originators[s.name].each_value(&:stop)
+        @stale << s.name
+        links.each { |l| l.state = :down }
+        changed(far, "#{s.name} stale: #{links.map(&:name).join(', ')} down at the far ends")
+        @behaviour[:undo] = lambda do
+          @stale.delete(s.name)
+          links.each { |l| l.state = :up }
+          @originators[s.name].each_value(&:start) if @generating
+          changed(far + [s.name], "#{s.name} generated again: #{links.map(&:name).join(', ')} up")
+        end
+        { links: links.map(&:name), lifetime: @topology.lsp_lifetime }
+      end
+
+      # +router+'s Router Capability, the simulator's own included, with
+      # each SRGB block moved so the first starts at +start+.
+      def behave_srgb_change(p)
+        sys = system(p[:router])
+        raise ArgumentError, "#{sys.name} is stale" if stale?(sys.name)
+
+        os = @originators[sys.name].values
+        sr = os.first.segment_routing or raise ArgumentError, "#{sys.name} has no segment routing"
+        raise ArgumentError, "#{sys.name} has a fault injected; clear it first" if os.any? { |o| o.injected&.any? }
+
+        first = sr.srgb.first.first
+        start = p[:start].nil? ? first + Fault::SRGB_MOVE : Integer(p[:start])
+        moved = SegmentRouting.new(router_id: sr.router_id.to_s, srgb: sr.srgb.map { |f, n| [f + start - first, n] },
+                                   srlb: sr.srlb)
+        os.each { |o| o.inject([moved.capability], "simulator: behaviour srgb_change") }
+        @behaviour[:undo] = -> { os.each { |o| o.inject([], "simulator: srgb_change stopped") } }
+        { srgb: { from: sr.srgb, to: moved.srgb } }
+      end
+      private :behave_flap, :behave_stale_lsp, :behave_srgb_change
+
       # Sends +octets+, any PDU or none, as they are, on +circuit+'s
       # circuits, or every interface's. Pdu.factory keeps what it cannot
       # read and writes the same octets back (docs/parse-policy.md).
@@ -311,6 +432,7 @@ module ISIS
           counts: @topology.counts, levels: levels, metric_style: @topology.metric_style.to_s,
           metric_max: Sim::Topology::LIMITS.fetch(@topology.metric_style)[:link],
           interfaces: @router.interfaces.map { |i| { name: i.name, hellos: i.each_circuit.any?(&:hellos?) } },
+          behaviour: behaviour, stale: @stale.dup,
           systems: @topology.all_systems.map { |s| system_state(s) },
           links: @topology.links.each_with_index.map { |l, i| link_state(l).merge(number: i + 1) },
           warnings: @topology.warnings }
@@ -348,7 +470,7 @@ module ISIS
           )
           o.attached = true if level == 1 && sys.attached
           o.attach(Flooder.new(@router.databases[level]))
-          @router.databases[level].add_generator(Generator.new(self, o))
+          @router.databases[level].add_generator(Generator.new(self, o, sys.name))
           [level, o]
         end
       end
@@ -388,8 +510,10 @@ module ISIS
         event(:lsdb, "#{@topology.systems.size} simulated systems generated: #{why}")
       end
 
+      # Every simulated system's originators but a stale one's, whose LSP
+      # stays as it was.
       def each_simulated(&block)
-        @topology.systems.each { |s| @originators[s.name].each_value(&block) }
+        @topology.systems.each { |s| @originators[s.name].each_value(&block) unless stale?(s.name) }
       end
 
       def set_link(l, state)
@@ -403,7 +527,7 @@ module ISIS
       # Generate the LSPs of +names+ again, the simulator's own included.
       def changed(names, why)
         event(:link, why)
-        names.each { |n| @originators[n].each_value { |o| o.changed("simulator: #{why}") } }
+        names.each { |n| @originators[n].each_value { |o| o.changed("simulator: #{why}") } unless stale?(n) }
       end
 
       def simulated(name)
@@ -413,8 +537,24 @@ module ISIS
         s
       end
 
-      def set_group(name, group, withdraw:)
+      # A simulated system that is not stale: what an action may change.
+      def live(name)
         s = simulated(name)
+        raise ArgumentError, "#{s.name} is stale (the stale_lsp behaviour); stop it first" if stale?(s.name)
+
+        s
+      end
+
+      # A behaviour that ends on its own.
+      def finish(name)
+        return unless @behaviour && @behaviour[:name] == name
+
+        @behaviour = nil
+        event(:behaviour, "behaviour #{name} done")
+      end
+
+      def set_group(name, group, withdraw:)
+        s = live(name)
         group = group.to_s
         all = s.prefixes + s.externals
         raise ArgumentError, "#{s.name} has no prefix group #{group}" unless all.any? { |p| p.group == group }

@@ -255,6 +255,8 @@ method other than GET and POST.
 | `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a simulated system's LSPs |
 | `POST /api/plan` | the same, built and answered, injected nowhere |
 | `POST /api/fault.clear` | `router`: takes the injected TLVs out, of one system or, without it, every one |
+| `POST /api/behave` | `name` and its parameters: runs a behaviour of the catalog, one at a time |
+| `POST /api/behave.stop` | ends the behaviour running and undoes what it did |
 | `POST /api/send` | `octets` in hex, `circuit`: sends them as they are, on one interface or every one |
 
 And each action of the socket's API, as `POST /api/ACTION` with the same
@@ -268,12 +270,23 @@ of the system's SRGB unless given. The system needs segment routing. It
 stays until cleared. A neighbour learns it as any change, and isisd there
 makes the entry's finding.
 
+A behaviour (`docs/protocol-testing.md`, "Behaviours") is misbehaviour
+over time: `flap` stops and starts the simulator's hellos on a circuit;
+`stale_lsp` leaves a simulated system's LSP as it was while its
+neighbours report it gone; `srgb_change` moves a system's SRGB, the
+simulator's own included. `GET /api/status` names the one running, and
+`GET /api/catalog` lists them with what the RFC expects. While
+`stale_lsp` holds a system, the actions that would change its LSP are
+refused, and `refresh`, `flush` and `restore` pass it by.
+
 ```sh
 H='X-ISIS4R: routescope'
 curl -s 127.0.0.1:8080/api/catalog
 curl -s -H "$H" -d '{"case":"srgb_overlap","router":"r2c3"}' 127.0.0.1:8080/api/fault
 curl -s -H "$H" -d '{"router":"r2c3"}' 127.0.0.1:8080/api/fault.clear
 curl -s -H "$H" -d '{"link":"r1c1--r1c2"}' 127.0.0.1:8080/api/link.down
+curl -s -H "$H" -d '{"name":"stale_lsp","router":"r2c3"}' 127.0.0.1:8080/api/behave
+curl -s -H "$H" -X POST 127.0.0.1:8080/api/behave.stop
 ```
 
 ## What it refuses, and what it keeps

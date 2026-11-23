@@ -156,3 +156,39 @@ quotes only its headers still does. `test/unit/fault_packet_test.rb`
 checks each is built as its entry says. `test/interop/kernel_ti_lfa_test.rb`
 sends them at a real PLR during a repair (`docs/ti-lfa.md`, "Packets at
 the PLR").
+
+### Behaviours
+
+The catalog's fourth group, `ISIS::Fault::BEHAVIOURS`: misbehaviour
+over time, each a named script isis4r-sim runs
+(`Sim::Simulator#behave`, `POST /api/behave`, `docs/simulator.md`). One
+runs at a time. `flap` ends on its own; the others hold until
+`behave_stop`, which undoes what they did.
+
+| Behaviour | Section | Parameters | The simulator | Expects |
+| --- | --- | --- | --- | --- |
+| `flap` | RFC 9855 1 | `circuit`, optional; `count` 3; `down` 10; `up` 10 | stops its hellos on circuit for down seconds, then sends them for up seconds, count times; every interface without circuit | the router across circuit uses its repair from each loss until it converges, and computes its backups again once the adjacency is back; after the last, they are those it had before |
+| `stale_lsp` | RFC 1142 7.2.8.2, 7.3.16.4 | `router` | router's neighbours report their links to it down, while its own LSP stays as it was, never refreshed, until it expires | no route and no repair crosses router, since only router reports its links; its LSP expires after its lifetime |
+| `srgb_change` | RFC 8660 2.4, RFC 9855 7.1 | `router`; `start`, optional | router's LSP 0 carries its SRGB moved to start, 100000 labels up unless given, while its Prefix-SIDs keep their indexes; what router forwards is not changed | a label in router's SRGB moves with the block: a repair's last label when router is Q, and a route's label when router is the next hop |
+
+```ruby
+sim.behave(:flap, circuit: "a", count: 2, down: 8, up: 12)
+sim.behave(:stale_lsp, router: "x")
+sim.behave(:srgb_change, router: "s1")   # the simulator's own, or any simulated system
+sim.behaviour                            # { name:, params:, at: }, or nil
+sim.behave_stop                          # { stopped: :srgb_change }
+```
+
+`test/unit/sim/behaviour_test.rb` runs each against a point of local
+repair, an ordinary Router with `ti_lfa: link` toward the simulator,
+whose repair is P and Q adjacent (RFC 9855 5.3) with the simulator as
+Q:
+
+- `flap`: in each loss the PLR has converged on its repair's first hop;
+  in each return its backup is computed again, the one it had.
+- `stale_lsp`: the PLR holds the system's LSP at the sequence it had,
+  reaches nothing through it, and routes around it; the LSP expires
+  after `lsp_lifetime`. Stopped, the system is generated again, past
+  the expired copy.
+- `srgb_change` on Q: the repair's last label moves 100000 up with the
+  block, and the Adj-SID before it stays. Stopped, both are back.
