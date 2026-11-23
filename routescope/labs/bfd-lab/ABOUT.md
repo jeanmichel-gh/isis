@@ -47,39 +47,39 @@ scenarios run back to back, with no wait first.
 
 ## Measured
 
-Through routescope on ospflab (amd64, 6 CPUs), 2026-11-22, the isis4r
-image built at isis 5933f6a and bfd4r 3ad0f14, one scenario straight
-after another, in the order below, with the host's load average (1
-minute) at the start. `failover` is from the netem step to the first
-ping of three from r1's loopback to r3's that all come back. `restore`
-is from clearing the loss to r1's route back via r2. The ping is
-polled, about once a second.
+Through routescope on ospflab (amd64, 6 CPUs), the isis4r image built
+at isis 885f38a and bfd4r 6b5c09c, one scenario straight after another,
+in the order below, with the host's load average (1 minute) at the
+start. The VM was paused for about two hours between the fourth run and
+the fifth. `failover` is from the netem step to the first ping of three
+from r1's loopback to r3's that all come back. `restore` is from
+clearing the loss to r1's route back via r2. The ping is polled, about
+once a second.
 
 | Time (UTC) | Load | Scenario | failover | restore | failover_again |
 | --- | --- | --- | --- | --- | --- |
-| 07:16 | 6.6 | loss-with-bfd | 2.8 s | 0.9 s | 6.6 s |
-| 07:17 | 7.3 | loss-without-bfd | 31.4 s | 2.2 s | |
-| 07:17 | 6.6 | loss-with-bfd | 2.5 s | 2.0 s | 8.8 s |
-| 07:18 | 6.3 | loss-without-bfd | 31.4 s | 2.8 s | |
-| 07:19 | 5.5 | loss-with-bfd | 2.5 s | 1.4 s | 8.5 s |
+| 2026-11-22 23:09 | 98 | loss-with-bfd | 2.7 s | 0.2 s | 3.5 s |
+| 2026-11-22 23:10 | 86 | loss-without-bfd | 30.5 s | 2.4 s | |
+| 2026-11-22 23:11 | 65 | loss-with-bfd | 1.3 s | 1.8 s | 8.9 s |
+| 2026-11-22 23:11 | 61 | loss-without-bfd | 30.3 s | 2.6 s | |
+| 2026-11-23 01:18 | 46 | loss-with-bfd | 2.6 s | 3.1 s | 8.9 s |
 
-`failover_again` is longer than `failover` for two reasons, both seen
-in r1's, r2's and r3's logs:
+`failover_again` is longer than `failover` because of the LSP
+generation backoff, seen in r1's log. Each change r1 makes to its LSP
+within 30 s of the one before doubles the wait for the next: 1, 2, 4,
+then 8 s. In the 01:18 run, r1's LSP changed at 01:17:54, 01:18:10, 15
+and 23. BFD went Down for the second loss at 01:18:16.78; r1 moved its
+own routes at once, but its LSP went out at 23.11, 8.0 s after the one
+before. The 23:09 run came after a quiet time, so its second LSP went
+out 0.3 s after BFD Down.
 
-- Flooding. On a point-to-point circuit isisd sends the LSPs it owes,
-  then sends them again every 5 s until the neighbour acknowledges
-  them (`MINIMUM_LSP_TRANSMISSION_INTERVAL` in
-  `lib/isis/adjacency/p2p_circuit.rb`), and a new LSP waits for that
-  timer. In the 07:16 run r1 generated its LSP for the second loss at
-  07:16:46.47, 0.6 s after BFD went Down, but r3 stored it at 49.69,
-  5.2 s after the one before it.
-- The backoff. In the runs that follow `loss-without-bfd`, r1 had
-  changed its LSP several times within 30 s, so the wait had doubled:
-  in the 07:19 run, BFD Down at 07:19:10.05 and the LSP at 17.38, 8 s
-  after the one before.
+Flooding adds no wait. r3 stored r1's LSP 3 ms after r1 generated it:
+isisd sends a new LSP at once when the neighbour has acknowledged the
+one before (`clear_srm` in `lib/isis/database/update_process.rb`).
 
-`sim-misbehaves`, two runs: r2 Down 2.2 and 2.1 s after s1 was told to
-go silent. The script waits 1 s after Up, then the Detection Time.
+`sim-misbehaves`, two runs, both at 01:18: r2 Down 3.0 and 2.1 s
+after s1 was told to go silent. The script waits 1 s after Up, then
+the Detection Time.
 
 ## Image
 
