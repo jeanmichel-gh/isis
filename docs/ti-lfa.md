@@ -223,3 +223,10 @@ was enabled".
 
 It is a `kernel_` test, so `rake interop` runs it, and CI's `interop
 (FRR)` job, which loads the MPLS modules. It took 33 s here.
+
+## Behaviours
+
+isis4r-sim runs the fault catalog's behaviours (`docs/protocol-testing.md`,
+"Behaviours"): a flapping adjacency, a stale LSP and a moved SRGB, each
+with what the RFC expects of the PLR. `test/unit/sim/behaviour_test.rb`
+runs each against a PLR on the manual clock.

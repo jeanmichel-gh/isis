@@ -128,7 +128,9 @@ lib/isis/validation.rb     the receive rules, each a named finding with its
                            clause and an action per receive policy
                            (docs/protocol-testing.md)
 lib/isis/fault.rb          the fault catalog: crafted inputs, each making
-                           one finding (docs/protocol-testing.md)
+                           one finding; TI-LFA's topologies, packets at the
+                           PLR, and behaviours the simulator runs
+                           (docs/protocol-testing.md)
 lib/isis/mpls/             the MPLS label stack, RFC 3032 (LabelStack)
 lib/isis/spf/              route calculation; graph.rb and ti_lfa.rb, the
                            TI-LFA computation (docs/ti-lfa.md)
