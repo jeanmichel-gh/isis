@@ -1,0 +1,59 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: s1 misbehaves
+description: >
+  The catalog's three behaviours (ISIS::Fault::BEHAVIOURS), run by
+  isis4r-sim through its HTTP API, one at a time. flap: s1's hellos on
+  eth1 stop and start, so r3 loses s1 and t1 and gets them back (RFC
+  9855 1). stale_lsp: t1's LSP is held as it was while s1 reports it
+  gone, so the two-way check drops t1 (RFC 1142 7.2.8.2). srgb_change:
+  s1's SRGB moves by 100000, so r3's label toward t1 moves into the new
+  block, and back when the behaviour stops (RFC 8660 2.4).
+timeout: 400
+
+steps:
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 120
+
+  # flap: once, 15 s down, longer than r3's hold time of 10 s.
+  - sim: behave
+    behaviour: flap
+    circuit: eth1
+    count: 1
+    down: 15
+    up: 15
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, present: false } }
+    within: 30
+    measure: lost
+  - expect: { mpls_label: { node: r3, label: 23010, present: false } }
+    within: 10
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, metric: 20 } }
+    within: 60
+    measure: back
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, state: installed } }
+    within: 30
+  - sleep: 15
+
+  # stale_lsp on t1.
+  - sim: behave
+    behaviour: stale_lsp
+    router: t1
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, present: false } }
+    within: 30
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.10/32, present: false } }
+    within: 30
+  - sim: behave.stop
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, metric: 20 } }
+    within: 60
+  - expect: { isis_route: { node: f1, prefix: 10.255.0.10/32, metric: 50 } }
+    within: 60
+
+  # srgb_change on s1: 19000 moves to 119000.
+  - sim: behave
+    behaviour: srgb_change
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 119010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23009, op: php, next_hop: s1, state: installed } }
+  - sim: behave.stop
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
