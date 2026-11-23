@@ -4,8 +4,8 @@ What isisd and FRR's isisd do with each entry of the fault catalog
 (`ISIS::Fault`, `docs/protocol-testing.md`), beside what the RFC
 expects. As bfd4r's and vtep4r's `docs/fault-matrix.md`.
 
-**Generated** by `rake fault_matrix` on 2026-11-23, Linux 7.0.0-43-generic,
-isis4r 0.1.0, Ruby 3.3.8, FRR 10.5.1. Do not edit it by hand; run again, as root:
+**Generated** by `rake fault_matrix` on 2026-11-23, Linux 7.0.0-1020-azure,
+isis4r 0.1.0, Ruby 3.3.14, FRR 10.5.1. Do not edit it by hand; run again, as root:
 
 ```sh
 sudo env "PATH=$PATH" ISIS_FRR=1 rake fault_matrix
@@ -58,7 +58,7 @@ neither.
 | `ti_lfa_no_path` | the failure cuts the destination off | unprotected, no_path | unprotected, no_path | no backup |
 | `ti_lfa_ecmp` | another primary first hop survives: no repair list | ECMP | ECMP | no backup |
 | `ti_lfa_overload` | the only other path crosses B, overloaded: no transit, so no repair | unprotected, no_path | unprotected, no_path | no backup |
-| `ti_lfa_too_deep` | P and Q 30 hops apart: 31 labels, past the kernel's 30 | unprotected, too_deep | not run | not run |
+| `ti_lfa_too_deep` | P and Q 30 hops apart: 31 labels, past the kernel's 30 | unprotected, too_deep | link fallback, via A0: Node-SID(D) | **via A0: Node-SID(A0), Adj-SID(A0-A1), Adj-SID(A1-A2), Adj-SID(A2-A3), Adj-SID(A3-A4), Adj-SID(A4-A5), Adj-SID(A5-A6), Adj-SID(A6-A7), Adj-SID(A7-A8), Adj-SID(A8-A9), Adj-SID(A9-A10), Adj-SID(A10-A11), Adj-SID(A11-A12), Adj-SID(A12-A13), Adj-SID(A13-A14), Adj-SID(A14-A15), Adj-SID(A15-A16), Adj-SID(A16-A17), Adj-SID(A17-A18), Adj-SID(A18-A19), Adj-SID(A19-A20), Adj-SID(A20-A21), Adj-SID(A21-A22), Adj-SID(A22-A23), Adj-SID(A23-A24), Adj-SID(A24-A25), Adj-SID(A25-A26), Adj-SID(A26-A27), Adj-SID(A27-A28), Adj-SID(A28-A29), Adj-SID(A29-A30), Adj-SID(A30-D) (32 labels)** |
 
 isisd's node repair on `ti_lfa_too_deep` falls back to the link's,
 as its node protection does (`docs/ti-lfa.md`). FRR shows no backup
@@ -87,4 +87,4 @@ known gap of isisd: a label route has no backup in the kernel
 The catalog's behaviours act over time and are not in the matrix.
 `test/unit/sim/behaviour_test.rb` runs each against a PLR.
 
-Differs from the RFC: `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `packet_prefix_sid` (isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `ti_lfa_figure_1` (FRR isisd).
+Differs from the RFC: `packet_prefix_sid` (isisd), `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_figure_1` (FRR isisd), `ti_lfa_too_deep` (FRR isisd).
