@@ -154,7 +154,8 @@ test/functional/           tests that put PDUs on a real interface
 test/interop/              against FRR's isisd and SR Linux, in network
                            namespaces and containers: root, then
                            ISIS_FRR=1 rake interop, ISIS_FRR=1 rake interop_ti_lfa,
-                           ISIS_SRL=1 rake interop_srl
+                           ISIS_SRL=1 rake interop_srl; ISIS_FRR=1 rake
+                           fault_matrix writes docs/fault-matrix.md
 docs/                      the guides, each with a test that asserts its
                            load-bearing claims
 routescope/labs/           labs of isis4r and FRR, as routescope reads them;
@@ -2462,6 +2463,13 @@ decisions here as they are made.
    TI-LFA's topologies on real routers, `frr_ti_lfa_test.rb`, run apart:
    `rake interop_ti_lfa`, and CI's `interop (TI-LFA)` job. They took the
    FRR job from under 4 minutes to 9 to 11 in CI (2026-11-22).
+   `rake fault_matrix` runs the three files that measure the fault
+   catalog (SR data, topologies, packets), one at a time, each recording
+   what it found, and writes `docs/fault-matrix.md` from it. CI's
+   `interop (TI-LFA)` job runs it and keeps the document as an artifact;
+   `rake interop` leaves the three out. On this machine, loaded by other
+   work, ti_lfa_too_deep's 33 routers lost their adjacencies
+   (2026-11-23), so the document in the repository comes from CI.
 
 2. **routescope, for labs a person watches and drives.** routescope does
    not build labs. It is a web console over labs that docker compose or

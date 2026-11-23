@@ -252,7 +252,7 @@ method other than GET and POST.
 | `GET /api/sent` | the faults injected and the octets sent, each with when |
 | `GET /api/catalog` | the fault catalog (`ISIS::Fault`, `docs/protocol-testing.md`) and each POST's parameters |
 | `GET /api/events` | the events after `since=N`, as the socket's `events.subscribe` replays them |
-| `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a simulated system's LSPs |
+| `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a system's LSPs, a simulated one's or the simulator's own |
 | `POST /api/plan` | the same, built and answered, injected nowhere |
 | `POST /api/fault.clear` | `router`: takes the injected TLVs out, of one system or, without it, every one |
 | `POST /api/behave` | `name` and its parameters: runs a behaviour of the catalog, one at a time |
@@ -267,7 +267,9 @@ A fault replaces the system's Router Capability with the entry's, and
 adds the entry's reachability after the system's: a prefix of its own,
 `10.255.250.N/32` unless `prefix` says, with index `index`, near the top
 of the system's SRGB unless given. The system needs segment routing. It
-stays until cleared. A neighbour learns it as any change, and isisd there
+stays until cleared. In the simulator's own LSP, the entry's SR data is
+that of its neighbours' next hop; what the simulator forwards is not
+changed. A neighbour learns it as any change, and isisd there
 makes the entry's finding.
 
 A behaviour (`docs/protocol-testing.md`, "Behaviours") is misbehaviour
