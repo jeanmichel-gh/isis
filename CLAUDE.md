@@ -2417,6 +2417,10 @@ daemon (`test/interop/kernel_backup_test.rb`). Step 2c, the switch on a
 failure carrier does not show, is measured first. Step 3:
 `ti_lfa: node`, node protection with link fallback. Step 5b:
 `policy.ti_lfa`, the mode changed while isisd runs.
+Step 6e3: `routescope/labs/isis4r-tilfa`, six isisd and one FRR
+10.7.1 in a ring with a chord and an isis4r-sim, and four scenarios
+that check the repairs, a failover, the catalog's SR entries and its
+behaviours (`docs/ti-lfa.md`, "In a lab").
 
 Testing: unusual extension combinations, compatibility and scale, and
 experimental mechanisms exercised on request. "Up to date" is a maintained

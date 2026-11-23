@@ -1,0 +1,52 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: r1 loses its link to r2
+description: >
+  r2's end of the r1-r2 link goes down, so r1's eth1 loses carrier and
+  r1's kernel takes the backups isisd installed, before isisd
+  converges. Two flows cross the failure, and what each lost is
+  measured: r1's own IP ping to r3 (RFC 9855 5, the catalog's
+  packet_ip), and f1's, which reaches r1 on r3's label (packet_prefix_sid):
+  a label route has no backup in the kernel, so it waits for isisd
+  (routescope docs/design/ti-lfa.md, step 2c). Then the link comes back.
+timeout: 300
+
+steps:
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, labels: [16006, 15000, 15000, 24003], protects: node } }
+    within: 120
+  - expect: { isis_backup: { node: r2, prefix: 10.255.0.1/32, labels: [15001, 26001], protects: link } }
+    within: 60
+  - expect: { ping: { node: r1, from: 10.255.0.1, to: 10.255.0.3 } }
+    within: 30
+  - expect: { ping: { node: f1, from: 10.255.0.7, to: 10.255.0.3 } }
+    within: 30
+  - flow: r1
+    to: 10.255.0.3
+    from: 10.0.17.1
+    as: ip
+  - flow: f1
+    to: 10.255.0.3
+    from: 10.255.0.7
+    as: labelled
+  - sleep: 2
+  - interface: r2:eth1
+    state: down
+  - expect: { backup_used: { node: r1, prefix: 10.255.0.3/32 } }
+    within: 5
+    measure: backup
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.17.2, metric: 1040 } }
+    within: 60
+    measure: converged
+  - sleep: 3
+  - expect: { flow_lost: { flow: ip } }
+  - expect: { flow_lost: { flow: labelled } }
+  - interface: r2:eth1
+    state: up
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.12.2, metric: 20 } }
+    within: 60
+    measure: restored
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, labels: [16006, 15000, 15000, 24003], protects: node } }
+    within: 30
+  - expect: { backup_used: { node: r1, prefix: 10.255.0.3/32, used: false } }
+    within: 10
+  - expect: { ping: { node: f1, from: 10.255.0.7, to: 10.255.0.3 } }
+    within: 30

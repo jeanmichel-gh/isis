@@ -28,7 +28,10 @@ class TestLabStartWait < Minitest::Test
       end
 
       topology.fetch("nodes").each do |node, config|
-        waits = config["cmd"].to_s.scan(/until ip link show (\S+)/).flatten
+        cmd = config["cmd"].to_s
+        waits = cmd.scan(/until ip link show (\S+)/).flatten
+        # `for i in eth1 eth2; do until ip link show $i ...` waits for each.
+        waits += cmd.scan(/for (\w+) in ([\w ]+?); do until ip link show \$\1\b/).flat_map { |_, list| list.split }
         next if waits.empty?
 
         checked += 1

@@ -1,0 +1,211 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: The catalog's SR entries from s1
+description: >
+  Each SR entry of isis's fault catalog (ISIS::Fault, docs/protocol-testing.md)
+  goes in s1's own LSP, with prefix 10.255.250.1/32 at index 500, through
+  isis4r-sim's HTTP API. r3, whose next hop toward t1 is s1, shows what
+  an SRGB entry does; r1 and f1 show what a Prefix-SID entry does. Then
+  the entry is cleared, and the labels are as before. FRR is 10.7.1;
+  what it does is recorded as measured on 2026-11-23, not judged.
+timeout: 600
+
+steps:
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 120
+
+  # srgb_range_zero: an SRGB of range 0. r3 ignores the
+  # SRGB of its next hop s1, so it has no label toward t1 and routes it
+  # as plain IP (RFC 8660 2.10.1), and pops s1's own SIDs. r1 and f1 label
+  # the new prefix toward r2 and r1.
+  - sim: fault
+    case: srgb_range_zero
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - expect: { mpls_label: { node: r3, label: 23010, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23500, op: php, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, metric: 20, next_hop: 10.0.39.2 } }
+  - expect: { mpls_label: { node: r1, label: 21500, op: swap, out_label: 22500, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # srgb_overlap: two SRGB ranges that overlap. r3 ignores the
+  # SRGB of its next hop s1, so it has no label toward t1 and routes it
+  # as plain IP (RFC 8660 2.10.1), and pops s1's own SIDs. r1 and f1 label
+  # the new prefix toward r2 and r1.
+  - sim: fault
+    case: srgb_overlap
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - expect: { mpls_label: { node: r3, label: 23010, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23500, op: php, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, metric: 20, next_hop: 10.0.39.2 } }
+  - expect: { mpls_label: { node: r1, label: 21500, op: swap, out_label: 22500, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # srgb_reserved: an SRGB in the reserved labels 0 to 15. r3 ignores the
+  # SRGB of its next hop s1, so it has no label toward t1 and routes it
+  # as plain IP (RFC 8660 2.10.1), and pops s1's own SIDs. r1 and f1 label
+  # the new prefix toward r2 and r1.
+  - sim: fault
+    case: srgb_reserved
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - expect: { mpls_label: { node: r3, label: 23010, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23500, op: php, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { isis_route: { node: r3, prefix: 10.255.0.10/32, metric: 20, next_hop: 10.0.39.2 } }
+  - expect: { mpls_label: { node: r1, label: 21500, op: swap, out_label: 22500, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # sr_capabilities_twice: the first SR-Capabilities is used, so r3
+  # keeps 19010 toward t1. On the clear, FRR 10.7.1's isisd drops the
+  # prefix, but zebra and the kernel keep its route on 21500 (ABOUT.md);
+  # only an isisd restart takes it out. The checks read isisd's tables.
+  - sim: fault
+    case: sr_capabilities_twice
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - sleep: 5
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+  - expect: { mpls_label: { node: r1, label: 21500, op: swap, out_label: 22500, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # prefix_sid_vl_invalid: a Prefix-SID with the V and L flags, which an
+  # index cannot carry. r1 ignores it and routes 10.255.250.1 as plain IP.
+  # FRR 10.7.1 does not route the prefix at all.
+  - sim: fault
+    case: prefix_sid_vl_invalid
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - sleep: 5
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+  - expect: { isis_route: { node: f1, prefix: 10.255.250.1/32, present: false } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # prefix_sid_label: a Prefix-SID carried as a label, which isis4r has
+  # no code for (a gap). Neither r1 nor f1 installs a label.
+  - sim: fault
+    case: prefix_sid_label
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - sleep: 5
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+
+  # algorithm_not_advertised: s1 drops its SR-Algorithm, so its
+  # Prefix-SIDs are ignored: r1 has no 21500, and r3 drops 23009, s1's
+  # own. FRR 10.7.1 installs 16500.
+  - sim: fault
+    case: algorithm_not_advertised
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23009, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r3, label: 23009, op: php, next_hop: s1, state: installed } }
+    within: 30
+
+  # prefix_sid_duplicate: the index of the new prefix is also another
+  # prefix's. isis4r leaves both out (RFC 8660 2.5 recommends a
+  # tie-break it does not build). FRR 10.7.1 installs 16500.
+  - sim: fault
+    case: prefix_sid_duplicate
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - sleep: 5
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 21500, state: installed } }
+    within: 30
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r3, label: 23010, op: swap, out_label: 19010, next_hop: s1, state: installed } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21500, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: f1, label: 16500, present: false } }
+    within: 30

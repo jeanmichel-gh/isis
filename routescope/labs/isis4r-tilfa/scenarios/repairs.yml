@@ -1,0 +1,68 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: The repairs on the ring
+description: >
+  Each PLR's repairs, as computed before any failure. r1 protects its
+  link to r2 against node r2: its repair to r3 is RFC 9855 5.4's, P r6
+  and Q r4 apart, Node-SID(r6) in f1's SRGB, the Adj-SIDs r6-r5 and
+  r5-r4, then r3's label in r4's SRGB. With link protection Q is r5.
+  FRR, f1, protects its link to r1, and its repair is recorded as it
+  is. No pauses: a check of isis4r, not a lesson.
+timeout: 240
+
+steps:
+  - expect: { isis_adjacencies: { node: r1, level: 2, up: 2 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: r5, level: 2, up: 3 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: f1, level: 2, up: 2 } }
+    within: 90
+  - expect: { isis_route: { node: r1, prefix: 10.255.0.10/32, metric: 40 } }
+    within: 60
+
+  # Node protection: around r2, through f1.
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.17.2, labels: [16006, 15000, 15000, 24003], protects: node } }
+    within: 60
+    name: r1 to r3, P r6 and Q r4 apart (RFC 9855 5.4)
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.5/32, next_hop: 10.0.17.2, labels: [16006, 15000], protects: node } }
+    name: r1 to r5, Q r5 itself, so no label after the Adj-SID
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.10/32, next_hop: 10.0.17.2, labels: [16006, 15000, 15000, 24010], protects: node } }
+    name: r1 to t1, simulated behind s1, the same repair
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.2/32, next_hop: 10.0.17.2, labels: [16006, 15000, 25002], protects: link } }
+    name: r2's own prefix falls back to the link's repair
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.6/32, present: false } }
+    name: r6 is not reached through r2, so it has no backup
+  # r2, r3, r4, r5, s1 and t1: r2's own by the link fallback.
+  - expect: { ti_lfa: { node: r1, protected: 6, unprotected: 0 } }
+
+  # Link protection: Q moves to r5, past the chord's far end.
+  - isis: policy.ti_lfa
+    node: r1
+    dev: eth1
+    mode: link
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, next_hop: 10.0.17.2, labels: [16006, 15000, 25003], protects: link } }
+    within: 15
+    name: r1 to r3, P r6 and Q r5 adjacent (RFC 9855 5.3)
+  - isis: policy.ti_lfa
+    node: r1
+    dev: eth1
+    mode: "off"
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, present: false } }
+    within: 15
+  - isis: policy.ti_lfa
+    node: r1
+    dev: eth1
+    mode: node
+  - expect: { isis_backup: { node: r1, prefix: 10.255.0.3/32, labels: [16006, 15000, 15000, 24003], protects: node } }
+    within: 15
+
+  # r2 protects its side of the same link: P r5, its Adj-SID to r6,
+  # then r1's label in r6's SRGB.
+  - expect: { isis_backup: { node: r2, prefix: 10.255.0.1/32, next_hop: 10.0.25.2, labels: [15001, 26001], protects: link } }
+    within: 30
+
+  # FRR 10.7.1 on f1, recorded: it pushes the first hop's own Node-SID,
+  # and ends with the destination's label in the destination's own SRGB
+  # where RFC 9855 7.1 asks for Q's (r5's: 25003).
+  - expect: { isis_backup: { node: f1, prefix: 10.255.0.3/32, next_hop: 10.0.67.1, labels: [26006, 15000, 23003] } }
+    within: 30
+    name: f1 to r3, as FRR 10.7.1 builds it

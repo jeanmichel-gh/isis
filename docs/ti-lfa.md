@@ -234,3 +234,13 @@ isis4r-sim runs the fault catalog's behaviours (`docs/protocol-testing.md`,
 "Behaviours"): a flapping adjacency, a stale LSP and a moved SRGB, each
 with what the RFC expects of the PLR. `test/unit/sim/behaviour_test.rb`
 runs each against a PLR on the manual clock.
+
+## In a lab
+
+`routescope/labs/isis4r-tilfa` runs TI-LFA in routescope: six isisd and
+one FRR 10.7.1 in a ring with a chord, and an isis4r-sim behind r3. Its
+scenarios check r1's node repair with P and Q apart (RFC 9855 5.4), r2's
+link repair, FRR's repair, a failover with flows, the catalog's SR
+entries from the simulator, and its behaviours. Its `ABOUT.md` holds
+what each measured. `test/scenario/isis4r_tilfa_lab_test.rb` computes
+the repairs from the lab's own files.
