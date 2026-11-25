@@ -1,7 +1,9 @@
 # SRv6 in isis4rd
 
-Status: draft, 2026-11-25, waiting for the owner's approval. No code
-until then.
+Status: approved by the owner, 2026-11-25 ("approve the SRv6 spec,
+isis #135"), with the answers in "Decisions", at the end. The owner gave
+no separate answers, so each question takes this spec's recommended
+answer, the default taken at approval. No code is started yet.
 
 This is P6's IS-IS half in routescope's `docs/protocol-coverage.md`:
 "IS-IS SRv6 locators and SIDs, BGP services over SRv6. The VM's kernel
@@ -176,7 +178,7 @@ in this spec's last step.** The mechanism:
   takes `usd`. A uSID design has to work around them, and the first
   version is simpler without them.
 
-The open questions ask the owner whether uSID should move up.
+The owner took this as the default at approval ("Decisions", 1).
 
 ### RFC 9855 section 7.2, TI-LFA over SRv6
 
@@ -561,7 +563,7 @@ interfaces:
 - **`interface`** names a dummy device that must exist. The host
   checks it in `/sys/class/net` at start, and isisd logs an error and
   installs no SID if it is missing. isisd does not create it: the lab
-  does, as FRR's labs do. See the open questions.
+  does, as FRR's labs do. See "Decisions", 4.
 - **SR-MPLS and SRv6 may run together.** `segment_routing` and `srv6`
   are independent. With both, `ti_lfa` builds the MPLS backup for IPv4
   routes and the SRv6 backup for IPv6 routes (below). Today `ti_lfa`
@@ -819,7 +821,7 @@ database. Each with its clause and an action per policy:
 
 `behavior_not_allowed` has no receiver action in 9352. Ignoring the SID
 matches 7.2's treatment of an unsupported behaviour, and is the
-proposal; the open questions ask.
+answer taken at approval ("Decisions", 6).
 
 ### 3. Negative tests: the fault catalog
 
@@ -1040,7 +1042,7 @@ every node.
   `unprotected` with `decap_local` or `no_decap_sid`.
 - **I5, the backup in the kernel.** A `seg6` route in `encap.red` mode,
   at the route's priority plus 100, as MPLS backups are. Not `inline`:
-  see open question 3.
+  see "Decisions", 3.
 - **I6, SRv6 flex-algo.** Yes, step 8, after flex-algo's steps 4 and 5.
   A locator per algorithm, with `algorithm` on each locator, End.X SID
   and route in the API. FRR refuses it, so it is tested on isisd alone
@@ -1053,43 +1055,32 @@ every node.
   `ISIS::Fault`, served by isis4r-sim's `/api/fault` and `/api/plan`,
   its behaviours by `/api/behave`, and `/api/locator`.
 - **I9, uSID.** Classic End and End.X in the first version; uN and uA
-  in step 9 (open question 1). isisd reads and routes to FRR's uSID
+  in step 9 ("Decisions", 1). isisd reads and routes to FRR's uSID
   locators from the first version.
 - **I10, LAN End.X.** Yes, in step 2: one LAN End.X SID per neighbour on
   a broadcast link, in the TLV 22 entry to the DIS (9352 8.2), each
   installed as a /128 End.X to that neighbour.
 
-## Open questions for the owner
+## Decisions
 
-1. **uSID now or later?** I propose later, step 9: the first version
-   reads uSID SIDs and routes to their locators, and names them as
-   single containers in repairs, which needs no compression. Vendors
-   deploy uSID mostly; if you want it first, steps 2 and 4 instantiate
-   uN and uA, and the kernel's End.X then has no PSP.
-2. **The repair's last SID where Q is the destination's node.** The
-   kernel's End.DT6 with `table 254` does not deliver to the node
-   itself (measured). I propose the TI-LFA step measures the two ways
-   out, a lookup that sees local addresses or ending one SID earlier,
-   and picks one before code. Meanwhile such a destination is
-   unprotected, with a reason.
-3. **An End.DT6 SID in IS-IS for TI-LFA.** 9352's Table 1 allows it in
-   the End SID, but FRR 10.7.1 does not advertise one, so an FRR node
-   cannot be Q. Is a decap SID per node the right design, or should
-   repairs use the inline SRH (`mode inline`), which keeps the original
-   destination and needs no decap but is not one of RFC 8986's
-   headend behaviours?
-4. **Who makes the dummy device and sets `tunsrc`?** I propose the lab,
-   as FRR's labs do, with isisd checking and logging. isisd could make
-   the dummy by rtnetlink, and set `tunsrc` by generic netlink, at the
-   cost of more Ruby in the adapter.
-5. **MSDs.** I propose to send none until the forwarding step has
-   measured them. RFC 9352 4.1 reads a missing Max SL as 0, so a
-   headend that checks it would not send isisd an SRH until then.
-6. **`behavior_not_allowed`**, a behaviour sent where Table 1 says N.
-   The RFC gives the sender's MUST NOT only. I propose: under `:rfc`,
-   ignore the SID and report.
-7. **Flex-algo's "no IP route from an algorithm".** SRv6 needs one
-   exception, the locator of algorithm K from K's tree (RFC 9350 14.2).
-   flex-algo.md is approved without it. Should it gain a line saying
-   so, in a documents-only pull request, or does this spec carry the
-   exception alone?
+The owner approved the spec on 2026-11-25 with no separate answers.
+Each of the draft's seven questions takes the answer the draft
+recommended, as the default taken at approval. The owner may change
+any of them before its step is built.
+
+1. **uSID later**, step 9. The first version reads uSID SIDs, routes to
+   their locators, and names them as single containers in repairs.
+2. **The repair's last SID where Q is the destination's node**: the
+   TI-LFA step measures the two ways out (a lookup that sees local
+   addresses, or ending one SID earlier) and picks one before code.
+   Until then such a destination is unprotected, reason `decap_local`.
+3. **A decap SID per node**, End.DT6 in the End SID sub-TLV, as the
+   design has it, not the inline SRH. An FRR node cannot be Q
+   (`no_decap_sid`).
+4. **The lab makes the dummy and sets `tunsrc`**, as FRR's labs do.
+   isisd checks and logs.
+5. **No MSDs** until the forwarding step has measured them.
+6. **`behavior_not_allowed`**: under `:rfc`, ignore the SID and report.
+7. **This spec carries the flex-algo exception alone**: a locator of
+   algorithm K is routed from K's tree. `flex-algo.md` is approved and
+   is not changed by this pull request.
