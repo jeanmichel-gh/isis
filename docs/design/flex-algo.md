@@ -1,7 +1,8 @@
 # Flexible algorithm in isis4rd
 
-Status: draft, 2026-11-25, waiting for the owner's approval. No code
-until then.
+Status: draft, 2026-11-25. The owner answered four of its questions the
+same day ("Decisions", at the end). Three stay open. No code until the
+owner approves.
 
 This is P9 in routescope's `docs/protocol-coverage.md`: "Application-
 specific link attributes, then the Flexible Algorithm Definition, its
@@ -242,8 +243,8 @@ frr:10.7.1`, `FRRouting 10.7.1_git (f3e3c8b9d984)`.
 - Alone, it did not list 128 in SR-Algorithm, did not advertise the
   algorithm 128 Prefix-SID, and `show isis flex-algo` said "Source: Not
   found" for the elected FAD. I do not know why. A router with no
-  neighbor may be the reason. The interop step measures it with
-  neighbors, and measures how FRR encodes ASLA.
+  neighbor may be the reason. The interop tests and the lab measure it
+  with neighbors, and how FRR encodes ASLA.
 
 So the released FRR has flex-algo, and an interop lab is allowed.
 
@@ -340,7 +341,7 @@ regenerates the LSP. The LSP generation timer covers it.
 2. For each configured algorithm, the winner: highest priority, then
    highest System ID.
 3. Supported or not: calculation type 0; metric type 0, 1 or 2; flags
-   none set (M only after the M flag step); sub-sub-TLVs 1, 2, 3, 5 and
+   none set (M only once the M flag is built, later); sub-sub-TLVs 1, 2, 3, 5 and
    4. Anything else: not supported, with the reason kept for the view.
 
 A Level 1 copy of the Level 2 winner (section 5.1, "MAY") is not built.
@@ -471,8 +472,8 @@ clause and its action per policy (`:rfc`, `:strict`, `:lenient`):
 | `fad_subtlv_twice` | 9350 6.1 to 6.5, one sub-sub-TLV twice in one FAD | ignore the FAD |
 | `fad_split_differs` | 9350 6, fixed parts differ | use the first in the lowest LSP |
 | `fad_split_subtlv_twice` | 9350 6.1 to 6.4, across split FADs | use the first in the lowest LSP |
-| `fad_s_bit` | 9350 5.1, FAD in a TLV 242 with S set | see open question 4 |
-| `fad_eag_length` | 9350 6.1 to 6.3, not a multiple of 4 | see open question 4 |
+| `fad_s_bit` | 9350 5.1, FAD in a TLV 242 with S set | see open question 2 |
+| `fad_eag_length` | 9350 6.1 to 6.3, not a multiple of 4 | see open question 2 |
 | `fad_unsupported` | 9350 5.3, calc type, metric type, flag or sub-sub-TLV not supported | stop taking part |
 | `fapm_algorithm_range` | 9350 8 | ignore the FAPM |
 | `fapm_twice` | 9350 8, same algorithm twice | use the first |
@@ -483,7 +484,7 @@ clause and its action per policy (`:rfc`, `:strict`, `:lenient`):
 | `asla_l_flag_mixed` | 9479 4.2, L differs for one application | L set |
 | `asla_conflict` | 9479 4.2, two values for one application and link | use the first in the lowest LSP |
 | `asla_srlg_no_link_id` | 9479 4.3, no link identifier, or one twice | ignore the TLV |
-| `prefix_sid_algorithm_twice` | 8402 3.1, one prefix and algorithm, two SIDs | see open question 5 |
+| `prefix_sid_algorithm_twice` | 8402 3.1, one prefix and algorithm, two SIDs | see open question 3 |
 
 `:algorithm_not_advertised` already covers a Prefix-SID for an
 algorithm its node does not list.
@@ -538,19 +539,21 @@ new TLVs and sub-TLVs.
 
 ## Labs
 
-Two labs in isis's `routescope/labs/`, as `isis4r-tilfa` is.
+One lab, `isis4r-flexalgo`, in isis's `routescope/labs/`, with one FRR
+node, as `isis4r-tilfa` has (the owner's decision, 2026-11-25).
 
-### `isis4r-flexalgo`, on our own code
+### `isis4r-flexalgo`
 
-The main lab. Every router runs isis4r. Three paths from r1 to r4, so
-three algorithms give three paths:
+Every router but f1 runs isis4r. f1 is FRR 10.7.1, on the bottom path,
+so algorithm 128's path crosses it. Three paths from r1 to r4, so three
+algorithms give three paths:
 
 ```
          r2  (top: IGP 10 + 10, delay 20 ms each, red)
        /    \
      r1 - r5 - r4 -- s1 (isis4r-sim)
-       \    /
-         r3  (bottom: IGP 20 + 20, delay 2 ms each)
+       \       /
+         r3 - f1  (bottom: IGP 20 + 10 + 10, delay 2 + 1 + 1 ms)
 
   middle, r1-r5-r4: IGP 15 + 15, delay 5 ms each
 ```
@@ -570,19 +573,18 @@ faults. They send packets with an algorithm's label, as the TI-LFA
 packet group does, and check where they leave. The numbers above are a
 design. The lab's `ABOUT.md` gives the measured ones.
 
-### `isis4r-flexalgo-frr`, interop
+The scenarios with f1:
 
-The same topology with r3 as FRR 10.7.1. Algorithm 128's path then
-crosses FRR. Its scenarios:
+- f1 wins the FAD on priority, then an isis4r router does: every router
+  selects the same winner.
+- f1's labels for 128 and 129 agree with the isis4r routers' on the
+  path.
+- f1's ASLA and isisd's are read both ways.
+- A FAD with a constraint one side lacks: that side stops taking part,
+  and the other routes around it.
 
-- FRR wins the FAD on priority, then isisd does: both select the same
-  winner.
-- Each side's labels for 128 and 129 agree on the path.
-- FRR's ASLA and isisd's are read both ways.
-- A FAD with a constraint one side lacks: both stop taking part.
-
-Its `ABOUT.md` says it is the interop check (CLAUDE.md, "Our own Ruby
-code first").
+Its `ABOUT.md` says f1 is the interop check (CLAUDE.md, "Our own Ruby
+code first"), as `isis4r-tilfa`'s does.
 
 A teaching lab in routescope, with pauses, as `ti-lfa` is, belongs to
 the routescope specification.
@@ -601,7 +603,7 @@ the routescope specification.
   TI-LFA.
 - Kernel: an algorithm's label routes installed and removed
   (`test/interop/kernel_*`).
-- Lab: the two labs' scenarios, through routescope.
+- Lab: the lab's scenarios, through routescope.
 
 ## Work
 
@@ -626,13 +628,15 @@ One pull request each, in order. Each is small.
    surviving links with B clear, `fa_ti_lfa_constraint`.
 7. **The injector.** The topology keys, the behaviours, `/api/fault`,
    then the fault matrix against FRR in network namespaces.
-8. **`isis4r-flexalgo`.** The lab and its scenarios.
-9. **`isis4r-flexalgo-frr`.** The interop lab.
-10. **The M flag and FAPM between levels** (section 13.1), if the owner
-    wants it now (open question 2).
+8. **`isis4r-flexalgo`.** The lab, with f1, and its scenarios.
 
-Then routescope's specification, then its pull requests, and the labs
+Then routescope's specification, then its pull requests, and the lab
 in CI there.
+
+Later, after the lab (the owner's decision, 2026-11-25): **the M flag
+and FAPM between levels** (section 13.1). Until then isisd stops taking
+part in a FAD with M set, and flex-algo stays inside one level. The
+FAPM codec and its findings are still built in step 3.
 
 ## Out of scope
 
@@ -645,28 +649,27 @@ in CI there.
 - Multi-topology. isisd has none, and the FAD is topology independent
   (9350 section 5.3).
 
+## Decisions
+
+The owner's answers, 2026-11-25:
+
+1. **SRLG now**, in steps 1 and 2: TLVs 138 and 238 and the
+   exclude-SRLG rule.
+2. **The M flag and inter-level FAPM later**, after the lab. See "Work".
+3. **One lab**, `isis4r-flexalgo`, with an FRR node, f1.
+4. **ASLA only.** isisd sends no legacy link attributes for flex-algo
+   (9479 section 6.1). It still reads legacy ones when an ASLA's L flag
+   says to.
+
 ## Open questions for the owner
 
-1. **SRLG now or later?** Building it means TLVs 138 and 238 and the
-   exclude-SRLG rule. Without it, isisd stops taking part in any FAD
-   with an SRLG exclude, which is correct but limits interop. I propose
-   now, in steps 1 and 2.
-2. **The M flag and inter-level FAPM.** Without them, isisd stops
-   taking part in a FAD with M set, and flex-algo stays inside one
-   level. RFC 9350 calls inter-level flex-algo without M "NOT
-   RECOMMENDED". I propose step 10 after the labs, or a spec of its own.
-3. **Copy the Level 2 FAD into Level 1?** Section 5.1 makes it a "MAY".
+1. **Copy the Level 2 FAD into Level 1?** Section 5.1 makes it a "MAY".
    I propose not now.
-4. **The two receive rules with no stated action**: a FAD in a TLV 242
+2. **The two receive rules with no stated action**: a FAD in a TLV 242
    with S set, and an admin group whose length is not a multiple of 4.
    The RFC says "MUST" for the sender only. I propose: under `:rfc`,
    ignore the FAD and report; under `:lenient`, use it. Note FRR's
-   behaviour in the interop step.
-5. **Two Prefix-SIDs for one prefix and one algorithm.** RFC 8402
+   behaviour in the lab.
+3. **Two Prefix-SIDs for one prefix and one algorithm.** RFC 8402
    section 3.1 asks the tuple be unique, but names no receiver action.
    I propose: use the first, and report.
-6. **Lab names.** `isis4r-flexalgo` and `isis4r-flexalgo-frr`, or one
-   lab with an FRR node, as `isis4r-tilfa` has?
-7. **Legacy link attributes too?** I propose ASLA only (9479 section
-   6.1). A router that reads only legacy sub-TLVs would not see them;
-   FRR 10.7.1's behaviour decides whether that matters.
