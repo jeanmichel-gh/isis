@@ -146,6 +146,81 @@ interfaces:
       te_metric: 100, srlg: [10] }
 ```
 
+Flex-algo (RFC 9350) is a top-level `flex_algo` list: the algorithms
+this system takes part in, each with `algorithm` (128 to 255),
+`advertise` (send the FAD, true by default), `priority`, `metric_type`
+(`igp`, `delay` or `te`), and the rules `exclude_any`, `include_any`,
+`include_all` (colors from `affinity_map`) and `exclude_srlg`. A prefix
+gives `algorithm_sids`, an index per algorithm. It needs
+`segment_routing`. For each algorithm and level, isisd selects the
+winning FAD, the greatest priority then the greatest System ID, among
+its own and those it received (RFC 9350 section 5.3). It takes part
+when it can run the winner: then SR-Algorithm lists the algorithm, and
+each prefix with an index for it gets a Prefix-SID for it, with the
+flags of its algorithm 0 one. With no FAD, or one it cannot run, it
+stops taking part and withdraws both. A change is an event of kind
+`flex_algo`. `show.flex_algo` shows the selection; `policy.flex_algo`
+changes a FAD while isisd runs. The paths per algorithm come in a later
+step (`docs/design/flex-algo.md`, "Work").
+
+```yaml
+segment_routing: {}
+affinity_map: { red: 1 }
+flex_algo:
+  - { algorithm: 128, metric_type: delay, priority: 200 }
+  - { algorithm: 129, exclude_any: [red] }
+prefixes:
+  - { prefix: 10.255.0.1/32, metric: 0, sid: 1, algorithm_sids: { 128: 101, 129: 201 } }
+```
+
+`show.flex_algo` on a system that takes part in 128 without advertising
+it, the FAD coming from `a`:
+
+```json
+{
+  "enabled": true,
+  "configured": [
+    {
+      "algorithm": 128,
+      "advertise": false,
+      "priority": 128,
+      "metric_type": "igp"
+    }
+  ],
+  "levels": {
+    "1": {
+      "participating": [
+        128
+      ],
+      "algorithms": [
+        {
+          "algorithm": 128,
+          "participating": true,
+          "winner": {
+            "metric_type": "delay",
+            "calc_type": 0,
+            "priority": 100,
+            "origin": "0000.0000.000a",
+            "hostname": "a"
+          },
+          "supported": true,
+          "candidates": [
+            {
+              "origin": "0000.0000.000a",
+              "priority": 100,
+              "hostname": "a"
+            }
+          ]
+        }
+      ],
+      "findings": [
+
+      ]
+    }
+  }
+}
+```
+
 A change to this system's own LSP, an adjacency up or down among
 others, waits before it goes out. By default the wait is RFC 1142's
 fixed hold (7.3.21): at least `minimum_lsp_interval` seconds, 30 when
@@ -186,6 +261,7 @@ Every method:
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable, link attributes for flex-algo |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop); with TI-LFA a prefix's `backup` as on its route |
+| `show.flex_algo` | | `enabled`, the `configured` algorithms; per level the algorithms this system takes part in, and for each configured one the winning FAD with its origin, whether isis4r can run it, `participating`, the `reason` when not, every FAD offered (`candidates`, the winner first), and the `findings` on the FADs read |
 | `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
@@ -195,6 +271,7 @@ Every method:
 | `policy.summaries` | `summaries` | Level 1 summaries into Level 2, at both levels |
 | `policy.redistribute` | `kinds` | the host route kinds redistributed |
 | `policy.overload` | `on` | the overload bit in every level's LSP |
+| `policy.flex_algo` | `algorithm`, and any of `advertise`, `priority`, `metric_type`, `exclude_any`, `include_any`, `include_all`, `exclude_srlg` | change a configured algorithm's FAD while running, checked as the file's `flex_algo` is; each level selects again, and the LSPs go out with the new FAD |
 | `policy.ti_lfa` | `interface`, `mode` | TI-LFA on one interface while running: `off`, `link` or `node`, checked as the file's `ti_lfa` is; each level runs again, so the backups are computed, installed or withdrawn at once |
 | `api.info` | | versions, every method, the last event number |
 | `events.subscribe` | `since` | turns the connection into a stream of events |

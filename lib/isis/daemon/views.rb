@@ -150,6 +150,26 @@ module ISIS
           end }
       end
 
+      # Flex-algo (docs/design/flex-algo.md, "API and CLI"): the configured
+      # algorithms, then per level each one's winning FAD and its origin,
+      # whether isis4r can run it, whether this system takes part and why
+      # not, and every FAD offered, the winner first; and the findings on
+      # the FADs read. { enabled: false } without flex_algo.
+      def flex_algo
+        return { enabled: false } if @router.flex_config.empty?
+
+        names = hostnames
+        { enabled: true, configured: @router.flex_config.entries.map(&:to_hash),
+          levels: @router.flex_algos.to_h do |l, f|
+            h = f.to_hash.except(:level)
+            h[:algorithms] = h[:algorithms].map do |a|
+              a = a.merge(candidates: a[:candidates].map { |c| c.merge(hostname: names[c[:origin]]).compact })
+              a[:winner] ? a.merge(winner: a[:winner].merge(hostname: names[a[:winner][:origin]]).compact) : a
+            end
+            [l, h]
+          end }
+      end
+
       # This system's segment routing and what it learned: its blocks and
       # Adj-SIDs, then per level each reachable system's SRGB and
       # algorithms, the problems the last run met, its findings by name

@@ -125,6 +125,7 @@ module ISIS
                   :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
     attr_reader :overload, :attached, :segment_routing, :injected, :link_attributes
+    attr_accessor :flex_algo
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
@@ -132,7 +133,8 @@ module ISIS
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, lsp_generation: nil,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
-                   hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil, link_attributes: {})
+                   hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil, link_attributes: {},
+                   flex_algo: nil)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -154,6 +156,10 @@ module ISIS
       # Each circuit's attributes for flex-algo, by circuit name: :affinity
       # (groups), :delay, :te_metric and :srlg (Router#link_attributes).
       @link_attributes = link_attributes
+      # This level's Spf::FlexAlgo, or nil: the algorithms this system takes
+      # part in, for SR-Algorithm and the Prefix-SIDs, and the FADs it
+      # advertises.
+      @flex_algo = flex_algo
       @ip_addresses = ip_addresses
       @ipv6_addresses = ipv6_addresses
       @ipv6_prefixes = ipv6_prefixes
@@ -492,6 +498,8 @@ module ISIS
       list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
       if injected_capability?
         list.concat(@injected.select { |t| t.is_a?(Tlv::RouterCapability) })
+      elsif @segment_routing && @flex_algo
+        list.concat(@segment_routing.capabilities(algorithms: @flex_algo.participating, fads: @flex_algo.fads))
       elsif @segment_routing
         list << @segment_routing.capability
       end
@@ -535,10 +543,14 @@ module ISIS
 
     # A prefix as TLV 135 or 236 takes it: its prefix and metric, and with
     # segment routing the Prefix-SID its configuration gives.
+    # With flex-algo, a Prefix-SID too for each algorithm this system
+    # takes part in that the prefix's algorithm_sids names.
     def own_prefix(p)
       h = p.slice(:prefix, :metric)
-      sid = @segment_routing && SegmentRouting.prefix_sid(p)
-      sid ? h.merge(subtlvs: [sid]) : h
+      return h unless @segment_routing
+
+      sids = SegmentRouting.prefix_sids(p, @flex_algo ? @flex_algo.participating : [])
+      sids.empty? ? h : h.merge(subtlvs: sids)
     end
 
     # A prefix from the other level with the Prefix-SID its route came

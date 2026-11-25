@@ -45,6 +45,7 @@ module ISIS
         "show.labels" => ->(a, p) { a.views.labels(level: p["level"]) },
         "show.segment_routing" => ->(a, _) { a.views.segment_routing },
         "show.ti_lfa" => ->(a, _) { a.views.ti_lfa },
+        "show.flex_algo" => ->(a, _) { a.views.flex_algo },
         "show.topology" => ->(a, p) { a.views.topology(level: p["level"]) },
         "show.hostnames" => ->(a, _) { a.views.hostnames },
         "show.log" => ->(a, p) { a.views.log((p["count"] || 100).to_i.clamp(1, 1000)) },
@@ -67,6 +68,10 @@ module ISIS
         "policy.ti_lfa" => lambda do |a, p|
           a.router.set_ti_lfa(p.fetch("interface") { raise ArgumentError, "policy.ti_lfa needs interface" },
                               p.fetch("mode") { raise ArgumentError, "policy.ti_lfa needs mode: off, link or node" })
+        end,
+        "policy.flex_algo" => lambda do |a, p|
+          algorithm = p.fetch("algorithm") { raise ArgumentError, "policy.flex_algo needs algorithm" }
+          a.router.set_flex_algo(algorithm, p.except("algorithm"))
         end,
         "policy.overload" => lambda do |a, p|
           on = p["on"] == true

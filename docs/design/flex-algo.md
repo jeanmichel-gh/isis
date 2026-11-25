@@ -392,6 +392,17 @@ regenerates the LSP. The LSP generation timer covers it.
 A Level 1 copy of the Level 2 winner (section 5.1, "MAY") is not built
 (decision 5).
 
+As built in step 4: `Spf::FlexAlgo` runs after each SPF run, in the
+Decision Process. This system's own FADs come from its configuration,
+not its LSP, so it takes part from its first LSP. `FlexAlgoConfig`
+reads and checks `flex_algo` and `algorithm_sids`; `advertise` is true
+by default and `priority` 128. FADs that do not fit in the first TLV
+242's 255 octets go in a second TLV 242. `policy.flex_algo` changes a
+configured algorithm only; adding or removing one needs a restart.
+`Router.symbolize` now keeps a numeric key, since YAML reads
+`algorithm_sids: {128: 101}` with one; before, such a file crashed
+isisd. Not yet checked against FRR: that is step 7's, with the lab's.
+
 ### Calculation
 
 An algorithm's tree comes from the same `Spf::Calculation`, given a
