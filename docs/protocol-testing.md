@@ -45,6 +45,30 @@ them per node as `link_findings`.
 
 `asla_l_flag_values` covers TLV 238 too: SRLGs in one with L set.
 
+The flex-algo definition rules (RFC 9350, RFC 8402). `Spf::Definitions`
+makes the FAD ones as it reads one system's FADs and merges those split
+across sub-TLVs (section 6); `Spf::PrefixMetrics` makes the FAPM and
+Prefix-SID ones as it reads a system's prefixes. Selection (work step 4)
+will act on them.
+
+| Finding | Channel | When |
+| --- | --- | --- |
+| `fad_algorithm_range` | errors | a FAD for an algorithm outside 128 to 255 |
+| `fad_subtlv_twice` | errors | one sub-sub-TLV, types 1 to 5, twice in one FAD |
+| `fad_split_differs` | errors | FADs for one algorithm from one system whose fixed parts differ |
+| `fad_split_subtlv_twice` | errors | one sub-sub-TLV, types 1 to 4, in two FADs for one algorithm from one system |
+| `fad_s_bit` | errors | a FAD in a Router Capability TLV with the S bit set |
+| `fad_eag_length` | errors | a FAD admin group or SRLG sub-sub-TLV whose length is not a multiple of 4 |
+| `fad_unsupported` | gaps | a FAD with a calculation type, metric type, flag or sub-sub-TLV isis4r cannot run |
+| `fapm_algorithm_range` | errors | a FAPM for an algorithm outside 128 to 255 |
+| `fapm_twice` | errors | two FAPMs for one algorithm on one prefix |
+| `prefix_sid_algorithm_twice` | errors | two Prefix-SIDs for one algorithm on one prefix |
+
+A FAPM past MAX_PATH_METRIC, and one on a prefix inside its level, are
+not findings: section 8 and section 13.1 say what a receiver does, and no
+clause forbids sending them. The calculation leaves such a prefix out,
+or the FAPM unused, once the M flag is built.
+
 Two outcomes are not findings, since no sender broke a clause: an index
 past this system's SRGB, and a neighbor without an SRGB (RFC 8660
 section 2.10.1 sends the packet another way). They stay problems, in the
@@ -69,6 +93,17 @@ neither of two conflicting values, nor an affinity whose AG and EAG
 differ. `lenient` reads a mask past 8 octets, uses values beside the L
 flag as if it were clear, and with a mixed L flag uses the values of the
 sub-TLVs with L clear.
+
+On FADs, `rfc` ignores one for an algorithm outside 128 to 255, one with
+a sub-sub-TLV twice, one in a TLV 242 with S set, and one whose admin
+group or SRLG length is not a multiple of 4 (decision 6). Across one
+system's split FADs it uses the first. `strict` ignores the algorithm's
+FADs from that system on any finding. `lenient` uses the first of a
+sub-sub-TLV twice, and uses a FAD with S set or an odd length. A FAD
+isis4r cannot run stops its taking part under every policy (section
+5.3). On a prefix, the first FAPM and the first Prefix-SID for an
+algorithm are used; `strict` uses no FAPM for an algorithm sent twice,
+and neither Prefix-SID.
 
 The tests: `test/unit/validation_test.rb` for each rule,
 `test/unit/spf/sr_findings_test.rb` for each finding on hand-built LSPs
@@ -112,14 +147,16 @@ reads it with `Spf::Labels`: each makes its own finding and no other.
 Every rule has an entry, and every entry a rule, so the catalog and
 `validation.rb` cannot drift apart.
 
-### Link attributes
+### Flex-algo
 
-The link attribute entries, `ISIS::Fault::LINK_CATALOG`: one link with
-one wrong thing in its attributes for flex-algo. Each makes its finding
-in `Spf::LinkAttributes`, and `test/unit/fault_test.rb` holds them to it
-as it holds the SR entries. They are a group of their own until the
+The flex-algo entries, `ISIS::Fault::FLEX_ALGO_CATALOG`, each with one
+wrong thing: in a link's attributes for flex-algo, which
+`Spf::LinkAttributes` reads; in a FAD, which `Spf::Definitions` reads;
+or in a prefix's sub-TLVs, which `Spf::PrefixMetrics` reads. Each makes
+its finding there, and `test/unit/fault_test.rb` holds them to it as it
+holds the SR entries. They are a group of their own until the
 fault matrix against FRR covers them (`docs/design/flex-algo.md`, step
-7). `ISIS::Fault.link_catalog` lists them; `entry`, `tlvs`, `build` and
+7). `ISIS::Fault.flex_algo_catalog` lists them; `entry`, `tlvs`, `build` and
 `wire` take them as they take the SR entries.
 
 | Entry | Finding | Builds |
@@ -130,6 +167,16 @@ fault matrix against FRR covers them (`docs/design/flex-algo.md`, step
 | `asla_conflict` | `asla_conflict` | two ASLA sub-TLVs with X on one link, TE metrics 100 and 200 |
 | `asla_srlg_no_link_id` | `asla_srlg_no_link_id` | a TLV 238 with X and SRLG 10, and no link identifier |
 | `admin_group_mismatch` | `admin_group_mismatch` | an ASLA sub-TLV with X, Admin Group 1 and Extended Admin Group 2 |
+| `fad_algorithm_range` | `fad_algorithm_range` | a FAD for algorithm 127 |
+| `fad_subtlv_twice` | `fad_subtlv_twice` | a FAD with two Exclude Admin Group sub-TLVs |
+| `fad_split_differs` | `fad_split_differs` | two FADs for algorithm 128, priorities 100 and 200 |
+| `fad_split_subtlv_twice` | `fad_split_subtlv_twice` | two FADs for algorithm 128, each with an Exclude Admin Group |
+| `fad_s_bit` | `fad_s_bit` | a FAD for algorithm 128 in a Router Capability TLV with S set |
+| `fad_eag_length` | `fad_eag_length` | a FAD whose Exclude Admin Group is 5 octets |
+| `fad_unsupported` | `fad_unsupported` | a FAD for algorithm 128 with calculation type 1 |
+| `fapm_algorithm_range` | `fapm_algorithm_range` | a FAPM for algorithm 100 on the loopback |
+| `fapm_twice` | `fapm_twice` | two FAPMs for algorithm 128 on the loopback, metrics 10 and 20 |
+| `prefix_sid_algorithm_twice` | `prefix_sid_algorithm_twice` | two Prefix-SIDs for algorithm 0 on the loopback, indexes 3 and 4 |
 
 ### TI-LFA's topologies
 

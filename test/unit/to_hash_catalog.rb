@@ -83,7 +83,24 @@ module ToHashCatalog
       ee1b000000000002000100100c06040a000c0108040a000c020000000a
       ee16000000000002008100100a04080000000700000000ff
       ee03000000
-    ]
+    ],
+    # Algorithm 128, delay, SPF, priority 200, with exclude group 1,
+    # include-any 32, include-all 2, M, two SRLGs and an unknown 9. Then
+    # too short for the fixed part.
+    "ISIS::SubTlv::Fad" => %w[
+      1a2a800100c80104000000020208000000000000000103040000000404018005080000000a000000140901ff
+      1a03800100
+    ],
+    # Group 1 and group 32; group 1 and a tail.
+    "ISIS::SubTlv::FadExcludeAdminGroup" => %w[01080000000200000001 010500000002ab],
+    "ISIS::SubTlv::FadIncludeAnyAdminGroup" => %w[02040000ffff],
+    "ISIS::SubTlv::FadIncludeAllAdminGroup" => %w[030480000000],
+    # M; M and bit 1 in two octets; no flag.
+    "ISIS::SubTlv::FadFlags" => %w[040180 0402c000 040100],
+    # Two SRLGs; one and a tail.
+    "ISIS::SubTlv::FadExcludeSrlg" => %w[05080000000a00000014 05050000000aff],
+    # Algorithm 128, metric 20; a tail; too short.
+    "ISIS::SubTlv::Fapm" => %w[06058000000014 0606800000001400 06028000]
   }.freeze
 
   # Class name => { loses:, recipe:, decision: }. None measured yet.
