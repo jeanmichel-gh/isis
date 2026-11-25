@@ -67,17 +67,27 @@ them and fails if one is missing.
 - `ISIS::Pdu::Unknown`
 - `ISIS::SubTlv`
 - `ISIS::SubTlv::AdjSid`
+- `ISIS::SubTlv::AdminGroup`
+- `ISIS::SubTlv::Asla`
+- `ISIS::SubTlv::ExtendedAdminGroup`
 - `ISIS::SubTlv::Ipv4Address`
 - `ISIS::SubTlv::Ipv4InterfaceAddress`
 - `ISIS::SubTlv::Ipv4NeighborAddress`
+- `ISIS::SubTlv::Ipv6Address`
+- `ISIS::SubTlv::Ipv6InterfaceAddress`
+- `ISIS::SubTlv::Ipv6NeighborAddress`
 - `ISIS::SubTlv::LabelBlock`
 - `ISIS::SubTlv::LanAdjSid`
+- `ISIS::SubTlv::LinkDelay`
+- `ISIS::SubTlv::LinkIdentifiers`
 - `ISIS::SubTlv::List`
+- `ISIS::SubTlv::MinMaxLinkDelay`
 - `ISIS::SubTlv::PrefixSid`
 - `ISIS::SubTlv::SidLabel`
 - `ISIS::SubTlv::SrAlgorithm`
 - `ISIS::SubTlv::SrCapabilities`
 - `ISIS::SubTlv::SrLocalBlock`
+- `ISIS::SubTlv::TeDefaultMetric`
 - `ISIS::SubTlv::Unknown`
 - `ISIS::Tlv`
 - `ISIS::Tlv::ExtendedIpReachability`
@@ -98,6 +108,8 @@ them and fails if one is missing.
 - `ISIS::Tlv::Padding`
 - `ISIS::Tlv::ProtocolsSupported`
 - `ISIS::Tlv::RouterCapability`
+- `ISIS::Tlv::Srlg`
+- `ISIS::Tlv::AslaSrlg`
 - `ISIS::Tlv::ThreeWayAdjacency`
 - `ISIS::Tlv::Unknown`
 
@@ -111,3 +123,22 @@ or not measured yet. `test/unit/to_hash_catalog_test.rb` measures each
 declaration on every run, and fails when a class that includes
 `ISIS::Node` is in none of them, or in two. The counts are the file's,
 not written here.
+
+## One class under two parents
+
+A sub-TLV class may be registered under more than one parent. The ASLA
+sub-TLV (RFC 9479 section 4.2) carries the link attributes "in the same
+formats as the legacy sub-TLVs", under the same numbers (section 7.3).
+So `SubTlv::AdminGroup`, `ExtendedAdminGroup`, `TeDefaultMetric`,
+`LinkDelay` and `MinMaxLinkDelay` are registered twice: under TLV 22,
+and under `SubTlv::Asla::REGISTRY`, the ASLA's own registry. TLV 238's
+link identifiers are registered a third way, under 238. The class is the
+same each time, with the same hash key; the parent decides which
+registry a list is read from:
+
+```ruby
+asla = ISIS::SubTlv::Asla.new(applications: %w[X],
+                              subtlvs: [{ te_default_metric: { metric: 100 } }])
+asla.to_shex                                     # => "10080100101203000064"
+asla.attribute(ISIS::SubTlv::TeDefaultMetric).metric   # => 100
+```
