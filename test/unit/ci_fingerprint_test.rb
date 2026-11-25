@@ -14,7 +14,9 @@ class TestCiFingerprint < Minitest::Test
   READS = /File\.(read|readlines|open|foreach|expand_path|join)|IO\.read|Dir\[|Dir\.glob|__dir__/
 
   def sources
-    (Dir[File.join(ROOT, "{lib,exe,test,bin}/**/*.rb")] + [File.join(ROOT, "Rakefile")]) - [__FILE__]
+    # The lab image (Dockerfile) copies lib, exe and test, not the Rakefile.
+    rakefile = File.join(ROOT, "Rakefile")
+    (Dir[File.join(ROOT, "{lib,exe,test,bin}/**/*.rb")] + (File.exist?(rakefile) ? [rakefile] : [])) - [__FILE__]
   end
 
   # A line that opens a file and names a left-out one, outside a comment.
@@ -28,8 +30,11 @@ class TestCiFingerprint < Minitest::Test
     assert_empty found, "code reads a file the CI fingerprint leaves out; add it to .github/ci/fingerprint.sh"
   end
 
+  # The lab image has no .github; the repository's runs check this.
   def test_the_script_leaves_out_what_this_test_checks
-    script = File.read(File.join(ROOT, ".github/ci/fingerprint.sh"))
+    path = File.join(ROOT, ".github/ci/fingerprint.sh")
+    skip "no .github here, as in the lab image" unless File.exist?(path)
+    script = File.read(path)
     assert_includes script, '$2 != "CLAUDE.md"'
     assert_includes script, '$2 !~ /^docs\/design\//'
   end
