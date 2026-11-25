@@ -50,18 +50,22 @@ class TestFault < Minitest::Test
   end
 
   def test_every_rule_has_an_entry_and_every_entry_a_rule
-    assert_equal ISIS::Validation::RULES.keys.sort, (F.catalog + F.link_catalog).map { _1[:finding] }.sort
-    assert_equal (F.names + F.link_names).uniq, F.names + F.link_names
+    assert_equal ISIS::Validation::RULES.keys.sort, (F.catalog + F.flex_algo_catalog).map { _1[:finding] }.sort
+    assert_equal (F.names + F.flex_algo_names).uniq, F.names + F.flex_algo_names
   end
 
-  # The findings Spf::LinkAttributes makes from c's LSP, built as +name+.
-  def link_findings(name)
-    ISIS::Spf::LinkAttributes.new([F.build(name, system_id: "0000.0000.000c")]).findings.map(&:name)
+  # The findings the flex-algo readers make from c's LSP, built as
+  # +name+: Spf::LinkAttributes, Spf::Definitions, Spf::PrefixMetrics.
+  def flex_algo_findings(name)
+    lsps = [F.build(name, system_id: "0000.0000.000c")]
+    [ISIS::Spf::LinkAttributes, ISIS::Spf::Definitions, ISIS::Spf::PrefixMetrics].flat_map do |reader|
+      reader.new(lsps).findings.map(&:name)
+    end
   end
 
-  def test_each_link_entry_makes_its_finding_and_no_other
-    F.link_catalog.each do |e|
-      assert_equal [e[:finding]], link_findings(e[:name]), e[:name]
+  def test_each_flex_algo_entry_makes_its_finding_and_no_other
+    F.flex_algo_catalog.each do |e|
+      assert_equal [e[:finding]], flex_algo_findings(e[:name]), e[:name]
     end
   end
 
@@ -76,8 +80,8 @@ class TestFault < Minitest::Test
     assert_equal [{ te_metric: 100, srlg: [10] }], la.links.map(&:to_hash)
   end
 
-  def test_each_link_entry_round_trips
-    F.link_names.each do |name|
+  def test_each_flex_algo_entry_round_trips
+    F.flex_algo_names.each do |name|
       octets = F.wire(name, neighbors: { "0000.0000.0002" => 10 })
       assert_equal octets, ISIS::Pdu.factory(octets.dup).encode, name
     end

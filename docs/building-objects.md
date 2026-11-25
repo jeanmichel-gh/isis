@@ -70,6 +70,13 @@ them and fails if one is missing.
 - `ISIS::SubTlv::AdminGroup`
 - `ISIS::SubTlv::Asla`
 - `ISIS::SubTlv::ExtendedAdminGroup`
+- `ISIS::SubTlv::Fad`
+- `ISIS::SubTlv::FadExcludeAdminGroup`
+- `ISIS::SubTlv::FadExcludeSrlg`
+- `ISIS::SubTlv::FadFlags`
+- `ISIS::SubTlv::FadIncludeAllAdminGroup`
+- `ISIS::SubTlv::FadIncludeAnyAdminGroup`
+- `ISIS::SubTlv::Fapm`
 - `ISIS::SubTlv::Ipv4Address`
 - `ISIS::SubTlv::Ipv4InterfaceAddress`
 - `ISIS::SubTlv::Ipv4NeighborAddress`
@@ -141,4 +148,16 @@ asla = ISIS::SubTlv::Asla.new(applications: %w[X],
                               subtlvs: [{ te_default_metric: { metric: 100 } }])
 asla.to_shex                                     # => "10080100101203000064"
 asla.attribute(ISIS::SubTlv::TeDefaultMetric).metric   # => 100
+```
+
+The FAD sub-TLV (RFC 9350 section 6) has its own registry too,
+`SubTlv::Fad::REGISTRY`, for its rules and flags. Its three admin group
+rules are subclasses of `ExtendedAdminGroup`, each with its own type, so
+they number groups the same way. The FAPM, sub-TLV 6, is registered
+under TLVs 135 and 236, beside the Prefix-SID.
+
+```ruby
+fad = ISIS::SubTlv::Fad.new(algorithm: 128, metric_type: "delay", priority: 200,
+                            subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }])
+fad.to_shex                                      # => "1a0a800100c8010400000002"
 ```

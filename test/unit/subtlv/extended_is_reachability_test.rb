@@ -44,13 +44,13 @@ class TestSubTlvExtendedIsReachability < Minitest::Test
     assert_equal "0604c0000201", ISIS::SubTlv::Ipv4InterfaceAddress.new(s).to_shex
   end
 
-  # Registered under TLV 22, and only there: under TLV 135 the same numbers
-  # stay unknown.
+  # Registered under TLV 22, and only there: under TLV 135, 8 stays
+  # unknown, and 6 is another sub-TLV, the FAPM (RFC 9350 section 8).
   def test_registered_under_tlv_22_only
     list = ISIS::SubTlv::List.parse_under(22, octets("0604c0000201" "0804c0000202"))
     assert_equal [ISIS::SubTlv::Ipv4InterfaceAddress, ISIS::SubTlv::Ipv4NeighborAddress], list.map(&:class)
-    other = ISIS::SubTlv::List.parse_under(135, octets("0604c0000201"))
-    assert_instance_of ISIS::SubTlv::Unknown, other.first
+    other = ISIS::SubTlv::List.parse_under(135, octets("0604c0000201" "0804c0000202"))
+    assert_equal [ISIS::SubTlv::Fapm, ISIS::SubTlv::Unknown], other.map(&:class)
   end
 
   # A wrong length is kept: five octets replay as five, three as three.

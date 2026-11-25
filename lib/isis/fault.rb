@@ -50,13 +50,16 @@ module ISIS
        ->(c) { Fault.sr(c, more: [[c[:second], { flags: [], algorithm: 0, index: c[:index] }]]) }]
     ].freeze
 
-    # The link attribute entries (RFC 9479, RFC 7308): one link to the
-    # context's first neighbour, its addresses 10.0.0.1 and 10.0.0.2, with
-    # one wrong thing in its attributes for flex-algo. Spf::LinkAttributes
-    # makes the finding. Built as the SR entries are, in their own group
-    # until the fault matrix against FRR covers them (docs/design/
-    # flex-algo.md, work step 7).
-    LINK_CATALOG = [
+    # The flex-algo entries, built as the SR entries are, in their own
+    # group until the fault matrix against FRR covers them (docs/design/
+    # flex-algo.md, work step 7). First the link attributes (RFC 9479, RFC
+    # 7308): one link to the context's first neighbour, its addresses
+    # 10.0.0.1 and 10.0.0.2, with one wrong thing in its attributes for
+    # flex-algo; Spf::LinkAttributes makes the finding. Then the FADs (RFC
+    # 9350), in a Router Capability TLV of the system, which
+    # Spf::Definitions reads; then a prefix's sub-TLVs, the loopback's,
+    # which Spf::PrefixMetrics reads.
+    FLEX_ALGO_CATALOG = [
       [:asla_mask_too_long, :asla_mask_too_long, "an ASLA sub-TLV with X and a SABM of 9 octets",
        ->(c) { Fault.link(c, [{ asla: { applications: %w[X], sabm_length: 9, subtlvs: [{ te_default_metric: { metric: 100 } }] } }]) }],
       [:asla_l_flag_values, :asla_l_flag_values, "an ASLA sub-TLV with X and L set that carries a TE metric",
@@ -74,6 +77,30 @@ module ISIS
        lambda do |c|
          Fault.link(c, [{ asla: { applications: %w[X], subtlvs: [{ admin_group: { groups: [1] } },
                                                                  { extended_admin_group: { groups: [2] } }] } }])
+       end],
+      [:fad_algorithm_range, :fad_algorithm_range, "a FAD for algorithm 127",
+       ->(c) { Fault.fads(c, [{ algorithm: 127 }]) }],
+      [:fad_subtlv_twice, :fad_subtlv_twice, "a FAD with two Exclude Admin Group sub-TLVs",
+       ->(c) { Fault.fads(c, [{ algorithm: 128, subtlvs: [Fault.exclude(1), Fault.exclude(2)] }]) }],
+      [:fad_split_differs, :fad_split_differs, "two FADs for algorithm 128, priorities 100 and 200",
+       ->(c) { Fault.fads(c, [{ algorithm: 128, priority: 100 }, { algorithm: 128, priority: 200 }]) }],
+      [:fad_split_subtlv_twice, :fad_split_subtlv_twice, "two FADs for algorithm 128, each with an Exclude Admin Group",
+       ->(c) { Fault.fads(c, [{ algorithm: 128, subtlvs: [Fault.exclude(1)] }, { algorithm: 128, subtlvs: [Fault.exclude(2)] }]) }],
+      [:fad_s_bit, :fad_s_bit, "a FAD for algorithm 128 in a Router Capability TLV with S set",
+       ->(c) { Fault.fads(c, [{ algorithm: 128 }], s: true) }],
+      [:fad_eag_length, :fad_eag_length, "a FAD whose Exclude Admin Group is 5 octets",
+       ->(c) { Fault.fads(c, [{ algorithm: 128, subtlvs: [{ fad_exclude_admin_group: { groups: [1], tail: "00" } }] }]) }],
+      [:fad_unsupported, :fad_unsupported, "a FAD for algorithm 128 with calculation type 1",
+       ->(c) { Fault.fads(c, [{ algorithm: 128, calc_type: 1 }]) }],
+      [:fapm_algorithm_range, :fapm_algorithm_range, "a FAPM for algorithm 100 on the loopback",
+       ->(c) { Fault.prefix(c, [{ fapm: { algorithm: 100, metric: 10 } }]) }],
+      [:fapm_twice, :fapm_twice, "two FAPMs for algorithm 128 on the loopback, metrics 10 and 20",
+       ->(c) { Fault.prefix(c, [{ fapm: { algorithm: 128, metric: 10 } }, { fapm: { algorithm: 128, metric: 20 } }]) }],
+      [:prefix_sid_algorithm_twice, :prefix_sid_algorithm_twice,
+       "two Prefix-SIDs for algorithm 0 on the loopback, indexes 3 and 4",
+       lambda do |c|
+         Fault.prefix(c, [{ prefix_sid: { flags: %w[N], algorithm: 0, index: c[:index] } },
+                          { prefix_sid: { flags: %w[N], algorithm: 0, index: c[:index] + 1 } }])
        end]
     ].freeze
 
@@ -259,7 +286,7 @@ module ISIS
       CATALOG.map(&:first)
     end
 
-    def link_names = LINK_CATALOG.map(&:first)
+    def flex_algo_names = FLEX_ALGO_CATALOG.map(&:first)
 
     # The entries, as Hashes: the finding's channel, what the RFC expects
     # of a receiver (the finding's :rfc action) and the clause beside
@@ -269,8 +296,8 @@ module ISIS
     end
 
     # The link attribute entries, as Hashes the same way.
-    def link_catalog
-      entries(LINK_CATALOG)
+    def flex_algo_catalog
+      entries(FLEX_ALGO_CATALOG)
     end
 
     def entries(list)
@@ -282,8 +309,8 @@ module ISIS
     end
 
     def entry(name)
-      (catalog + link_catalog).find { |e| e[:name] == name } or
-        raise ArgumentError, "unknown fault #{name.inspect}; the faults are #{(names + link_names).join(', ')}"
+      (catalog + flex_algo_catalog).find { |e| e[:name] == name } or
+        raise ArgumentError, "unknown fault #{name.inspect}; the faults are #{(names + flex_algo_names).join(', ')}"
     end
 
     # What an entry is built for: the system, its loopback and index, its
@@ -380,6 +407,20 @@ module ISIS
       id, metric = ctx[:neighbors].first || ["0000.0000.0002", 10]
       ["#{id}.00", metric]
     end
+
+    # A FAD entry's TLVs: a Router Capability TLV of the context's system,
+    # S set when +s+, with one FAD sub-TLV per Hash of +fads+.
+    def fads(ctx, fads, s: false)
+      [Tlv::RouterCapability.new(router_id: ctx[:router_id], s: s, subtlvs: fads.map { { fad: _1 } })]
+    end
+
+    # A prefix entry's TLVs: the loopback, metric 0, with +subtlvs+.
+    def prefix(ctx, subtlvs)
+      [Tlv::ExtendedIpReachability.new({ prefix: ctx[:loopback], metric: 0, subtlvs: subtlvs })]
+    end
+
+    # A FAD's Exclude Admin Group sub-TLV for +group+, as a Hash.
+    def exclude(group) = { fad_exclude_admin_group: { groups: [group] } }
 
     # An ASLA sub-TLV with X and a TE default metric, as a sub-TLV Hash.
     def asla_te(metric)

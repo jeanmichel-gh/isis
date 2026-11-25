@@ -15,11 +15,11 @@ class TestProtocolTestingDoc < Minitest::Test
 
   def test_every_fault_with_its_finding_and_no_other
     listed = DOC.scan(/^\| `(\w+)` \| `(\w+)` \|/).to_h { |n, f| [n.to_sym, f.to_sym] }
-    assert_equal (ISIS::Fault.catalog + ISIS::Fault.link_catalog).to_h { [_1[:name], _1[:finding]] }, listed
+    assert_equal (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog).to_h { [_1[:name], _1[:finding]] }, listed
   end
 
   def test_each_fault_built_as_described
-    (ISIS::Fault.catalog + ISIS::Fault.link_catalog).each do |e|
+    (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog).each do |e|
       assert_includes DOC, "| `#{e[:name]}` | `#{e[:finding]}` | #{e[:description]} |", e[:name]
     end
   end

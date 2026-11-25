@@ -548,6 +548,22 @@ the rule anyway. Each ASLA finding's actions under the three policies
 are in `docs/protocol-testing.md`. The findings are listed per node in
 `show.topology`, as `link_findings`.
 
+As built in step 3: `fapm_too_large` and `fapm_intra_area` are not
+findings. Section 8 and section 13.1 say what a receiver does with such
+a FAPM, but no clause forbids sending one, and `docs/protocol-testing.md`
+keeps findings for what a sender broke, as it does for an index past
+the SRGB. The calculation leaves such a prefix out, or the FAPM unused,
+once the M flag is built. `fad_eag_length` covers section 6.5's SRLG
+list too, which "MUST be a multiple of 4 octets" as the admin groups
+must. `fad_subtlv_twice` covers types 1 to 5, as sections 6.1 to 6.5
+each say; `fad_split_subtlv_twice` types 1 to 4, since 6.5 lets the SRLG
+list repeat. The FAD findings come from `Spf::Definitions`, which reads
+one system's FADs and merges those split across sub-TLVs, the first
+step of "Selection"; the FAPM and Prefix-SID findings from
+`Spf::PrefixMetrics`. `fad_unsupported` comes with each Definition
+isis4r cannot run, with the reason; until the M flag is built, a FAD
+with M set is one.
+
 `:algorithm_not_advertised` already covers a Prefix-SID for an
 algorithm its node does not list.
 
@@ -557,8 +573,9 @@ algorithm its node does not list.
 
 - **Codec cases**, one per finding above, built on the SR case's
   helper. As built in step 2: the ASLA cases are a group of their own,
-  `Fault::LINK_CATALOG`, held to their findings as the SR cases are.
-  They join the fault matrix against FRR in step 7.
+  `Fault::FLEX_ALGO_CATALOG`, held to their findings as the SR cases are.
+  They join the fault matrix against FRR in step 7. Step 3 adds the FAD,
+  FAPM and Prefix-SID cases to the same group.
 - **Topology cases**, like TI-LFA's, each a small graph with the paths
   the RFC expects: `fa_exclude_any`, `fa_include_any`, `fa_include_all`,
   `fa_exclude_srlg`, `fa_delay`, `fa_te_metric`, `fa_link_no_metric`

@@ -47,6 +47,14 @@ module ISIS
     #   :ignore_attribute the attribute is not used from any sub-TLV
     #   :ignore_tlv       that TLV 238 is not used
     #   :use_ag           the Admin Group for groups 0 to 31, the EAG past
+    #
+    # And for the flex-algo rules (RFC 9350, RFC 8402), each about one
+    # system's FADs or one prefix's sub-TLVs (Spf::Definitions,
+    # Spf::PrefixMetrics):
+    #
+    #   :ignore_fad          the FAD is not used
+    #   :stop_participating  this system takes no part in the algorithm
+    #   :ignore_fapm         the FAPM is not used
     Rule = Struct.new(:name, :channel, :clause, :description, :actions, keyword_init: true)
 
     # One finding: the rule's name, channel and clause, what it is about
@@ -134,7 +142,59 @@ module ISIS
                        "advertised AG\"; the receiver uses the AG for bits 0-31 and \"SHOULD report this " \
                        "mismatch\"",
                description: "an Admin Group and an Extended Admin Group that differ in groups 0 to 31",
-               actions: { rfc: :use_ag, strict: :ignore_attribute, lenient: :use_ag })
+               actions: { rfc: :use_ag, strict: :ignore_attribute, lenient: :use_ag }),
+      # The flex-algo rules, docs/design/flex-algo.md, "2. Validation on
+      # receive".
+      Rule.new(name: :fad_algorithm_range, channel: :errors,
+               clause: "RFC 9350 section 5.3: \"The value of the Flex-Algorithm MUST be between 128 and 255 " \
+                       "inclusive. If it is not, the FAD TLV MUST be ignored.\"",
+               description: "a FAD for an algorithm outside 128 to 255",
+               actions: { rfc: :ignore_fad, strict: :ignore_fad, lenient: :ignore_fad }),
+      Rule.new(name: :fad_subtlv_twice, channel: :errors,
+               clause: "RFC 9350 section 6.1, and 6.2 to 6.5: a sub-TLV \"MUST NOT appear more than once in a single " \
+                       "IS-IS FAD sub-TLV. If it appears more than once, the IS-IS FAD sub-TLV MUST be ignored\"",
+               description: "one sub-sub-TLV, types 1 to 5, twice in one FAD",
+               actions: { rfc: :ignore_fad, strict: :ignore_fad, lenient: :use_first }),
+      Rule.new(name: :fad_split_differs, channel: :errors,
+               clause: "RFC 9350 section 6: the fixed portion \"MUST be identical in all FAD sub-TLVs for a " \
+                       "given Flex-Algorithm from a given IS\"; else the first in the lowest-numbered LSP",
+               description: "FADs for one algorithm from one system whose fixed parts differ",
+               actions: { rfc: :use_first, strict: :ignore_fad, lenient: :use_first }),
+      Rule.new(name: :fad_split_subtlv_twice, channel: :errors,
+               clause: "RFC 9350 section 6.1, and 6.2 to 6.4: a sub-TLV \"MUST NOT appear more than once in the set of " \
+                       "FAD sub-TLVs for a given Flex-Algorithm from a given IS\"; else the first in the " \
+                       "lowest-numbered LSP",
+               description: "one sub-sub-TLV, types 1 to 4, in two FADs for one algorithm from one system",
+               actions: { rfc: :use_first, strict: :ignore_fad, lenient: :use_first }),
+      Rule.new(name: :fad_s_bit, channel: :errors,
+               clause: "RFC 9350 section 5.1: \"The Router Capability TLV in which the FAD sub-TLV is present " \
+                       "MUST have the S bit clear\"",
+               description: "a FAD in a Router Capability TLV with the S bit set",
+               actions: { rfc: :ignore_fad, strict: :ignore_fad, lenient: :use }),
+      Rule.new(name: :fad_eag_length, channel: :errors,
+               clause: "RFC 9350 section 6.1, and 6.2, 6.3 and 6.5: the length \"MUST be a multiple of 4 octets\"",
+               description: "a FAD admin group or SRLG sub-sub-TLV whose length is not a multiple of 4",
+               actions: { rfc: :ignore_fad, strict: :ignore_fad, lenient: :use }),
+      Rule.new(name: :fad_unsupported, channel: :gaps,
+               clause: "isis4r has no code for this FAD's calculation type, metric type, flag or sub-TLV; " \
+                       "RFC 9350 section 5.3: the router \"MUST stop participating\"",
+               description: "a FAD with a calculation type, metric type, flag or sub-sub-TLV isis4r cannot run",
+               actions: { rfc: :stop_participating, strict: :stop_participating, lenient: :stop_participating }),
+      Rule.new(name: :fapm_algorithm_range, channel: :errors,
+               clause: "RFC 9350 section 8: the Flex-Algorithm is a \"single octet value between 128 and 255 " \
+                       "inclusive\"",
+               description: "a FAPM for an algorithm outside 128 to 255",
+               actions: { rfc: :ignore_fapm, strict: :ignore_fapm, lenient: :ignore_fapm }),
+      Rule.new(name: :fapm_twice, channel: :errors,
+               clause: "RFC 9350 section 8: \"If it appears more than once with the same Flex-Algorithm value, " \
+                       "the first instance MUST be used\"",
+               description: "two FAPMs for one algorithm on one prefix",
+               actions: { rfc: :use_first, strict: :ignore_fapm, lenient: :use_first }),
+      Rule.new(name: :prefix_sid_algorithm_twice, channel: :errors,
+               clause: "RFC 8402 section 3.1: several Prefix-SIDs on one prefix \"so long as the tuple <prefix, " \
+                       "topology, algorithm> is unique\"",
+               description: "two Prefix-SIDs for one algorithm on one prefix",
+               actions: { rfc: :use_first, strict: :ignore_sid, lenient: :use_first })
     ].to_h { [_1.name, _1] }.freeze
 
     module_function
@@ -236,6 +296,92 @@ module ISIS
       [finding(:admin_group_mismatch, subject,
                "Admin Group #{ag.join(', ').then { _1.empty? ? 'none' : _1 }}, " \
                "EAG #{low.join(', ').then { _1.empty? ? 'none' : _1 }} in 0 to 31; the Admin Group is used")]
+    end
+
+    # The FAD sub-sub-TLVs that may appear once (sections 6.1 to 6.4), and
+    # those of EAG or SRLG format whose length is a multiple of 4.
+    FAD_ONCE = [SubTlv::FadExcludeAdminGroup, SubTlv::FadIncludeAnyAdminGroup, SubTlv::FadIncludeAllAdminGroup,
+                SubTlv::FadFlags].freeze
+    FAD_WORDS = [SubTlv::FadExcludeAdminGroup, SubTlv::FadIncludeAnyAdminGroup, SubTlv::FadIncludeAllAdminGroup,
+                 SubTlv::FadExcludeSrlg].freeze
+
+    # The findings on one FAD on its own: its algorithm, a sub-sub-TLV
+    # twice, a length not a multiple of 4.
+    def fad(fad, subject)
+      list = []
+      unless (128..255).cover?(fad.algorithm)
+        list << finding(:fad_algorithm_range, subject, "algorithm #{fad.algorithm}")
+      end
+      types = fad.subtlvs.to_a.map(&:class).select { (FAD_ONCE + [SubTlv::FadExcludeSrlg]).include?(_1) }
+      twice = types.tally.select { |_, n| n > 1 }.keys
+      unless twice.empty?
+        list << finding(:fad_subtlv_twice, subject,
+                        "FAD #{fad.algorithm}: sub-TLV #{twice.map { _1::TYPE }.join(', ')} more than once")
+      end
+      fad.subtlvs.to_a.select { FAD_WORDS.include?(_1.class) && !_1.tail.empty? }.each do |s|
+        list << finding(:fad_eag_length, subject,
+                        "FAD #{fad.algorithm}: sub-TLV #{s.class::TYPE} of #{s.encode.bytesize - 2} octets")
+      end
+      list
+    end
+
+    # The finding on FADs in a Router Capability TLV with S set.
+    def fad_s_bit(capability, subject)
+      fads = capability.subtlvs.to_a.grep(SubTlv::Fad)
+      return [] if fads.empty? || !capability.s?
+
+      [finding(:fad_s_bit, subject, "S set on the TLV 242 with FAD #{fads.map(&:algorithm).join(', ')}")]
+    end
+
+    # The findings on one system's FADs for one algorithm, in LSP order:
+    # fixed parts that differ, a sub-sub-TLV of types 1 to 4 in two FADs.
+    def fad_split(fads, subject)
+      list = []
+      first = fads.first.fixed
+      fads.drop(1).reject { _1.fixed == first }.each do |f|
+        list << finding(:fad_split_differs, subject,
+                        "FAD #{first[0]}: #{f.fixed.join('/')} after #{first.join('/')}; the first is used")
+      end
+      FAD_ONCE.each do |klass|
+        n = fads.count { |f| f.subtlvs.to_a.any? { _1.instance_of?(klass) } }
+        next if n < 2
+
+        list << finding(:fad_split_subtlv_twice, subject,
+                        "FAD #{first[0]}: sub-TLV #{klass::TYPE} in #{n} FADs; the first is used")
+      end
+      list
+    end
+
+    # The finding on a FAD isis4r cannot run: why, or none. +flags+ is
+    # the bits of its Flags sub-TLV, +unknown+ the types of the
+    # sub-sub-TLVs it has no class for. The M flag is built later
+    # (docs/design/flex-algo.md, "Work").
+    def fad_unsupported(algorithm, metric_type:, calc_type:, flags:, unknown:, subject:)
+      why = []
+      why << "calculation type #{calc_type}" unless calc_type.zero?
+      why << "metric type #{metric_type}" unless SubTlv::Fad::METRIC_TYPES.key?(metric_type)
+      why << "flag bits #{flags.join(', ')}" unless flags.empty?
+      why << "sub-TLV #{unknown.join(', ')}" unless unknown.empty?
+      return [] if why.empty?
+
+      [finding(:fad_unsupported, subject, "FAD #{algorithm}: #{why.join(', ')}")]
+    end
+
+    # The findings on one prefix's sub-TLVs: FAPMs outside 128 to 255, or
+    # twice for one algorithm; Prefix-SIDs twice for one algorithm.
+    def prefix_subtlvs(subtlvs, subject)
+      list = []
+      fapms = subtlvs.grep(SubTlv::Fapm).reject(&:short)
+      fapms.reject { (128..255).cover?(_1.algorithm) }.each do |f|
+        list << finding(:fapm_algorithm_range, subject, "FAPM for algorithm #{f.algorithm}")
+      end
+      fapms.map(&:algorithm).tally.select { |_, n| n > 1 }.each_key do |a|
+        list << finding(:fapm_twice, subject, "FAPMs for algorithm #{a}; the first is used")
+      end
+      subtlvs.grep(SubTlv::PrefixSid).map(&:algorithm).tally.select { |_, n| n > 1 }.each_key do |a|
+        list << finding(:prefix_sid_algorithm_twice, subject, "Prefix-SIDs for algorithm #{a}; the first is used")
+      end
+      list
     end
 
     # The finding on +prefixes+, two or more, sharing +index+.
