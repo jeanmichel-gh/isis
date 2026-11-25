@@ -188,6 +188,84 @@ class TestRouter < Minitest::Test
     assert_raises(ArgumentError) { router({ system_id: "0000.0000.000c", lsp_generation: 5 }, {}) }
   end
 
+  # A's link to B with attributes for flex-algo, B's plain.
+  def flex_pair(attributes = {})
+    iface = { name: "ab", ip_addresses: ["10.0.12.1"], hello_interval: 1, hello_multiplier: 3,
+              affinity: %w[red far], delay: 5000, te_metric: 100, srlg: [10, 20] }.merge(attributes)
+    a, b = pair({ affinity_map: { "red" => 1, "far" => 40 }, interfaces: [iface] })
+    [a, b].each(&:start)
+    run_for(10)
+    [a, b]
+  end
+
+  # One ASLA sub-TLV with X alone, L clear (RFC 9350 section 12), and no
+  # legacy sub-TLVs (decision 4): the EAG, the TE metric, the average and
+  # min/max delays. Then TLV 238 with X, naming the link by its two IPv4
+  # addresses. B reads them back as flex-algo's.
+  def test_link_attributes_go_in_an_asla_and_tlv_238
+    a, b = flex_pair
+    tlvs = a.databases[1][a.originators[1].lsp_id].lsp.tlvs.to_a
+    entry = tlvs.grep(ISIS::Tlv::ExtendedIsReachability).flat_map(&:entries).first
+    subs = entry.subtlvs.to_a
+    assert_equal 1, subs.grep(ISIS::SubTlv::Asla).size
+    asla = subs.grep(ISIS::SubTlv::Asla).first
+    assert_equal({ applications: ["X"], subtlvs: [{ extended_admin_group: { groups: [1, 40] } },
+                                                  { te_default_metric: { metric: 100 } },
+                                                  { link_delay: { delay: 5000 } },
+                                                  { min_max_link_delay: { min: 5000, max: 5000 } }] }, asla.to_hash)
+    legacy = [ISIS::SubTlv::AdminGroup, ISIS::SubTlv::ExtendedAdminGroup, ISIS::SubTlv::TeDefaultMetric,
+              ISIS::SubTlv::LinkDelay, ISIS::SubTlv::MinMaxLinkDelay]
+    assert_empty subs.select { legacy.include?(_1.class) }
+    assert_equal [{ neighbor: "0000.0000.000b.00", applications: ["X"],
+                    links: [{ ipv4_interface_address: "10.0.12.1" }, { ipv4_neighbor_address: "10.0.12.2" }],
+                    srlgs: [10, 20] }], tlvs.grep(ISIS::Tlv::AslaSrlg).map(&:to_hash)
+    copy = b.databases[1][a.originators[1].lsp_id].lsp
+    read = ISIS::Spf::LinkAttributes.new([copy])
+    assert_empty read.findings
+    assert_equal({ affinity: [1, 40], te_metric: 100, delay: { min: 5000, max: 5000, average: 5000 }, srlg: [10, 20] },
+                 read.for(entry).to_hash)
+  end
+
+  # SRLGs past one TLV's 255 octets go in a second TLV 238. The first
+  # holds 58: 255 octets less 23 (neighbour 7, mask 3, length 1, the two
+  # addresses 12), over 4.
+  def test_many_srlgs_take_two_tlvs
+    a, = flex_pair(srlg: (1..70).to_a)
+    tlvs = a.databases[1][a.originators[1].lsp_id].lsp.tlvs.to_a.grep(ISIS::Tlv::AslaSrlg)
+    assert_equal [58, 12], tlvs.map { _1.srlgs.size }
+    assert_equal [255, 23 + 48], tlvs.map { _1.encode.bytesize - 2 }
+    assert_equal (1..70).to_a, tlvs.flat_map(&:srlgs)
+  end
+
+  # Without attributes, no ASLA and no TLV 238.
+  def test_no_link_attributes_no_asla
+    a, = pair
+    a.start
+    run_for(10)
+    tlvs = a.databases[1][a.originators[1].lsp_id].lsp.tlvs.to_a
+    assert_empty tlvs.grep(ISIS::Tlv::ExtendedIsReachability).flat_map(&:entries).flat_map { _1.subtlvs.to_a }
+                     .grep(ISIS::SubTlv::Asla)
+    assert_empty tlvs.grep(ISIS::Tlv::AslaSrlg)
+  end
+
+  def test_link_attribute_refusals
+    refuse = lambda do |config, iface|
+      assert_raises(ArgumentError) do
+        ISIS::Router.normalize({ interfaces: [{ name: "eth1", ip_addresses: ["10.0.0.1"] }.merge(iface)] }.merge(config))
+      end.message
+    end
+    assert_equal "interface eth1: affinity blue is not in affinity_map (red)",
+                 refuse.call({ affinity_map: { red: 1 } }, { affinity: ["blue"] })
+    assert_equal "interface eth1: affinity red is not in affinity_map", refuse.call({}, { affinity: ["red"] })
+    assert_equal "affinity_map: big is a group from 0 to 1023, not 1024",
+                 refuse.call({ affinity_map: { big: 1024 } }, { affinity: ["big"] })
+    assert_equal "interface eth1: delay is 0 to 16777215, not 16777216", refuse.call({}, { delay: 16_777_216 })
+    assert_equal "interface eth1: te_metric is 0 to 16777215, not \"5\"", refuse.call({}, { te_metric: "5" })
+    assert_equal "interface eth1: an SRLG is 0 to 4294967295, not -1", refuse.call({}, { srlg: [-1] })
+    assert_equal "interface eth1: srlg needs ip_addresses, which TLV 238 names the link by",
+                 refuse.call({}, { srlg: [1], ip_addresses: [] })
+  end
+
   # A misspelt interface key is refused, naming the key and the interface,
   # where it used to be kept and do nothing. String keys, as YAML reads.
   def test_an_unknown_interface_key_is_refused

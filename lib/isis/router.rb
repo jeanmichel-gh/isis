@@ -28,6 +28,8 @@ module ISIS
   #     srgb: [{start: 16000, size: 8000}]   when absent
   #     srlb: {start: 15000, size: 1000}
   #     receive_policy: rfc          rfc, strict or lenient (Validation)
+  #   affinity_map: {red: 1}        names for the interfaces' affinity, each a
+  #                                 group, 0 to 1023 (RFC 7308)
   #   overload: false
   #   area_key: / hello_key:        HMAC-MD5 keys (RFC 5304)
   #   lsp_buffer_size: 1492
@@ -60,6 +62,13 @@ module ISIS
   #                                 node: against the neighbour failing, and
   #                                 the link's where no node backup exists;
   #                                 point-to-point and segment routing only
+  #       affinity: [red]           the link's groups, names in affinity_map,
+  #                                 sent for flex-algo in an ASLA sub-TLV
+  #                                 (RFC 9479, docs/design/flex-algo.md)
+  #       delay: 5000               the link's delay in µs, sent as min, max
+  #                                 and average, in the same sub-TLV
+  #       te_metric: 100            its TE default metric, the same way
+  #       srlg: [10]                its SRLGs, in TLV 238; needs ip_addresses
   #
   # An interface key not listed here is refused, naming the key and the
   # interface, so a misspelt one (bdf: true) does not quietly do nothing.
@@ -76,7 +85,14 @@ module ISIS
 
     # The keys an interface may give, as the class comment lists them.
     INTERFACE_KEYS = %i[name network ip_addresses metric priority hello_interval hello_multiplier
-                        adj_sid bfd bfd_tlv ti_lfa].freeze
+                        adj_sid bfd bfd_tlv ti_lfa affinity delay te_metric srlg].freeze
+
+    # The highest affinity group: FRR 10.7.1's affinity-map takes bit
+    # positions 0 to 1023, measured.
+    MAX_AFFINITY = 1023
+    # A delay (RFC 8570 section 4.1) and a TE default metric (RFC 5305
+    # section 3.7) are 24 bits.
+    MAX_24 = 0xff_ffff
 
     # What ti_lfa takes.
     TI_LFA = %w[link node].freeze
@@ -127,6 +143,7 @@ module ISIS
         end
 
         ti_lfa(i, name, network, config)
+        link_attributes(i, name, config)
         i.merge(name: name, network: network)
       end
       config
@@ -142,6 +159,50 @@ module ISIS
       end
       raise ArgumentError, "interface #{name}: ti_lfa needs segment_routing" unless config[:segment_routing]
       raise ArgumentError, "interface #{name}: ti_lfa protects point-to-point interfaces" if network == "broadcast"
+    end
+
+    # Refuses link attributes that cannot be sent, naming why.
+    def self.link_attributes(interface, name, config)
+      unless interface[:affinity].nil?
+        map = affinity_map(config)
+        Array(interface[:affinity]).each do |color|
+          next if map.key?(color.to_s)
+
+          raise ArgumentError, "interface #{name}: affinity #{color} is not in affinity_map" \
+                               "#{map.empty? ? '' : " (#{map.keys.join(', ')})"}"
+        end
+      end
+      %i[delay te_metric].each do |key|
+        v = interface[key]
+        next if v.nil?
+        next if v.is_a?(Integer) && v.between?(0, MAX_24)
+
+        raise ArgumentError, "interface #{name}: #{key} is 0 to #{MAX_24}, not #{v.inspect}"
+      end
+      return if interface[:srlg].nil?
+
+      Array(interface[:srlg]).each do |v|
+        next if v.is_a?(Integer) && v.between?(0, 0xffff_ffff)
+
+        raise ArgumentError, "interface #{name}: an SRLG is 0 to #{0xffff_ffff}, not #{v.inspect}"
+      end
+      return unless Array(interface[:ip_addresses]).empty?
+
+      raise ArgumentError, "interface #{name}: srlg needs ip_addresses, which TLV 238 names the link by"
+    end
+
+    # affinity_map as names to groups, checked.
+    def self.affinity_map(config)
+      map = config[:affinity_map] || {}
+      raise ArgumentError, "affinity_map is a map of names to groups" unless map.is_a?(Hash)
+
+      map.to_h do |k, v|
+        unless v.is_a?(Integer) && v.between?(0, MAX_AFFINITY)
+          raise ArgumentError, "affinity_map: #{k} is a group from 0 to #{MAX_AFFINITY}, not #{v.inspect}"
+        end
+
+        [k.to_s, v]
+      end
     end
 
     # The interfaces with ti_lfa, by name.
@@ -327,7 +388,26 @@ module ISIS
                      lsp_generation: lsp_generation,
                      buffer_size: c.fetch(:lsp_buffer_size, Originator::LSP_BUFFER_SIZE),
                      is_type: both? ? 3 : nil, level1_database: level == 2 ? @databases[1] : nil,
-                     overload: c.fetch(:overload, false), segment_routing: @segment_routing)
+                     overload: c.fetch(:overload, false), segment_routing: @segment_routing,
+                     link_attributes: link_attributes)
+    end
+
+    # Each interface's attributes for flex-algo, by circuit name, as the
+    # Originator takes them: :affinity as groups, :delay, :te_metric and
+    # :srlg. Interfaces without any are left out.
+    def link_attributes
+      map = self.class.affinity_map(@config)
+      @config[:interfaces].each_with_object({}) do |c, h|
+        a = {}
+        a[:affinity] = Array(c[:affinity]).map { map.fetch(_1.to_s) }.uniq.sort unless c[:affinity].nil?
+        a[:delay] = c[:delay] unless c[:delay].nil?
+        a[:te_metric] = c[:te_metric] unless c[:te_metric].nil?
+        a[:srlg] = Array(c[:srlg]).uniq unless c[:srlg].nil?
+        next if a.empty?
+
+        names = c[:network] == "broadcast" && both? ? @levels.map { |l| "#{c[:name]}-l#{l}" } : [c[:name]]
+        names.each { h[_1] = a }
+      end
     end
 
     # The settings an interface may give, and the circuit keyword each

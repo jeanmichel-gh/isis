@@ -365,6 +365,15 @@ until the step that builds it.
   algorithm (8667 section 2.1: "MUST be set to 0 or to any value
   advertised").
 
+As built in step 2: the delay goes as Min/Max (34), min and max the
+same, and as the average (33) too, as FRR 10.7.1 sends a link with
+`delay N min N max N`. A group is 0 to 1023: FRR 10.7.1's
+`affinity-map` takes bit position 1023 and refuses 1024. A delay or TE
+metric is 24 bits. `srlg` needs `ip_addresses`, since TLV 238 names the
+link by them; past 58 SRLGs it takes a second TLV 238. The interfaces'
+attributes are checked as the file is read; `link.attributes`, to
+change them while isisd runs, is not built yet.
+
 Participation depends on the database, so a change of winning FAD
 regenerates the LSP. The LSP generation timer covers it.
 
@@ -411,6 +420,17 @@ The output is routes keyed by prefix, as today, for the label table
 only. **No IP route comes from an algorithm.** IP traffic stays on
 algorithm 0. Steering IP into an algorithm (BGP color, an SR policy) is
 outside this document.
+
+As built in step 2: `Spf::LinkAttributes` reads one node's LSPs. A
+link is a TLV 22 entry, keyed by its neighbour and its first sub-TLVs
+6, 8, 4 and 12, so parallel links stay apart and entries of one link
+in several fragments join. A conflict is two values that differ, among
+the ASLA sub-TLVs with X, or among the zero-length ones. With both an
+Admin Group and an EAG, the AG gives groups 0 to 31 and the EAG the
+rest (RFC 7308 section 2.3.1). The ASLA sub-TLV's L flag does not reach
+SRLGs, which are not among its sub-sub-TLVs; TLV 238's own does. A TLV
+238 is matched to a link by its neighbour and any identifier they
+share. `show.topology` uses it now; the calculation will in step 5.
 
 A property for the tests: a FAD with metric type 0 and no constraints,
 with every node taking part, gives the same next hops as algorithm 0,
@@ -522,6 +542,12 @@ clause and its action per policy (`:rfc`, `:strict`, `:lenient`):
 | `asla_srlg_no_link_id` | 9479 4.3, no link identifier, or one twice | ignore the TLV |
 | `prefix_sid_algorithm_twice` | 8402 3.1, one prefix and algorithm, two SIDs | use the first and report (decision 7) |
 
+As built in step 2: one finding more, `admin_group_mismatch` (RFC 7308
+section 2.3.1, "SHOULD report this mismatch"), since the reader needs
+the rule anyway. Each ASLA finding's actions under the three policies
+are in `docs/protocol-testing.md`. The findings are listed per node in
+`show.topology`, as `link_findings`.
+
 `:algorithm_not_advertised` already covers a Prefix-SID for an
 algorithm its node does not list.
 
@@ -530,7 +556,9 @@ algorithm its node does not list.
 `lib/isis/fault.rb` gains:
 
 - **Codec cases**, one per finding above, built on the SR case's
-  helper.
+  helper. As built in step 2: the ASLA cases are a group of their own,
+  `Fault::LINK_CATALOG`, held to their findings as the SR cases are.
+  They join the fault matrix against FRR in step 7.
 - **Topology cases**, like TI-LFA's, each a small graph with the paths
   the RFC expects: `fa_exclude_any`, `fa_include_any`, `fa_include_all`,
   `fa_exclude_srlg`, `fa_delay`, `fa_te_metric`, `fa_link_no_metric`

@@ -37,6 +37,16 @@ module ISIS
     #   :ignore_sid   that Prefix-SID is not used
     #   :drop_both    neither of the prefixes is given a label
     #   :use          used as it arrived
+    #
+    # And for the link attribute rules (RFC 9479, RFC 7308), each about one
+    # link's attributes for flex-algo, the X bit (Spf::LinkAttributes):
+    #
+    #   :ignore_subtlv    that ASLA sub-TLV is not used
+    #   :ignore_values    its values are not used
+    #   :legacy           the L flag is taken as set: the legacy sub-TLVs
+    #   :ignore_attribute the attribute is not used from any sub-TLV
+    #   :ignore_tlv       that TLV 238 is not used
+    #   :use_ag           the Admin Group for groups 0 to 31, the EAG past
     Rule = Struct.new(:name, :channel, :clause, :description, :actions, keyword_init: true)
 
     # One finding: the rule's name, channel and clause, what it is about
@@ -89,7 +99,42 @@ module ISIS
                clause: "isis4r has no code for a Prefix-SID carried as a label, V and L set " \
                        "(RFC 8667 section 2.1.1.1)",
                description: "a Prefix-SID that is a label, not an index",
-               actions: { rfc: :ignore_sid, strict: :ignore_sid, lenient: :ignore_sid })
+               actions: { rfc: :ignore_sid, strict: :ignore_sid, lenient: :ignore_sid }),
+      # The link attribute rules, docs/design/flex-algo.md, "2. Validation
+      # on receive".
+      Rule.new(name: :asla_mask_too_long, channel: :errors,
+               clause: "RFC 9479 section 4.2: \"If the SABM Length or UDABM Length in the Application Identifier " \
+                       "Bit Mask is greater than 8, the entire sub-TLV MUST be ignored\"",
+               description: "an ASLA sub-TLV with a SABM or UDABM longer than 8 octets",
+               actions: { rfc: :ignore_subtlv, strict: :ignore_subtlv, lenient: :use }),
+      Rule.new(name: :asla_l_flag_values, channel: :errors,
+               clause: "RFC 9479 section 4.2: with the L-flag set, the sub-sub-TLVs \"MUST NOT be advertised\" " \
+                       "and \"MUST be ignored on receipt\"",
+               description: "an ASLA sub-TLV with the L flag set that carries values",
+               actions: { rfc: :ignore_values, strict: :ignore_values, lenient: :use }),
+      Rule.new(name: :asla_l_flag_mixed, channel: :errors,
+               clause: "RFC 9479 section 4.2: \"For a given application, the setting of the L-flag MUST be the " \
+                       "same in all sub-TLVs for a given link. In cases where this constraint is violated, the " \
+                       "L-flag MUST be considered set for this application.\"",
+               description: "the L flag set in one ASLA sub-TLV for flex-algo on a link and clear in another",
+               actions: { rfc: :legacy, strict: :legacy, lenient: :use }),
+      Rule.new(name: :asla_conflict, channel: :errors,
+               clause: "RFC 9479 section 4.2: for conflicting values \"the first advertisement received in the " \
+                       "lowest-numbered Link State Protocol Data Unit (LSP) MUST be used\"",
+               description: "two values of one attribute for flex-algo on one link",
+               actions: { rfc: :use_first, strict: :ignore_attribute, lenient: :use_first }),
+      Rule.new(name: :asla_srlg_no_link_id, channel: :errors,
+               clause: "RFC 9479 section 4.3: \"At least one set of link identifiers (IPv4, IPv6, or Link " \
+                       "Local/Remote) MUST be present. Multiple occurrences of the same identifier type MUST NOT " \
+                       "be present. TLVs that do not meet this requirement MUST be ignored.\"",
+               description: "a TLV 238 with no link identifier, or one type twice",
+               actions: { rfc: :ignore_tlv, strict: :ignore_tlv, lenient: :ignore_tlv }),
+      Rule.new(name: :admin_group_mismatch, channel: :errors,
+               clause: "RFC 7308 section 2.3.1: \"the first 32 bits of the EAG MUST be identical to the " \
+                       "advertised AG\"; the receiver uses the AG for bits 0-31 and \"SHOULD report this " \
+                       "mismatch\"",
+               description: "an Admin Group and an Extended Admin Group that differ in groups 0 to 31",
+               actions: { rfc: :use_ag, strict: :ignore_attribute, lenient: :use_ag })
     ].to_h { [_1.name, _1] }.freeze
 
     module_function
@@ -155,6 +200,42 @@ module ISIS
       end
 
       []
+    end
+
+    # The findings on one ASLA sub-TLV or TLV 238 on its own, +mask+ its
+    # Application Identifier Bit Mask and +values+ the values it carries,
+    # as text: the mask's lengths, and values beside the L flag.
+    def asla(mask, values, subject)
+      if mask.sabm_length > 8 || mask.udabm_length > 8
+        return [finding(:asla_mask_too_long, subject,
+                        "SABM #{mask.sabm_length} octets, UDABM #{mask.udabm_length}; at most 8")]
+      end
+      return [finding(:asla_l_flag_values, subject, "L set, with #{values.join('; ')}")] if mask.legacy? && !values.empty?
+
+      []
+    end
+
+    # The findings on one TLV 238's link identifiers, +links+ its
+    # sub-TLVs. Only the identifiers of section 4.3's Table 2 count.
+    def asla_srlg(links, subject)
+      types = links.map { _1.class::TYPE if Tlv::AslaSrlg::LINK_IDENTIFIERS.include?(_1.class) }.compact
+      return [finding(:asla_srlg_no_link_id, subject, "no link identifier")] if types.empty?
+
+      twice = types.tally.select { |_, n| n > 1 }.keys
+      return [finding(:asla_srlg_no_link_id, subject, "sub-TLV #{twice.join(', ')} more than once")] unless twice.empty?
+
+      []
+    end
+
+    # The finding on a link's Admin Group, groups 0 to 31, against the
+    # first 32 bits of its Extended Admin Group.
+    def admin_groups(ag, eag, subject)
+      low = eag.select { _1 < 32 }
+      return [] if ag.sort == low.sort
+
+      [finding(:admin_group_mismatch, subject,
+               "Admin Group #{ag.join(', ').then { _1.empty? ? 'none' : _1 }}, " \
+               "EAG #{low.join(', ').then { _1.empty? ? 'none' : _1 }} in 0 to 31; the Admin Group is used")]
     end
 
     # The finding on +prefixes+, two or more, sharing +index+.

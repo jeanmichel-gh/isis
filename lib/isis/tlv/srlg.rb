@@ -245,4 +245,12 @@ module ISIS
       register_under(Tlv::AslaSrlg::TYPE, klass::TYPE, key, klass)
     end
   end
+
+  class Tlv
+    class AslaSrlg
+      # The classes of Table 2.
+      LINK_IDENTIFIERS = [SubTlv::LinkIdentifiers, SubTlv::Ipv4InterfaceAddress, SubTlv::Ipv4NeighborAddress,
+                          SubTlv::Ipv6InterfaceAddress, SubTlv::Ipv6NeighborAddress].freeze
+    end
+  end
 end

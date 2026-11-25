@@ -124,7 +124,7 @@ module ISIS
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
-    attr_reader :overload, :attached, :segment_routing, :injected
+    attr_reader :overload, :attached, :segment_routing, :injected, :link_attributes
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
                    ip_addresses: [], prefixes: [], external_prefixes: [], metric_style: :wide, area_key: nil,
@@ -132,7 +132,7 @@ module ISIS
                    refresh_interval: MAXIMUM_LSP_GENERATION_INTERVAL,
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, lsp_generation: nil,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
-                   hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil)
+                   hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil, link_attributes: {})
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -151,6 +151,9 @@ module ISIS
       @hostname = hostname
       # A SegmentRouting, or nil: without it nothing of RFC 8667 is sent.
       @segment_routing = segment_routing
+      # Each circuit's attributes for flex-algo, by circuit name: :affinity
+      # (groups), :delay, :te_metric and :srlg (Router#link_attributes).
+      @link_attributes = link_attributes
       @ip_addresses = ip_addresses
       @ipv6_addresses = ipv6_addresses
       @ipv6_prefixes = ipv6_prefixes
@@ -504,18 +507,25 @@ module ISIS
     # element: a point to point neighbour its own (RFC 8667 section 2.2.1),
     # the entry to a LAN's pseudonode one LAN-Adj-SID per neighbour Up on
     # that LAN (section 2.2.2).
+    # Each carries its link attributes as a fifth (Router#link_attributes).
     def variable_tlvs
       neighbors = @circuits.filter_map do |c|
         n = c.is_neighbor or next
         # [ID, metric, addresses]; a simulated link answers without addresses.
-        @segment_routing ? [n[0], n[1], n[2], adj_sids(c, n.first)] : n
+        attributes = @link_attributes.empty? ? nil : @link_attributes[circuit_name(c)]
+        [n[0], n[1], n[2], @segment_routing ? adj_sids(c, n.first) : nil, attributes]
       end
       reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes) +
         (@injected || []).reject { |t| t.is_a?(Tlv::RouterCapability) }
     end
 
+    # A LAN circuit answers its name; a point to point level, its circuit's.
+    def circuit_name(circuit)
+      circuit.respond_to?(:name) ? circuit.name : circuit.circuit.name
+    end
+
     def adj_sids(circuit, id)
-      name = circuit.respond_to?(:name) ? circuit.name : circuit.circuit.name
+      name = circuit_name(circuit)
       if id.getbyte(-1).zero?
         @segment_routing.adj_sids(name, id.byteslice(0, 6))
       else
@@ -569,10 +579,12 @@ module ISIS
         list.concat(pack(Tlv::IpExternalReachability, reach))
       end
       if @metric_style != :narrow
-        wide = neighbors.map do |id, metric, addresses, sids|
-          Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric, subtlvs: link_subtlvs(addresses, sids))
+        wide = neighbors.map do |id, metric, addresses, sids, attributes|
+          Tlv::ExtendedIsReachability::Entry.new(neighbor: id, metric: metric,
+                                                 subtlvs: link_subtlvs(addresses, sids, attributes))
         end
         list.concat(pack(Tlv::ExtendedIsReachability, wide))
+        list.concat(asla_srlgs(neighbors))
         reach = (prefixes.map { |p| own_prefix(p) } + externals.map { |p| p.slice(:prefix, :metric) } + leaked4.map(&down) +
                  area4.map(&across)).map do |p|
           Tlv::ExtendedIpReachability.new(p).entries.first
@@ -589,8 +601,9 @@ module ISIS
 
     # TLV 22 sub-TLVs 6 and 8 for a circuit's link addresses, { interface:,
     # neighbor: }, either may be absent (RFC 5305 sections 3.2 and 3.3),
-    # then the Adj-SIDs, hashes keyed as a sub-TLV list keys them.
-    def link_subtlvs(addresses, sids = nil)
+    # then the Adj-SIDs, hashes keyed as a sub-TLV list keys them, then the
+    # link's attributes for flex-algo.
+    def link_subtlvs(addresses, sids = nil, attributes = nil)
       list = SubTlv::List.new(Tlv::ExtendedIsReachability::TYPE)
       if addresses
         list << SubTlv::Ipv4InterfaceAddress.new(addresses[:interface]) if addresses[:interface]
@@ -600,7 +613,56 @@ module ISIS
         key, value = h.first
         list << SubTlv.key_under(Tlv::ExtendedIsReachability::TYPE, key).new(value)
       end
+      asla = self.class.asla(attributes)
+      list << asla if asla
       list
+    end
+
+    # The ASLA sub-TLV for a link's +attributes+, or nil when it has none
+    # but SRLGs. RFC 9350 section 12: flex-algo's link attributes "MUST
+    # use" ASLA; the X bit alone, L clear. RFC 9479 section 6.1: a new
+    # application "MUST NOT make use of legacy advertisements", so none are
+    # sent (decision 4). Affinity goes as an Extended Admin Group, as long
+    # as its highest group needs. The delay goes as RFC 9350's metric type
+    # 1 reads it, Min/Max (34), min and max the same, and as the average
+    # (33), as FRR 10.7.1 sends a link with "delay N min N max N". The EAG
+    # takes the fewest words its highest group needs.
+    def self.asla(attributes)
+      a = attributes or return nil
+      subs = []
+      subs << SubTlv::ExtendedAdminGroup.new(groups: a[:affinity]) if a[:affinity]
+      subs << SubTlv::TeDefaultMetric.new(metric: a[:te_metric]) if a[:te_metric]
+      if a[:delay]
+        subs << SubTlv::LinkDelay.new(delay: a[:delay])
+        subs << SubTlv::MinMaxLinkDelay.new(min: a[:delay], max: a[:delay])
+      end
+      return nil if subs.empty?
+
+      SubTlv::Asla.new(applications: %w[X], subtlvs: subs)
+    end
+
+    # TLV 238 for each neighbour whose link has SRLGs: the X bit, the link
+    # named by its IPv4 addresses (RFC 9479 section 4.3's Table 2, 6 and
+    # 8), as many TLVs as the SRLGs need. A link without an IPv4 address
+    # cannot be named this way and gets none; Router refuses srlg without
+    # ip_addresses.
+    def asla_srlgs(neighbors)
+      neighbors.flat_map do |id, _metric, addresses, _sids, attributes|
+        srlgs = attributes && attributes[:srlg]
+        next [] if srlgs.nil? || srlgs.empty? || addresses.nil? || addresses[:interface].nil?
+
+        links = [{ ipv4_interface_address: addresses[:interface] }]
+        links << { ipv4_neighbor_address: addresses[:neighbor] } if addresses[:neighbor]
+        fixed = Tlv::AslaSrlg.new(neighbor: neighbor_text(id), applications: %w[X], links: links).encode.bytesize - 2
+        srlgs.each_slice((255 - fixed) / 4).map do |slice|
+          Tlv::AslaSrlg.new(neighbor: neighbor_text(id), applications: %w[X], links: links, srlgs: slice)
+        end
+      end
+    end
+
+    def neighbor_text(id)
+      hex = id.unpack1("H*")
+      "#{hex[0, 12].scan(/.{4}/).join('.')}.#{hex[12, 2]}"
     end
 
     # Generate the LSP Numbers whose content changed, or with

@@ -50,6 +50,33 @@ module ISIS
        ->(c) { Fault.sr(c, more: [[c[:second], { flags: [], algorithm: 0, index: c[:index] }]]) }]
     ].freeze
 
+    # The link attribute entries (RFC 9479, RFC 7308): one link to the
+    # context's first neighbour, its addresses 10.0.0.1 and 10.0.0.2, with
+    # one wrong thing in its attributes for flex-algo. Spf::LinkAttributes
+    # makes the finding. Built as the SR entries are, in their own group
+    # until the fault matrix against FRR covers them (docs/design/
+    # flex-algo.md, work step 7).
+    LINK_CATALOG = [
+      [:asla_mask_too_long, :asla_mask_too_long, "an ASLA sub-TLV with X and a SABM of 9 octets",
+       ->(c) { Fault.link(c, [{ asla: { applications: %w[X], sabm_length: 9, subtlvs: [{ te_default_metric: { metric: 100 } }] } }]) }],
+      [:asla_l_flag_values, :asla_l_flag_values, "an ASLA sub-TLV with X and L set that carries a TE metric",
+       ->(c) { Fault.link(c, [{ asla: { applications: %w[X], legacy: true, subtlvs: [{ te_default_metric: { metric: 100 } }] } }]) }],
+      [:asla_l_flag_mixed, :asla_l_flag_mixed, "two ASLA sub-TLVs with X on one link, L set in one",
+       ->(c) { Fault.link(c, [{ asla: { applications: %w[X], legacy: true } }, Fault.asla_te(100)]) }],
+      [:asla_conflict, :asla_conflict, "two ASLA sub-TLVs with X on one link, TE metrics 100 and 200",
+       ->(c) { Fault.link(c, [Fault.asla_te(100), Fault.asla_te(200)]) }],
+      [:asla_srlg_no_link_id, :asla_srlg_no_link_id, "a TLV 238 with X and SRLG 10, and no link identifier",
+       lambda do |c|
+         Fault.link(c, [Fault.asla_te(100)],
+                    [Tlv::AslaSrlg.new(neighbor: Fault.link_neighbor(c)[0], applications: %w[X], srlgs: [10])])
+       end],
+      [:admin_group_mismatch, :admin_group_mismatch, "an ASLA sub-TLV with X, Admin Group 1 and Extended Admin Group 2",
+       lambda do |c|
+         Fault.link(c, [{ asla: { applications: %w[X], subtlvs: [{ admin_group: { groups: [1] } },
+                                                                 { extended_admin_group: { groups: [2] } }] } }])
+       end]
+    ].freeze
+
     # The second group: topologies, well formed but hard for TI-LFA (RFC
     # 9855), each with the RFC section it tests. Each entry: [name,
     # description, rfc, the topology, the point of local repair (PLR),
@@ -232,11 +259,22 @@ module ISIS
       CATALOG.map(&:first)
     end
 
+    def link_names = LINK_CATALOG.map(&:first)
+
     # The entries, as Hashes: the finding's channel, what the RFC expects
     # of a receiver (the finding's :rfc action) and the clause beside
     # each.
     def catalog
-      CATALOG.map do |name, finding, description, build|
+      entries(CATALOG)
+    end
+
+    # The link attribute entries, as Hashes the same way.
+    def link_catalog
+      entries(LINK_CATALOG)
+    end
+
+    def entries(list)
+      list.map do |name, finding, description, build|
         rule = Validation.rule(finding)
         { name: name, finding: finding, description: description, channel: rule.channel,
           expect: rule.actions.fetch(:rfc), rfc: rule.clause, build: build }
@@ -244,8 +282,8 @@ module ISIS
     end
 
     def entry(name)
-      catalog.find { |e| e[:name] == name } or
-        raise ArgumentError, "unknown fault #{name.inspect}; the faults are #{names.join(', ')}"
+      (catalog + link_catalog).find { |e| e[:name] == name } or
+        raise ArgumentError, "unknown fault #{name.inspect}; the faults are #{(names + link_names).join(', ')}"
     end
 
     # What an entry is built for: the system, its loopback and index, its
@@ -325,6 +363,27 @@ module ISIS
         way == "one_way" ? l.merge("one_way" => true) : l
       end
       { "simulator" => simulator, "segment_routing" => {}, "routers" => routers, "links" => links }
+    end
+
+    # A link entry's TLVs: a TLV 22 entry to the context's first
+    # neighbour, at its metric, its IPv4 addresses then +subtlvs+, and
+    # +more+ TLVs after it.
+    def link(ctx, subtlvs, more = [])
+      neighbor, metric = link_neighbor(ctx)
+      entry = { neighbor: neighbor, metric: metric,
+                subtlvs: [{ ipv4_interface_address: "10.0.0.1" }, { ipv4_neighbor_address: "10.0.0.2" }] + subtlvs }
+      [Tlv::ExtendedIsReachability.new(entry)] + more
+    end
+
+    # The link's neighbour, as TLV 22 prints it, and its metric.
+    def link_neighbor(ctx)
+      id, metric = ctx[:neighbors].first || ["0000.0000.0002", 10]
+      ["#{id}.00", metric]
+    end
+
+    # An ASLA sub-TLV with X and a TE default metric, as a sub-TLV Hash.
+    def asla_te(metric)
+      { asla: { applications: %w[X], subtlvs: [{ te_default_metric: { metric: metric } }] } }
     end
 
     # A system's SR TLVs, correct unless told: one SR-Capabilities per

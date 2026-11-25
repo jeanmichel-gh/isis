@@ -29,6 +29,22 @@ name, and `show.segment_routing` lists them per level.
 | `prefix_sid_duplicate` | errors | one index on two prefixes |
 | `prefix_sid_label` | gaps | a Prefix-SID that is a label, not an index |
 
+The link attribute rules (RFC 9479, RFC 7308) are flex-algo's
+(`docs/design/flex-algo.md`). `Spf::LinkAttributes` makes them as it
+reads one node's link attributes for the X bit, and `show.topology` lists
+them per node as `link_findings`.
+
+| Finding | Channel | When |
+| --- | --- | --- |
+| `asla_mask_too_long` | errors | an ASLA sub-TLV with a SABM or UDABM longer than 8 octets |
+| `asla_l_flag_values` | errors | an ASLA sub-TLV with the L flag set that carries values |
+| `asla_l_flag_mixed` | errors | the L flag set in one ASLA sub-TLV for flex-algo on a link and clear in another |
+| `asla_conflict` | errors | two values of one attribute for flex-algo on one link |
+| `asla_srlg_no_link_id` | errors | a TLV 238 with no link identifier, or one type twice |
+| `admin_group_mismatch` | errors | an Admin Group and an Extended Admin Group that differ in groups 0 to 31 |
+
+`asla_l_flag_values` covers TLV 238 too: SRLGs in one with L set.
+
 Two outcomes are not findings, since no sender broke a clause: an index
 past this system's SRGB, and a neighbor without an SRGB (RFC 8660
 section 2.10.1 sends the packet another way). They stay problems, in the
@@ -44,6 +60,15 @@ says what each policy does.
 | `rfc` | the default: what the clause asks. An SRGB that breaks RFC 8660 section 2.3 is "completely ignored", and its node "treated as if it does not have an SRGB"; the first SR-Capabilities is used; an invalid Prefix-SID is not used; two prefixes with one index both go without a label |
 | `strict` | refuses on any finding: a node with a finding on its SR-Capabilities has none of its SR data used |
 | `lenient` | uses what arrived where it can, to watch what a sender sends: an SRGB that overlaps or has an empty range, and a Prefix-SID whose algorithm its origin did not list. An SRGB with reserved labels is still ignored, since those labels cannot be installed |
+
+On link attributes, `rfc` ignores an ASLA sub-TLV whose mask is too
+long, ignores values beside the L flag, takes a mixed L flag as set, uses
+the first of two values, in the lowest LSP Number, and the Admin Group
+over the EAG for groups 0 to 31. `strict` does the same, but uses
+neither of two conflicting values, nor an affinity whose AG and EAG
+differ. `lenient` reads a mask past 8 octets, uses values beside the L
+flag as if it were clear, and with a mixed L flag uses the values of the
+sub-TLVs with L clear.
 
 The tests: `test/unit/validation_test.rb` for each rule,
 `test/unit/spf/sr_findings_test.rb` for each finding on hand-built LSPs
@@ -86,6 +111,25 @@ second prefix, and its neighbors.
 reads it with `Spf::Labels`: each makes its own finding and no other.
 Every rule has an entry, and every entry a rule, so the catalog and
 `validation.rb` cannot drift apart.
+
+### Link attributes
+
+The link attribute entries, `ISIS::Fault::LINK_CATALOG`: one link with
+one wrong thing in its attributes for flex-algo. Each makes its finding
+in `Spf::LinkAttributes`, and `test/unit/fault_test.rb` holds them to it
+as it holds the SR entries. They are a group of their own until the
+fault matrix against FRR covers them (`docs/design/flex-algo.md`, step
+7). `ISIS::Fault.link_catalog` lists them; `entry`, `tlvs`, `build` and
+`wire` take them as they take the SR entries.
+
+| Entry | Finding | Builds |
+| --- | --- | --- |
+| `asla_mask_too_long` | `asla_mask_too_long` | an ASLA sub-TLV with X and a SABM of 9 octets |
+| `asla_l_flag_values` | `asla_l_flag_values` | an ASLA sub-TLV with X and L set that carries a TE metric |
+| `asla_l_flag_mixed` | `asla_l_flag_mixed` | two ASLA sub-TLVs with X on one link, L set in one |
+| `asla_conflict` | `asla_conflict` | two ASLA sub-TLVs with X on one link, TE metrics 100 and 200 |
+| `asla_srlg_no_link_id` | `asla_srlg_no_link_id` | a TLV 238 with X and SRLG 10, and no link identifier |
+| `admin_group_mismatch` | `admin_group_mismatch` | an ASLA sub-TLV with X, Admin Group 1 and Extended Admin Group 2 |
 
 ### TI-LFA's topologies
 

@@ -231,6 +231,31 @@ def test_topology_gives_sr_when_the_lsps_carry_it
   JSON.generate(t)
 end
 
+  # Each link's attributes for flex-algo, as Spf::LinkAttributes reads
+  # them, and the node's findings on them; none on a link without.
+  def test_topology_gives_link_attributes_and_their_findings
+    views, a, = p2p_pair
+    asla = lambda do |metric|
+      { asla: { applications: %w[X], subtlvs: [{ te_default_metric: { metric: metric } },
+                                               { extended_admin_group: { groups: [1] } }] } }
+    end
+    store_lsp(a, "0000.0000.0007.00-00",
+              [ISIS::Tlv::AreaAddresses.new("49.0001"),
+               ISIS::Tlv::ExtendedIsReachability.new([{ neighbor: "0000.0000.000a.00", metric: 10,
+                                                        subtlvs: [{ ipv4_interface_address: "10.0.17.7" }, asla.(100),
+                                                                  asla.(200)] },
+                                                      { neighbor: "0000.0000.000b.00", metric: 10 }]),
+               ISIS::Tlv::AslaSrlg.new(neighbor: "0000.0000.000a.00", applications: %w[X],
+                                       links: [{ ipv4_interface_address: "10.0.17.7" }], srlgs: [4])])
+    g = topology_node(views.topology(level: 1), "0000.0000.0007.00")
+    assert_equal [[[1], 100, [4]], [nil, nil, nil]], g[:neighbors].map { _1.values_at(:affinity, :te_metric, :srlg) }
+    assert_equal [{ name: "asla_conflict", channel: "errors", clause: ISIS::Validation.rule(:asla_conflict).clause,
+                    subject: "0000.0000.0007.00 link to 0000.0000.000a.00 via 10.0.17.7",
+                    detail: "2 TeDefaultMetric values: TE Default Metric 100; TE Default Metric 200; the first is used" }],
+                 g[:link_findings]
+    assert_nil topology_node(views.topology(level: 1), "0000.0000.000a.00")[:link_findings]
+  end
+
   def test_topology_lists_each_node_once_and_leaves_out_a_purge
     views, = topology_fixture
     t = views.topology(level: 1)

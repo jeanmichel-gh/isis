@@ -128,6 +128,24 @@ interfaces:
   - { name: eth1, ip_addresses: [10.0.12.1], ti_lfa: link }
 ```
 
+Link attributes for flex-algo (RFC 9350, RFC 9479) are per interface:
+`affinity`, names from the file's `affinity_map`; `delay`, in
+microseconds; `te_metric`; and `srlg`. isisd sends them in one ASLA
+sub-TLV (16) of the link's TLV 22 entry, with the X bit alone and the L
+flag clear: affinity as an Extended Admin Group, the TE default metric,
+and the delay as Min/Max (min and max the same) and as the average. It
+sends no legacy sub-TLVs (RFC 9479 section 6.1). SRLGs go in TLV 238
+with the X bit, the link named by its IPv4 addresses, so `srlg` needs
+`ip_addresses`. A group is 0 to 1023, a delay or TE metric 0 to
+16777215. `docs/design/flex-algo.md` is the design.
+
+```yaml
+affinity_map: { red: 1, far: 40 }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.12.1], affinity: [red], delay: 5000,
+      te_metric: 100, srlg: [10] }
+```
+
 A change to this system's own LSP, an adjacency up or down among
 others, waits before it goes out. By default the wait is RFC 1142's
 fixed hold (7.3.21): at least `minimum_lsp_interval` seconds, 30 when
@@ -165,7 +183,7 @@ Every method:
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
-| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable |
+| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable, link attributes for flex-algo |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop); with TI-LFA a prefix's `backup` as on its route |
 | `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
@@ -258,6 +276,42 @@ such as a BGP-LS Producer, which needs the graph and not the LSP headers.
         0
       ]
     }
+  }
+  ```
+- Link attributes for flex-algo, only on a link that has them, as
+  `Spf::LinkAttributes` reads them (RFC 9350 section 12, RFC 9479
+  section 4.2): from the ASLA sub-TLVs with the X bit; with their L flag
+  set, from the legacy sub-TLVs and TLV 138, and then `asla_legacy` is
+  true; else, attribute by attribute, from ASLA sub-TLVs with a
+  zero-length mask. `affinity` is the groups set, from the Admin Group
+  and the Extended Admin Group (RFC 7308 section 2.3.1). `te_metric` is
+  the TE default metric. `delay` has `min` and `max` from Min/Max Link
+  Delay (34) and `average` from Unidirectional Link Delay (33), each
+  only when sent. `srlg` comes from TLV 238 with X, else with a
+  zero-length mask. A node's `link_findings` lists what broke RFC 9479
+  or RFC 7308 there (`docs/protocol-testing.md`), acted on under
+  `segment_routing`'s `receive_policy`, `rfc` without it.
+
+  ```json
+  {
+    "id": "0000.0000.000b.00",
+    "metric": 10,
+    "style": "wide",
+    "interface_address": "10.0.12.1",
+    "neighbor_address": "10.0.12.2",
+    "affinity": [
+      1,
+      40
+    ],
+    "te_metric": 100,
+    "delay": {
+      "min": 5000,
+      "max": 5000,
+      "average": 5000
+    },
+    "srlg": [
+      10
+    ]
   }
   ```
 - Other sub-TLVs and IPv6 prefixes are not given.
