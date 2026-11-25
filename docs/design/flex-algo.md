@@ -1,8 +1,7 @@
 # Flexible algorithm in isis4rd
 
-Status: draft, 2026-11-25. The owner answered four of its questions the
-same day ("Decisions", at the end). Three stay open. No code until the
-owner approves.
+Status: approved by the owner, 2026-11-25, with the answers in
+"Decisions", at the end. No question stays open.
 
 This is P9 in routescope's `docs/protocol-coverage.md`: "Application-
 specific link attributes, then the Flexible Algorithm Definition, its
@@ -344,8 +343,8 @@ regenerates the LSP. The LSP generation timer covers it.
    none set (M only once the M flag is built, later); sub-sub-TLVs 1, 2, 3, 5 and
    4. Anything else: not supported, with the reason kept for the view.
 
-A Level 1 copy of the Level 2 winner (section 5.1, "MAY") is not built.
-See the open questions.
+A Level 1 copy of the Level 2 winner (section 5.1, "MAY") is not built
+(decision 5).
 
 ### Calculation
 
@@ -472,8 +471,8 @@ clause and its action per policy (`:rfc`, `:strict`, `:lenient`):
 | `fad_subtlv_twice` | 9350 6.1 to 6.5, one sub-sub-TLV twice in one FAD | ignore the FAD |
 | `fad_split_differs` | 9350 6, fixed parts differ | use the first in the lowest LSP |
 | `fad_split_subtlv_twice` | 9350 6.1 to 6.4, across split FADs | use the first in the lowest LSP |
-| `fad_s_bit` | 9350 5.1, FAD in a TLV 242 with S set | see open question 2 |
-| `fad_eag_length` | 9350 6.1 to 6.3, not a multiple of 4 | see open question 2 |
+| `fad_s_bit` | 9350 5.1, FAD in a TLV 242 with S set | ignore the FAD and report (decision 6) |
+| `fad_eag_length` | 9350 6.1 to 6.3, not a multiple of 4 | ignore the FAD and report (decision 6) |
 | `fad_unsupported` | 9350 5.3, calc type, metric type, flag or sub-sub-TLV not supported | stop taking part |
 | `fapm_algorithm_range` | 9350 8 | ignore the FAPM |
 | `fapm_twice` | 9350 8, same algorithm twice | use the first |
@@ -484,7 +483,7 @@ clause and its action per policy (`:rfc`, `:strict`, `:lenient`):
 | `asla_l_flag_mixed` | 9479 4.2, L differs for one application | L set |
 | `asla_conflict` | 9479 4.2, two values for one application and link | use the first in the lowest LSP |
 | `asla_srlg_no_link_id` | 9479 4.3, no link identifier, or one twice | ignore the TLV |
-| `prefix_sid_algorithm_twice` | 8402 3.1, one prefix and algorithm, two SIDs | see open question 3 |
+| `prefix_sid_algorithm_twice` | 8402 3.1, one prefix and algorithm, two SIDs | use the first and report (decision 7) |
 
 `:algorithm_not_advertised` already covers a Prefix-SID for an
 algorithm its node does not list.
@@ -651,7 +650,8 @@ FAPM codec and its findings are still built in step 3.
 
 ## Decisions
 
-The owner's answers, 2026-11-25:
+The owner's answers, 2026-11-25. All seven of the draft's questions are
+answered.
 
 1. **SRLG now**, in steps 1 and 2: TLVs 138 and 238 and the
    exclude-SRLG rule.
@@ -660,16 +660,12 @@ The owner's answers, 2026-11-25:
 4. **ASLA only.** isisd sends no legacy link attributes for flex-algo
    (9479 section 6.1). It still reads legacy ones when an ASLA's L flag
    says to.
-
-## Open questions for the owner
-
-1. **Copy the Level 2 FAD into Level 1?** Section 5.1 makes it a "MAY".
-   I propose not now.
-2. **The two receive rules with no stated action**: a FAD in a TLV 242
-   with S set, and an admin group whose length is not a multiple of 4.
-   The RFC says "MUST" for the sender only. I propose: under `:rfc`,
-   ignore the FAD and report; under `:lenient`, use it. Note FRR's
-   behaviour in the lab.
-3. **Two Prefix-SIDs for one prefix and one algorithm.** RFC 8402
+5. **No Level 1 copy of the Level 2 FAD.** Section 5.1 makes it a
+   "MAY"; it is not built now.
+6. **A FAD in a TLV 242 with S set, or an admin group whose length is
+   not a multiple of 4**: the RFC says "MUST" for the sender only.
+   Under `:rfc` and `:strict`, isisd ignores the FAD and reports the
+   finding. Under `:lenient`, it uses it. The lab notes what FRR does.
+7. **Two Prefix-SIDs for one prefix and one algorithm**: RFC 8402
    section 3.1 asks the tuple be unique, but names no receiver action.
-   I propose: use the first, and report.
+   isisd uses the first, in the lowest-numbered LSP, and reports.
