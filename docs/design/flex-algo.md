@@ -266,6 +266,9 @@ its appendix):
   `metric-type te` is elected, then disabled as an "unsupported
   definition", and FRR withdraws it from SR-Algorithm (9350 section
   5.3).
+- The same with `delay N min N max N` on every link: the LSPs carried
+  the Min/Max delay, in ASLA too, and the delay FAD was still disabled.
+  So it is not the missing sub-TLV 34.
 - FADs show in text only, not in JSON.
 
 So FRR 10.7.1 can carry an IGP-metric algorithm at Level 1, and nothing
