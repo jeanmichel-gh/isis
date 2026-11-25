@@ -14,8 +14,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # What this run tests, as a fingerprint (.github/ci/fingerprint.sh): the
+  # tree but CLAUDE.md and docs/design/, which no test reads, and the
+  # commits of datalink-socket and bfd4r. On a pull request, when a run
+  # with the same fingerprint passed (the ci job records it in the cache),
+  # the test jobs are skipped and ci passes on that earlier run: a rebase
+  # that only resolves a conflict in CLAUDE.md, say. The check for
+  # conflict markers runs every time. A push to master always runs all.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fingerprint: ${{ steps.fingerprint.outputs.value }}
+      reuse: ${{ github.event_name == 'pull_request' && steps.passed.outputs.cache-hit == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: No conflict markers
+        run: .github/ci/markers.sh
+      - name: Fingerprint
+        id: fingerprint
+        run: echo "value=$(.github/ci/fingerprint.sh)" >> "$GITHUB_OUTPUT"
+      - name: A run with this fingerprint passed
+        id: passed
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v6
+        with:
+          path: .ci-passed
+          key: ci-passed-${{ steps.fingerprint.outputs.value }}
+          lookup-only: true
+
   test:
     name: test (Ruby ${{ matrix.ruby }})
+    needs: changes
+    if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -69,6 +103,8 @@ jobs:
   # harness, after ospfv2's interop-frr job.
   interop-frr:
     name: interop (FRR)
+    needs: changes
+    if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     # 4 minutes since #79. Before it, 22; one run took 62. Without a
     # timeout a hung run is billed for up to six hours.
@@ -143,6 +179,8 @@ jobs:
   # one in the repository comes from here.
   interop-ti-lfa:
     name: interop (TI-LFA)
+    needs: changes
+    if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -206,6 +244,8 @@ jobs:
   # SR Linux. The image tag is the one SrlLab::IMAGE names.
   interop-srl:
     name: interop (SR Linux)
+    needs: changes
+    if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -241,6 +281,8 @@ jobs:
   # beside FRR and test/lab/isis4r-frr.sh checks the routing through it.
   lab-containerlab:
     name: lab (containerlab)
+    needs: changes
+    if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -274,16 +316,25 @@ jobs:
 
   # The one check to require before merging. It passes only if every
   # matrix job, the FRR, TI-LFA and SR Linux interop jobs and the lab job passed, so adding or removing a Ruby version never means
-  # editing the branch rules. A skipped job counts as a failure here.
+  # editing the branch rules. A skipped job counts as a failure here,
+  # except when the changes job found a passed run with this fingerprint.
+  # A full pass is recorded under its fingerprint, for later runs.
   ci:
     name: ci
     if: always()
-    needs: [test, interop-frr, interop-ti-lfa, interop-srl, lab-containerlab]
+    needs: [changes, test, interop-frr, interop-ti-lfa, interop-srl, lab-containerlab]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: All test jobs passed
         run: |
+          echo "changes: ${{ needs.changes.result }}, reuse ${{ needs.changes.outputs.reuse }}"
+          echo "fingerprint: ${{ needs.changes.outputs.fingerprint }}"
+          test "${{ needs.changes.result }}" = "success"
+          if [ "${{ needs.changes.outputs.reuse }}" = "true" ]; then
+            echo "a run with this fingerprint passed: the test jobs were skipped"
+            exit 0
+          fi
           echo "test: ${{ needs.test.result }}"
           echo "interop-frr: ${{ needs.interop-frr.result }}"
           echo "interop-ti-lfa: ${{ needs.interop-ti-lfa.result }}"
@@ -294,3 +345,12 @@ jobs:
           test "${{ needs.interop-ti-lfa.result }}" = "success"
           test "${{ needs.interop-srl.result }}" = "success"
           test "${{ needs.lab-containerlab.result }}" = "success"
+      - name: Record the pass
+        if: needs.changes.outputs.reuse != 'true'
+        run: echo "${{ needs.changes.outputs.fingerprint }}" > .ci-passed
+      - name: Save the record
+        if: needs.changes.outputs.reuse != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .ci-passed
+          key: ci-passed-${{ needs.changes.outputs.fingerprint }}
