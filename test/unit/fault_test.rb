@@ -50,8 +50,37 @@ class TestFault < Minitest::Test
   end
 
   def test_every_rule_has_an_entry_and_every_entry_a_rule
-    assert_equal ISIS::Validation::RULES.keys.sort, F.catalog.map { _1[:finding] }.sort
-    assert_equal F.names.uniq, F.names
+    assert_equal ISIS::Validation::RULES.keys.sort, (F.catalog + F.link_catalog).map { _1[:finding] }.sort
+    assert_equal (F.names + F.link_names).uniq, F.names + F.link_names
+  end
+
+  # The findings Spf::LinkAttributes makes from c's LSP, built as +name+.
+  def link_findings(name)
+    ISIS::Spf::LinkAttributes.new([F.build(name, system_id: "0000.0000.000c")]).findings.map(&:name)
+  end
+
+  def test_each_link_entry_makes_its_finding_and_no_other
+    F.link_catalog.each do |e|
+      assert_equal [e[:finding]], link_findings(e[:name]), e[:name]
+    end
+  end
+
+  # The same link, correct: an ASLA with X and a TE metric, a TLV 238
+  # naming it.
+  def test_a_correct_link_makes_none
+    tlvs = F.link(F.context(neighbors: { "0000.0000.0002" => 10 }), [F.asla_te(100)],
+                  [ISIS::Tlv::AslaSrlg.new(neighbor: "0000.0000.0002.00", applications: %w[X],
+                                           links: [{ ipv4_interface_address: "10.0.0.1" }], srlgs: [10])])
+    la = ISIS::Spf::LinkAttributes.new([F.lsp(tlvs)])
+    assert_empty la.findings
+    assert_equal [{ te_metric: 100, srlg: [10] }], la.links.map(&:to_hash)
+  end
+
+  def test_each_link_entry_round_trips
+    F.link_names.each do |name|
+      octets = F.wire(name, neighbors: { "0000.0000.0002" => 10 })
+      assert_equal octets, ISIS::Pdu.factory(octets.dup).encode, name
+    end
   end
 
   def test_each_entry_makes_its_finding_and_no_other

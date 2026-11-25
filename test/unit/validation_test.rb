@@ -19,7 +19,8 @@ class TestValidation < Minitest::Test
   # Every rule has a channel, a clause, a description and an action for
   # each policy, all known ones.
   def test_every_rule_is_complete
-    known = %i[ignore_srgb ignore_node use_first ignore_sid drop_both use]
+    known = %i[ignore_srgb ignore_node use_first ignore_sid drop_both use ignore_subtlv ignore_values legacy
+               ignore_attribute ignore_tlv use_ag]
     V::RULES.each_value do |r|
       assert_includes V::CHANNELS, r.channel, r.name
       refute_empty r.clause, r.name
@@ -101,5 +102,33 @@ class TestValidation < Minitest::Test
     h = V.finding(:sr_capabilities_twice, "0000.0000.000b", "2 SR-Capabilities").to_hash
     assert_equal %i[name channel clause subject detail], h.keys
     assert_equal %w[sr_capabilities_twice errors], h.values_at(:name, :channel)
+  end
+
+  def asla(**mask)
+    ISIS::SubTlv::Asla.new(applications: %w[X], **mask)
+  end
+
+  def test_an_asla_mask_too_long
+    assert_equal [:asla_mask_too_long], names(V.asla(asla(sabm_length: 9), [], "x"))
+    assert_equal [:asla_mask_too_long], names(V.asla(asla(udabm_length: 9), [], "x"))
+    assert_empty V.asla(asla(sabm_length: 8), [], "x")
+  end
+
+  def test_values_beside_the_l_flag
+    assert_equal [:asla_l_flag_values], names(V.asla(asla(legacy: true), ["TE Default Metric 5"], "x"))
+    assert_empty V.asla(asla(legacy: true), [], "x")
+  end
+
+  def test_tlv_238_link_identifiers
+    v4 = ISIS::SubTlv::Ipv4InterfaceAddress.new("10.0.0.1")
+    nb = ISIS::SubTlv::Ipv4NeighborAddress.new("10.0.0.2")
+    assert_empty V.asla_srlg([v4, nb], "x")
+    assert_equal "x: no link identifier", V.asla_srlg([], "x").first.then { "#{_1.subject}: #{_1.detail}" }
+    assert_equal "sub-TLV 6 more than once", V.asla_srlg([v4, v4], "x").first.detail
+  end
+
+  def test_admin_group_against_the_eag
+    assert_empty V.admin_groups([1], [1, 40], "x")
+    assert_equal [:admin_group_mismatch], names(V.admin_groups([1], [2, 40], "x"))
   end
 end

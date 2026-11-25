@@ -246,17 +246,27 @@ module ISIS
       private
 
       # One node of #topology from its LSPs, LSP Number 0 first.
+      # Each link gains its attributes for flex-algo, and the node the
+      # findings on them, when it has any (Spf::LinkAttributes).
       def topology_node(node, lsps, names, reachable)
         id = node_s(node)
         zero = lsps.first
+        attributes = Spf::LinkAttributes.new(lsps, policy: receive_policy, subject: id)
         h = { id: id, hostname: names[id[0...-3]],
               areas: zero.tlvs.grep(Tlv::AreaAddresses).flat_map(&:areas).map(&:to_s),
               overload: zero.overload?, attached: !zero.attached.empty?, reachable: reachable,
-              neighbors: topology_neighbors(lsps), prefixes: topology_prefixes(lsps),
+              neighbors: topology_neighbors(lsps, attributes), prefixes: topology_prefixes(lsps),
               interface_addresses: topology_addresses(lsps, Tlv::IpInterfaceAddresses),
               ipv6_interface_addresses: topology_addresses(lsps, Tlv::Ipv6InterfaceAddresses) }
+        h[:link_findings] = attributes.findings.map(&:to_hash) unless attributes.findings.empty?
         sr = topology_sr(lsps)
         sr ? h.merge(sr: sr) : h
+      end
+
+      # What a finding on received data does: segment routing's
+      # receive_policy, rfc without it.
+      def receive_policy
+        @router.segment_routing&.receive_policy || :rfc
       end
 
       # The node's SR, from the sub-TLVs of its Router Capability TLV 242
@@ -295,7 +305,7 @@ module ISIS
       end
 
       # TLV 22's entries, or TLV 2's when no LSP of the node has TLV 22.
-      def topology_neighbors(lsps)
+      def topology_neighbors(lsps, attributes)
         tlvs = lsps.flat_map { _1.tlvs.to_a }
         wide = tlvs.grep(Tlv::ExtendedIsReachability)
         if wide.empty?
@@ -303,12 +313,15 @@ module ISIS
             { id: e.neighbor_s, metric: e.metrics.default, style: "narrow" }
           end
         else
-          wide.flat_map(&:entries).map { |e| wide_neighbor(e) }
+          wide.flat_map(&:entries).map { |e| wide_neighbor(e).merge(attributes.for(e)&.to_hash || {}) }
         end
       end
 
       # A TLV 22 entry, with the first of its sub-TLVs 6 and 8 when it has
-      # them (RFC 5305 sections 3.2 and 3.3).
+      # them (RFC 5305 sections 3.2 and 3.3). Its link attributes for
+      # flex-algo are merged in by the caller: affinity (groups), te_metric,
+      # delay ({ min:, max:, average: } in µs, those given), srlg, and
+      # asla_legacy when the L flag sent them in the legacy sub-TLVs.
       def wide_neighbor(entry)
         h = { id: entry.neighbor_s, metric: entry.metric, style: "wide" }
         { interface_address: SubTlv::Ipv4InterfaceAddress,
