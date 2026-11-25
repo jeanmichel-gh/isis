@@ -577,43 +577,37 @@ node, as `isis4r-tilfa` has (the owner's decision, 2026-11-25).
 
 ### `isis4r-flexalgo`
 
-**To decide before step 8.** FRR 10.7.1 does not run a delay algorithm,
-and elects FADs at Level 1 only ("Measured on FRR 10.7.1"). So f1 on the
-bottom path would leave algorithm 128, and RFC 9350 section 13 would
-prune it: 128 could not take the bottom path. The plan below is the
-approved one. The change proposed, waiting for the owner:
+Changed by the owner, 2026-11-25 (decision 8), after FRR 10.7.1 was
+measured ("Measured on FRR 10.7.1"): it runs only IGP-metric FADs, and
+elects FADs at Level 1 only. So f1 sits where an IGP-metric algorithm
+crosses it, and every router is at Level 1.
 
-- Every router at Level 1.
-- f1 replaces r5 on the middle path, r1-f1-r4. f1 takes part in 129
-  (IGP, exclude red), which FRR runs, so 129's labels cross FRR.
-- The bottom path is r1-r3-r4, IGP 20 + 20, delay 2 + 2 ms. 128 still
-  takes it, at 4 ms.
-- f1 does not take part in 128, so 128 prunes it: a real router of
-  another make, pruned (`fa_node_not_participating`). With r1-r3 down,
-  128's repair goes by the top, since the middle is pruned.
-
-The approved plan:
-
-Every router but f1 runs isis4r. f1 is FRR 10.7.1, on the bottom path,
-so algorithm 128's path crosses it. Three paths from r1 to r4, so three
-algorithms give three paths:
+Every router but f1 runs isis4r. f1 is FRR 10.7.1, on the middle path.
+Three paths from r1 to r4, so three algorithms give three paths:
 
 ```
          r2  (top: IGP 10 + 10, delay 20 ms each, red)
        /    \
-     r1 - r5 - r4 -- s1 (isis4r-sim)
-       \       /
-         r3 - f1  (bottom: IGP 20 + 10 + 10, delay 2 + 1 + 1 ms)
+     r1 - f1 - r4 -- s1 (isis4r-sim)
+       \    /
+         r3  (bottom: IGP 20 + 20, delay 2 ms each)
 
-  middle, r1-r5-r4: IGP 15 + 15, delay 5 ms each
+  middle, r1-f1-r4: IGP 15 + 15, delay 5 ms each
 ```
 
+- Every router is at Level 1.
 - Algorithm 0: the top, IGP 20.
-- Algorithm 128, delay, no constraint: the bottom, 4 ms.
-- Algorithm 129, IGP, exclude red: the middle, IGP 30.
-- TI-LFA on r1. With r1-r3 down, 128's repair goes by the middle. With
-  r1-r5 down, 129's repair goes by the bottom, never the top: it is red.
-  Algorithm 0's repair would take the top.
+- Algorithm 128, delay, no constraint: the bottom, 4 ms. f1 does not
+  take part in 128, so 128 prunes it (RFC 9350 section 13): a router of
+  another make, pruned.
+- Algorithm 129, IGP, exclude red: the middle, through f1, IGP 30. Its
+  labels cross FRR.
+- TI-LFA on r1. With r1-r3 down, 128's repair goes by the top: the
+  middle is pruned from 128. With r1-f1 down, 129's repair goes by the
+  bottom, never the top: it is red. Algorithm 0's repair would take the
+  top.
+- f1's links are configured with `delay N min N max N`, so it sends
+  sub-TLV 34 as well as 33.
 - s1 runs the behaviours and the codec faults against r4.
 - The SRGBs differ, as in `isis4r-tilfa`, so a label from the wrong
   block shows.
@@ -625,13 +619,17 @@ design. The lab's `ABOUT.md` gives the measured ones.
 
 The scenarios with f1:
 
-- f1 wins the FAD on priority, then an isis4r router does: every router
-  selects the same winner.
-- f1's labels for 128 and 129 agree with the isis4r routers' on the
-  path.
+- f1 wins 129's FAD on priority, then an isis4r router does: every
+  router selects the same winner.
+- f1's labels for 129 agree with the isis4r routers' on the path.
+- f1 withdraws 128 from its SR-Algorithm, and the isis4r routers prune
+  it from 128.
 - f1's ASLA and isisd's are read both ways.
 - A FAD with a constraint one side lacks: that side stops taking part,
   and the other routes around it.
+
+FRR shows FADs in text only, not in JSON. A scenario that needs f1's
+FAD state reads the text.
 
 Its `ABOUT.md` says f1 is the interop check (CLAUDE.md, "Our own Ruby
 code first"), as `isis4r-tilfa`'s does.
@@ -720,3 +718,6 @@ answered.
 7. **Two Prefix-SIDs for one prefix and one algorithm**: RFC 8402
    section 3.1 asks the tuple be unique, but names no receiver action.
    isisd uses the first, in the lowest-numbered LSP, and reports.
+8. **The lab's f1 on the middle path, every router at Level 1**
+   (2026-11-25, after FRR 10.7.1 was measured). f1 carries algorithm
+   129, and 128 prunes it.
