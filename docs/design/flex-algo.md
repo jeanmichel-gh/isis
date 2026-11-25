@@ -241,11 +241,37 @@ frr:10.7.1`, `FRRouting 10.7.1_git (f3e3c8b9d984)`.
 
 - Alone, it did not list 128 in SR-Algorithm, did not advertise the
   algorithm 128 Prefix-SID, and `show isis flex-algo` said "Source: Not
-  found" for the elected FAD. I do not know why. A router with no
-  neighbor may be the reason. The interop tests and the lab measure it
-  with neighbors, and how FRR encodes ASLA.
+  found" for the elected FAD.
 
-So the released FRR has flex-algo, and an interop lab is allowed.
+Then two FRR routers with a link between them, 2026-11-25, captured on
+the wire (`test/fixtures/frr-10.7.1-l2-lsp-flex-algo.hex`):
+
+- With `affinity` bit positions 1, 32 and 40, it sent the Extended
+  Admin Group `0e08 00000002 00000101`: groups numbered by 32-bit word.
+- It sent the legacy sub-TLVs and an ASLA sub-TLV with X set, and also
+  a UDABM of 0x10. The ASLA held the EAG, the TE metric and the delay.
+- With `delay 5000`, it sent only sub-TLV 33, the average delay. RFC
+  9350 metric type 1 reads the minimum, sub-TLV 34. With `delay 5000
+  min 4000 max 6000`, it sent both 33 and 34. The lab's FRR router
+  needs the second form.
+- With a neighbor, at Level 2, it still elected no FAD ("Source: Not
+  found").
+
+The routescope flex-algo views session measured further, with five FRR
+10.7.1 routers, 2026-11-25 (routescope `docs/design/flex-algo-views.md`,
+its appendix):
+
+- FRR elects a FAD at Level 1 only. At Level 2 it elects none.
+- Only FADs with the IGP metric run. A FAD with `metric-type delay` or
+  `metric-type te` is elected, then disabled as an "unsupported
+  definition", and FRR withdraws it from SR-Algorithm (9350 section
+  5.3).
+- FADs show in text only, not in JSON.
+
+So FRR 10.7.1 can carry an IGP-metric algorithm at Level 1, and nothing
+more. The lab is planned with that in mind ("Labs").
+
+
 
 ## The design
 
@@ -259,7 +285,10 @@ New codec classes, each built four ways, with `encode`, `parse`,
 | TLV 22 | 3 | `AdminGroup`, a 4-octet mask | 5305 3.1 |
 | TLV 22 | 14 | `ExtendedAdminGroup`, multiples of 4 octets | 7308 2.1 |
 | TLV 22 | 18 | `TeDefaultMetric`, 24 bits | 5305 3.7 |
+| TLV 22 | 33 | `LinkDelay`, A bit, the average in µs | 8570 4.1 |
 | TLV 22 | 34 | `MinMaxLinkDelay`, A bit, min and max in µs | 8570 4.2 |
+| TLV 22, 238 | 4 | `LinkIdentifiers` | 5307 1.1 |
+| TLV 22, 238 | 12, 13 | `Ipv6InterfaceAddress`, `Ipv6NeighborAddress` | 6119 4.2, 4.3 |
 | TLV 22 | 16 | `Asla`: the bit mask, then sub-sub-TLVs from its own registry | 9479 4.1, 4.2 |
 | top | 138 | `Tlv::Srlg` (GMPLS-SRLG) | 5307 |
 | top | 238 | `Tlv::AslaSrlg` | 9479 4.3 |
@@ -272,8 +301,13 @@ The `Fad` sub-sub-TLVs get a registry of their own. An unknown
 sub-sub-TLV is kept as `Unknown` and replayed, as everywhere.
 
 A wrong length is kept, as the codec keeps it today. Building never
-validates. RFC 5307 is not in `specs/rfc` yet: it is fetched and read
-before the SRLG class is written.
+validates.
+
+As built in step 1: 33, 4, 12 and 13 were added to the plan. FRR sends
+33 (below), and TLV 238's link identifiers (9479 section 4.3, Table 2)
+are 4, 6, 8, 12 and 13. Groups past 31 are numbered by 32-bit word:
+group 32 is the low bit of the second word. RFC 7308 section 2.2's
+example can be read otherwise; FRR numbers by word.
 
 ### Configuration
 
@@ -542,6 +576,23 @@ One lab, `isis4r-flexalgo`, in isis's `routescope/labs/`, with one FRR
 node, as `isis4r-tilfa` has (the owner's decision, 2026-11-25).
 
 ### `isis4r-flexalgo`
+
+**To decide before step 8.** FRR 10.7.1 does not run a delay algorithm,
+and elects FADs at Level 1 only ("Measured on FRR 10.7.1"). So f1 on the
+bottom path would leave algorithm 128, and RFC 9350 section 13 would
+prune it: 128 could not take the bottom path. The plan below is the
+approved one. The change proposed, waiting for the owner:
+
+- Every router at Level 1.
+- f1 replaces r5 on the middle path, r1-f1-r4. f1 takes part in 129
+  (IGP, exclude red), which FRR runs, so 129's labels cross FRR.
+- The bottom path is r1-r3-r4, IGP 20 + 20, delay 2 + 2 ms. 128 still
+  takes it, at 4 ms.
+- f1 does not take part in 128, so 128 prunes it: a real router of
+  another make, pruned (`fa_node_not_participating`). With r1-r3 down,
+  128's repair goes by the top, since the middle is pruned.
+
+The approved plan:
 
 Every router but f1 runs isis4r. f1 is FRR 10.7.1, on the bottom path,
 so algorithm 128's path crosses it. Three paths from r1 to r4, so three
