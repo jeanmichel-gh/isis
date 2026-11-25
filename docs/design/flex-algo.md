@@ -447,6 +447,28 @@ A property for the tests: a FAD with metric type 0 and no constraints,
 with every node taking part, gives the same next hops as algorithm 0,
 on any topology. It runs on the same 300 random topologies as TI-LFA's.
 
+As built in step 5: `Spf::Calculation` takes `algorithm:` and
+`definition:`, the winning FAD. A system's participation is the first
+SR-Algorithm sub-TLV in its lowest-numbered LSP; none is no
+participation. The RFC says nothing of a pseudonode's links: they carry
+no attributes, so they are taken at their metric, 0, without the rules;
+the router's link to the pseudonode carries the attributes and the
+cost. This system's first hop is its own link as its LSP gives it, not
+the circuit's metric: on a point-to-point circuit the TLV 22 entry to
+the neighbour, matched by the neighbour's address when the entry names
+it; on a LAN, its entry to the pseudonode that lists the neighbour. A
+prefix with the up/down bit is left out, and no default route is
+added toward an attached system: inter-level waits for the M flag.
+Each link pruned is kept with its rule (`Calculation#pruned`), so a
+test can see the rules' order. The Decision Process runs one
+calculation per algorithm this system takes part in, after selection,
+in algorithm order; a change of one of its routes is an event of kind
+`flex_algo_route`, at info. The property holds on 300 random
+topologies, of 3 to 12 systems (`test/unit/spf/flex_algo_calculation_test.rb`).
+The catalog's topology cases are `Fault::FLEX_ALGO_TOPOLOGIES`, a group
+of their own; `fa_ti_lfa_constraint` is step 6's. Not yet checked
+against FRR: that is step 7's.
+
 ### Labels and forwarding
 
 `Spf::Labels` gains an `algorithm`. For algorithm K it reads the
@@ -462,6 +484,23 @@ installs label routes as today; each entry gains its algorithm.
 algorithms: an index names one label in each SRGB, whatever the
 algorithm. A second Prefix-SID for the same prefix and algorithm is a
 finding too (8402 section 3.1).
+
+As built in step 5: `Spf::Labels` takes `algorithm:`, and `build`
+takes `taken:`, the indexes the tables built before it use. Algorithm
+0's table is built first, then each flex-algo's in order. An index one
+of them already uses, with or without a label route here, is a
+`:prefix_sid_duplicate` finding that names the one left out, and the
+table built first keeps it; inside one table both are left out, as
+before. A flex-algo's table has no Adj-SID entries: they are algorithm
+0's. `Forwarding::LabelTable#update` takes the flex-algo tables beside
+algorithm 0's and installs them through the same adapter.
+`show.labels` gives each entry's `algorithm`; `show.flex_algo` gives
+each algorithm's `routes`, its prefixes with their metric and next
+hops, since no IP route shows them. Measured in network namespaces on
+ospflab, Linux 7.0, 2026-11-25 (`test/interop/kernel_flex_algo_test.rb`):
+three isisd in a line, S installs 17103, D's index 103 for 128, swapped
+to A's 18103; with D's FAD changed to include only red, a color no link
+has, S withdraws 17103 and keeps algorithm 0's 17003.
 
 ### TI-LFA per algorithm
 

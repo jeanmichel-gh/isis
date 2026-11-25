@@ -57,6 +57,12 @@ module ISIS
       # This level's Spf::FlexAlgo, or nil: each run selects again, before
       # the routes, so a change of taking part regenerates the LSP.
       attr_accessor :flex_algo
+      # With segment routing and a flex_algo, each algorithm this system
+      # takes part in: its routes (prefix => Route), from its own
+      # calculation, and its label table (Spf::Labels), installed beside
+      # algorithm 0's. No IP route comes from them (docs/design/
+      # flex-algo.md, "Calculation").
+      attr_reader :flex_routes, :flex_labels
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -77,6 +83,8 @@ module ISIS
         @ti_lfa = {}
         @backups = nil
         @flex_algo = nil
+        @flex_routes = {}
+        @flex_labels = {}
         @circuits = []
         @routes = {}
         @paths = {}
@@ -147,6 +155,7 @@ module ISIS
         old_labels = @labels
         old_backups = @backups
         label(calc) if @segment_routing
+        flex(why) if @segment_routing && @flex_algo
         # No interface protected any more: no backups, so the forwarding
         # withdraws the last run's.
         if @segment_routing && @ti_lfa.any?
@@ -162,7 +171,7 @@ module ISIS
                   reasons: reasons.uniq.first(REASONS_KEPT), more: [reasons.uniq.size - REASONS_KEPT, 0].max)
         report(before, @routes, why)
         install(before, @routes, old_labels, old_backups)
-        @label_table&.update(level, @labels)
+        @label_table&.update(level, @labels, @flex_labels.values)
         @routes
       end
 
@@ -174,9 +183,65 @@ module ISIS
                         max_path_splits: @max_path_splits, max_path_metric: @max_path_metric).run
       end
 
+      # Algorithm +algorithm+'s calculation, with +definition+ its winning
+      # FAD.
+      def compute_flex(algorithm, definition)
+        adjacencies = @circuits.flat_map(&:spf_adjacencies)
+        broadcast = @circuits.filter_map(&:spf_broadcast)
+        Calculation.new(database: @database, system_id: @system_id, adjacencies: adjacencies, broadcast: broadcast,
+                        max_path_splits: @max_path_splits, max_path_metric: @max_path_metric,
+                        algorithm: algorithm, definition: definition, policy: receive_policy).run
+      end
+
       private
 
       DEFAULT = "0.0.0.0/0"
+
+      def receive_policy
+        (@segment_routing.receive_policy if @segment_routing.respond_to?(:receive_policy)) || :rfc
+      end
+
+      # Each algorithm this system takes part in: its routes and its label
+      # table, in algorithm order, each table's indexes checked against
+      # those before it, algorithm 0's first. A route of an algorithm that
+      # changed is logged at info, as kind :flex_algo_route; a new label
+      # problem at warn, as for algorithm 0.
+      def flex(why)
+        before = @flex_routes
+        old_labels = @flex_labels
+        @flex_routes = {}
+        @flex_labels = {}
+        taken = (@labels&.indexes || {}).transform_values { [_1, 0] }
+        @flex_algo.participating.each do |k|
+          calc = compute_flex(k, @flex_algo.statuses[k].winner)
+          @flex_routes[k] = calc.routes
+          table = Labels.new(own: @segment_routing, database: @database, paths: calc.paths, algorithm: k)
+                        .build(calc.routes, [], taken: taken)
+          @flex_labels[k] = table
+          table.indexes.each { |i, p| taken[i] ||= [p, k] }
+          named = table.findings.to_h { [_1.to_s, _1.name] }
+          (table.problems - (old_labels[k]&.problems || [])).each do |p|
+            text = named[p] ? "#{named[p]}: #{p}" : p
+            @log.warn("Level #{level} algorithm #{k} segment routing: #{text}", kind: :sr, level: level, algorithm: k)
+          end
+          report_flex(k, before[k] || {}, calc.routes, why)
+        end
+        # An algorithm no longer taken part in: each of its routes goes.
+        (before.keys - @flex_routes.keys).each { report_flex(_1, before[_1], {}, why) }
+      end
+
+      def report_flex(algorithm, before, after, why)
+        (before.keys | after.keys).sort.each do |prefix|
+          old = before[prefix]
+          new = after[prefix]
+          next if old && new && old.metric == new.metric && old.adjacencies == new.adjacencies
+
+          change = new.nil? ? :removed : (old ? :changed : :added)
+          text = new.nil? ? "#{prefix} removed" : "#{new} #{change}"
+          @log.info("Level #{level} algorithm #{algorithm} route #{text}, after #{why} (RFC 9350 section 13)",
+                    kind: :flex_algo_route, level: level, algorithm: algorithm, prefix: prefix, change: change)
+        end
+      end
 
       # The label table for this run's routes. A problem is logged once,
       # when it first appears, at warn: it is a label not installed. A

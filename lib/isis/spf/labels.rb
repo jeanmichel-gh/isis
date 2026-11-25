@@ -37,6 +37,16 @@ module ISIS
     # What cannot be computed, though no sender broke a clause, is a
     # problem only: an index past this system's SRGB, a neighbor without an
     # SRGB. Both are kept with the table and not raised.
+    #
+    # With +algorithm+ K, a flex-algo, the table is K's (docs/design/
+    # flex-algo.md, "Labels and forwarding"): the routes are K's
+    # calculation's, each with its Prefix-SID for K, and the labels come
+    # from the same SRGBs. No Adj-SID entry: those are algorithm 0's. An
+    # index names one label in each SRGB, whatever the algorithm, so one
+    # another table already took (+taken+ in #build) is a
+    # :prefix_sid_duplicate finding, and K's entry is left out; the table
+    # built first keeps it. A prefix K does not reach has no entry, so a
+    # packet with its label is dropped (RFC 9350 section 14.1).
     class Labels
       IMPLICIT_NULL = 3
       EXPLICIT_NULL = { ipv4: 0, ipv6: 2 }.freeze
@@ -45,7 +55,8 @@ module ISIS
       # next hop implicit null) or :pop; +kind+ :prefix_sid or :adj_sid;
       # +fec+ the prefix, or the neighbor's System ID; +hops+ a list of
       # [Spf::Adjacency, out-label].
-      Entry = Struct.new(:label, :op, :kind, :fec, :hops)
+      # +algorithm+ is 0 or the flex-algo the entry is for.
+      Entry = Struct.new(:label, :op, :kind, :fec, :hops, :algorithm)
 
       # A node's SR state as its LSPs give it: the SRGB as [first, last]
       # ranges, in order, and the algorithms it runs. For the views, also
@@ -61,11 +72,16 @@ module ISIS
         end
       end
 
-      attr_reader :entries, :out_labels, :problems, :nodes, :findings, :policy
+      attr_reader :entries, :out_labels, :problems, :nodes, :findings, :policy, :algorithm
+      # The indexes this table uses, index => prefix, with or without an
+      # entry here: an index names a label in every system's SRGB.
+      attr_reader :indexes
 
       # +own+ is this system's SegmentRouting; +paths+ the SPF's, whose keys
       # are the nodes reachable at this level.
-      def initialize(own:, database:, paths:, policy: nil)
+      def initialize(own:, database:, paths:, policy: nil, algorithm: 0)
+        @algorithm = algorithm
+        @indexes = {}
         @own = own
         @policy = Validation.policy(policy || (own.receive_policy if own.respond_to?(:receive_policy)))
         @findings = []
@@ -92,8 +108,10 @@ module ISIS
       end
 
       # Builds the table from +routes+, prefix => Route, and +adjacencies+,
-      # the circuits' Spf::Adjacency list. Returns self.
-      def build(routes, adjacencies)
+      # the circuits' Spf::Adjacency list. +taken+ is the indexes other
+      # tables of this level hold, index => [prefix, algorithm]. Returns
+      # self.
+      def build(routes, adjacencies, taken: {})
         read_nodes
         own = @own.srgb.map { |first, size| [first, first + size - 1] }
         by_index = Hash.new { |h, k| h[k] = [] }
@@ -105,9 +123,16 @@ module ISIS
         by_index.each do |index, list|
           if list.map(&:prefix).uniq.size > 1
             found(Validation.prefix_sid_duplicate(index, list.map(&:prefix).uniq))
+            @indexes[index] ||= list.first.prefix unless taken[index]
             next
           end
           route = list.first
+          if (other = taken[index])
+            found(Validation.prefix_sid_duplicate(index, [name(*other), name(route.prefix, @algorithm)],
+                                                  left_out: name(route.prefix, @algorithm)))
+            next
+          end
+          @indexes[index] = route.prefix
           label = Labels.label_at(own, index)
           unless label
             problem("#{route.prefix}: index #{index} is past this system's SRGB")
@@ -196,7 +221,7 @@ module ISIS
         if route.local?
           return unless sid.flag?(:p)
 
-          @entries[label] = Entry.new(label, :pop, :prefix_sid, route.prefix, [])
+          @entries[label] = Entry.new(label, :pop, :prefix_sid, route.prefix, [], @algorithm)
           return
         end
         hops = route.adjacencies.filter_map do |a|
@@ -207,7 +232,7 @@ module ISIS
 
         hops.each { |a, out| (@out_labels[route.prefix] ||= {})[[a.circuit, a.neighbor.b]] = out }
         op = hops.all? { |_, out| out == IMPLICIT_NULL } ? :php : :swap
-        @entries[label] = Entry.new(label, op, :prefix_sid, route.prefix, hops)
+        @entries[label] = Entry.new(label, op, :prefix_sid, route.prefix, hops, @algorithm)
       end
 
       def out_for(route, adjacency, index)
@@ -228,7 +253,12 @@ module ISIS
 
       def adj_entry(adjacency)
         label = @own.adj_labels[[adjacency.circuit, adjacency.neighbor.b, :ipv4]] or return
-        @entries[label] = Entry.new(label, :pop, :adj_sid, adjacency.neighbor.b, [[adjacency, IMPLICIT_NULL]])
+        @entries[label] = Entry.new(label, :pop, :adj_sid, adjacency.neighbor.b, [[adjacency, IMPLICIT_NULL]], 0)
+      end
+
+      # A prefix as a finding names it: with its algorithm unless 0.
+      def name(prefix, algorithm)
+        algorithm.zero? ? prefix : "#{prefix} (algorithm #{algorithm})"
       end
 
       def problem(text)
