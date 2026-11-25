@@ -2598,6 +2598,14 @@ looking at, in routescope's repository.
   on every supported Ruby, in `.github/workflows/ci.yml`, and the one check
   a merge waits for is `ci`. It passes only when every matrix job passed.
   Add a Ruby version to the matrix, not to the branch rules.
+* A pull request whose tested tree matches one that already passed, but
+  for `CLAUDE.md` and `docs/design/`, does not run the tests again: a
+  rebase that only resolves a conflict in this file, say. The `changes`
+  job compares fingerprints (`.github/ci/fingerprint.sh`) and still
+  checks that no conflict marker is left; `ci` passes on the earlier
+  run. No code may read those two paths, and
+  `test/unit/ci_fingerprint_test.rb` holds that. A push to master runs
+  everything.
 * New behaviour needs a test. A fix needs a test that failed before it.
 * If you find a bug you are not fixing, say so in the pull request.
 * **Work out what the code was built to do before concluding it is wrong.**
