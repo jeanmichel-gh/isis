@@ -54,6 +54,9 @@ module ISIS
       attr_accessor :ti_lfa
       # The last run's Spf::Backups, or nil.
       attr_reader :backups
+      # This level's Spf::FlexAlgo, or nil: each run selects again, before
+      # the routes, so a change of taking part regenerates the LSP.
+      attr_accessor :flex_algo
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -73,6 +76,7 @@ module ISIS
         @labels = nil
         @ti_lfa = {}
         @backups = nil
+        @flex_algo = nil
         @circuits = []
         @routes = {}
         @paths = {}
@@ -139,6 +143,7 @@ module ISIS
         why = reasons.uniq.first(3).join("; ")
         why += "; and #{reasons.uniq.size - 3} more" if reasons.uniq.size > 3
         set_attached(calc.reaches_other_area?, why) if level == 2 && @attached_flag
+        @flex_algo&.update(why)
         old_labels = @labels
         old_backups = @backups
         label(calc) if @segment_routing

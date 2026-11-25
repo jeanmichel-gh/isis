@@ -93,14 +93,33 @@ module ISIS
     # "the S-Flag in the Router Capability TLV [RFC7981] MUST be unset";
     # then SR-Capabilities with I, and V with IPv6; SR-Algorithm 0 (section
     # 3.2: "algorithm 0 MUST be present"); and the SRLB (section 3.3).
-    def capability
+    def capability(algorithms: [0])
       Tlv::RouterCapability.new(
         router_id: @router_id.to_s,
         subtlvs: [SubTlv::SrCapabilities.new(flags: @ipv6 ? %w[I V] : %w[I],
                                              descriptors: @srgb.map { |first, size| { range: size, label: first } }),
-                  SubTlv::SrAlgorithm.new(0),
+                  SubTlv::SrAlgorithm.new(algorithms),
                   SubTlv::SrLocalBlock.new(descriptors: [{ range: @srlb[1], label: @srlb[0] }])]
       )
+    end
+
+    # The TLV 242s for an LSP with flex-algo: #capability, its SR-Algorithm
+    # listing 0 and then +algorithms+, the ones this system takes part in
+    # (RFC 9350 section 11), and the FAD sub-TLVs +fads+ after it, S clear
+    # (section 5.1). FADs that do not fit in the first TLV's 255 octets go
+    # in a second TLV 242 with the same Router ID, and so on.
+    def capabilities(algorithms: [], fads: [])
+      first = capability(algorithms: [0] + algorithms)
+      list = [first]
+      fads.each do |fad|
+        tlv = list.last
+        if tlv.encode.bytesize - 2 + fad.encode.bytesize > 255
+          tlv = Tlv::RouterCapability.new(router_id: @router_id.to_s, subtlvs: [])
+          list << tlv
+        end
+        tlv.subtlvs << fad
+      end
+      list
     end
 
     # The Prefix-SID sub-TLV hash for a configured prefix, or nil:
@@ -116,12 +135,31 @@ module ISIS
     def self.prefix_sid(p)
       return nil unless p.key?(:sid)
 
-      host = p[:prefix].to_s.end_with?("/32", "/128")
+      { prefix_sid: { flags: prefix_flags(p), algorithm: 0, index: Integer(p[:sid]) } }
+    end
+
+    # The Prefix-SID sub-TLV hashes of a configured prefix: algorithm 0's,
+    # then one for each of +algorithms+ in its algorithm_sids, with the same
+    # flags (docs/design/flex-algo.md, "Origination"). RFC 8667 section
+    # 2.1: the algorithm "MUST be set to 0 or to any value advertised in
+    # the SR-Algorithm sub-TLV", so +algorithms+ is those this system takes
+    # part in.
+    def self.prefix_sids(p, algorithms)
+      list = [prefix_sid(p)].compact
+      Hash(p[:algorithm_sids]).sort.each do |a, index|
+        next unless algorithms.include?(a)
+
+        list << { prefix_sid: { flags: prefix_flags(p), algorithm: a, index: Integer(index) } }
+      end
+      list
+    end
+
+    def self.prefix_flags(p)
       flags = []
-      flags << "N" if host
+      flags << "N" if p[:prefix].to_s.end_with?("/32", "/128")
       flags << "P" if p[:no_php] || p[:explicit_null]
       flags << "E" if p[:explicit_null]
-      { prefix_sid: { flags: flags, algorithm: 0, index: Integer(p[:sid]) } }
+      flags
     end
 
     # The Prefix-SID of a prefix taken from the other level, section

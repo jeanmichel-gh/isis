@@ -30,6 +30,12 @@ module ISIS
   #     receive_policy: rfc          rfc, strict or lenient (Validation)
   #   affinity_map: {red: 1}        names for the interfaces' affinity, each a
   #                                 group, 0 to 1023 (RFC 7308)
+  #   flex_algo: [{algorithm: 128, metric_type: delay, ...}]
+  #                                 the algorithms this system takes part in
+  #                                 (RFC 9350; FlexAlgoConfig has the keys);
+  #                                 needs segment_routing. A prefix gives
+  #                                 algorithm_sids: {128: 101}, an index
+  #                                 per algorithm
   #   overload: false
   #   area_key: / hello_key:        HMAC-MD5 keys (RFC 5304)
   #   lsp_buffer_size: 1492
@@ -106,7 +112,7 @@ module ISIS
     end
 
     attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing,
-                :label_table,
+                :label_table, :flex_config, :flex_algos,
                 :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock, :bfd
 
     def initialize(config, clock:, scheduler:, log:, host:)
@@ -146,7 +152,21 @@ module ISIS
         link_attributes(i, name, config)
         i.merge(name: name, network: network)
       end
+      flex = flex_config(config)
+      %i[prefixes ipv6_prefixes].each do |key|
+        next unless config[key]
+
+        config[key] = Array(config[key]).map do |p|
+          p.is_a?(Hash) && p.key?(:algorithm_sids) ? p.merge(algorithm_sids: flex.algorithm_sids(p)) : p
+        end
+      end
       config
+    end
+
+    # The flex_algo list, checked (FlexAlgoConfig).
+    def self.flex_config(config)
+      FlexAlgoConfig.new(config[:flex_algo], affinity_map: affinity_map(config),
+                                             segment_routing: config[:segment_routing])
     end
 
     # Refuses a ti_lfa that cannot apply, naming why.
@@ -217,7 +237,9 @@ module ISIS
 
     def self.symbolize(value)
       case value
-      when Hash then value.to_h { |k, v| [k.to_sym, symbolize(v)] }
+      # A key YAML reads as a number, as algorithm_sids' {128: 101}, stays
+      # one.
+      when Hash then value.to_h { |k, v| [k.is_a?(Integer) ? k : k.to_sym, symbolize(v)] }
       when Array then value.map { |v| symbolize(v) }
       else value
       end
@@ -304,6 +326,18 @@ module ISIS
       { interface: iface[:name], mode: mode }
     end
 
+    # Algorithm +algorithm+'s FAD changed while running (policy.flex_algo):
+    # +changes+ any of advertise, priority, metric_type, exclude_any,
+    # include_any, include_all and exclude_srlg, checked as the file's are.
+    # Each level selects again, and the LSPs go out with the new FAD.
+    def set_flex_algo(algorithm, changes)
+      entry = @flex_config.change(algorithm, Router.symbolize(changes))
+      why = "policy.flex_algo #{entry.algorithm}"
+      @flex_algos.each_value { _1.update(why) }
+      @originators.each_value { _1.changed(why) }
+      entry.to_hash
+    end
+
     def redistribute=(kinds)
       @redistributions.each { |r| r.kinds = kinds }
     end
@@ -326,9 +360,17 @@ module ISIS
       @segment_routing = SegmentRouting.from_config(@config[:segment_routing], router_id: @config[:router_id],
                                                     prefixes: @config.fetch(:prefixes, []),
                                                     ipv6: protocols.include?(:ipv6), no_adj_sid: no_adj_sid)
+      @flex_config = self.class.flex_config(@config)
+      @flex_algos = {}
       @levels.each do |level|
         @databases[level] = Database.new(level: level, clock: @clock, scheduler: @scheduler, log: @log)
+        unless @flex_config.empty?
+          @flex_algos[level] = Spf::FlexAlgo.new(level: level, system_id: @system_id, database: @databases[level],
+                                                 config: @flex_config, log: @log,
+                                                 policy: @segment_routing.receive_policy)
+        end
         @originators[level] = originator(level)
+        @flex_algos[level]&.originator = @originators[level]
       end
       @bfd = @config[:interfaces].any? { _1[:bfd] } ? Bfd.new(client: @host.bfd_client, log: @log) : nil
       @interfaces = []
@@ -389,7 +431,7 @@ module ISIS
                      buffer_size: c.fetch(:lsp_buffer_size, Originator::LSP_BUFFER_SIZE),
                      is_type: both? ? 3 : nil, level1_database: level == 2 ? @databases[1] : nil,
                      overload: c.fetch(:overload, false), segment_routing: @segment_routing,
-                     link_attributes: link_attributes)
+                     link_attributes: link_attributes, flex_algo: @flex_algos[level])
     end
 
     # Each interface's attributes for flex-algo, by circuit name, as the
@@ -516,6 +558,7 @@ module ISIS
                             segment_routing: @segment_routing)
       d.label_table = @label_table
       d.ti_lfa = ti_lfa_modes
+      d.flex_algo = @flex_algos[level]
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))
