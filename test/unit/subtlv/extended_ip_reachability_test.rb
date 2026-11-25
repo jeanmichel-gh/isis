@@ -66,12 +66,13 @@ class TestSubTlvExtendedIpReachability < Minitest::Test
   end
 
   # Under 135 and 236, where RFC 8667 section 2.1 puts it and isis4r has
-  # classes. Under 22 the same number stays unknown.
+  # classes. Under 22 the same number is another sub-TLV, the Admin Group
+  # (RFC 5305 section 3.1).
   def test_registered_under_135_and_236
     prefix = octets("0306400000000001")
     assert_instance_of ISIS::SubTlv::PrefixSid, ISIS::SubTlv::List.parse_under(135, prefix.dup).first
     assert_instance_of ISIS::SubTlv::PrefixSid, ISIS::SubTlv::List.parse_under(236, prefix.dup).first
-    assert_instance_of ISIS::SubTlv::Unknown, ISIS::SubTlv::List.parse_under(22, prefix.dup).first
+    assert_instance_of ISIS::SubTlv::AdminGroup, ISIS::SubTlv::List.parse_under(22, prefix.dup).first
   end
 
   # In a TLV 135 entry, as FRR sent it for 10.255.0.1/32: metric 10,
