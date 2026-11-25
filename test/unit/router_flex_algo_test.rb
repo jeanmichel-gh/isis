@@ -90,6 +90,39 @@ class TestRouterFlexAlgo < Minitest::Test
     assert_equal [128], a.flex_algos[1].participating
   end
 
+  # Step 5: A computes 128's tree and its label table. B's Prefix-SID for
+  # 128, index 102, is A's label 16102, popped toward B, its owner
+  # (implicit null, P clear), beside algorithm 0's 16002. show.labels
+  # names each one's algorithm, and show.flex_algo gives 128's routes,
+  # its own local.
+  def test_label_table_per_algorithm
+    a, = pair
+    views = ISIS::Daemon::Views.new(a)
+    rows = views.labels(level: 1).select { _1[:kind] == "prefix_sid" }
+    assert_equal [[16_002, "10.255.0.2/32", "php", 0], [16_102, "10.255.0.2/32", "php", 128]],
+                 rows.map { _1.values_at(:label, :fec, :op, :algorithm) }
+    assert_equal [3], rows.last[:next_hops].map { _1[:label] }
+    algo = views.flex_algo[:levels][1][:algorithms].first
+    assert_equal [{ prefix: "10.255.0.1/32", metric: 0, next_hops: [] },
+                  { prefix: "10.255.0.2/32", metric: 10, next_hops: [{ address: "10.0.12.2", interface: "ab" }] }],
+                 algo[:routes]
+    assert_equal [128], a.decisions[1].flex_labels.keys
+  end
+
+  # A stops advertising the only FAD: B stops taking part, and each of
+  # 128's routes goes, as an event of kind :flex_algo_route, with its
+  # label routes.
+  def test_leaving_an_algorithm_removes_its_routes
+    a, b = pair
+    a.set_flex_algo(128, { "advertise" => false })
+    run_for(10)
+    refute b.flex_algos[1].participating?(128)
+    assert_empty b.decisions[1].flex_labels
+    gone = @log.events.select { _1.kind == :flex_algo_route && _1.message.start_with?("Level 1 algorithm 128 route") &&
+                                _1.message.include?("removed") }
+    assert_equal 4, gone.size, "both prefixes, at A and at B: #{gone.map(&:message)}"
+  end
+
   def test_refusals
     refuse = ->(c) { assert_raises(ArgumentError) { ISIS::Router.normalize(c) }.message }
     base = { segment_routing: {}, interfaces: [] }

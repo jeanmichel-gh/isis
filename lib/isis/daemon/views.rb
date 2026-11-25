@@ -110,18 +110,23 @@ module ISIS
       # The label table each level's last SPF run gave (Spf::Labels), one
       # row per in-label: its kind, what it is for, what is done with it,
       # and each next hop with the label it leaves with, 3 being implicit
-      # null, a pop. Empty without segment routing.
+      # null, a pop; and the algorithm it is for, 0 or a flex-algo's.
+      # Empty without segment routing.
       def labels(level: nil)
         names = hostnames
         @router.levels.select { level.nil? || _1 == Integer(level) }.flat_map do |l|
           table = @router.decisions[l].labels or next []
-          table.entries.values.sort_by(&:label).map do |e|
+          entries = table.entries.values + @router.decisions[l].flex_labels.values.flat_map { _1.entries.values }
+          entries.sort_by(&:label).map do |e|
             fec = e.kind == :adj_sid ? names.fetch(SystemId.from_bytes(e.fec).to_s, SystemId.from_bytes(e.fec).to_s) : e.fec
             row = { level: l, label: e.label, kind: e.kind.to_s, fec: fec, op: e.op.to_s,
                     next_hops: e.hops.map do |a, out|
                       { address: a.next_hop(e.kind == :adj_sid || !e.fec.include?(":") ? :ipv4 : :ipv6),
                         interface: interface_of(a.circuit), label: out }
-                    end }
+                    end,
+                    algorithm: e.algorithm || 0 }
+            next row unless row[:algorithm].zero?
+
             backup = @router.decisions[l].backups&.label(e.label)
             row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4, names)) if backup
             row
@@ -153,8 +158,9 @@ module ISIS
       # Flex-algo (docs/design/flex-algo.md, "API and CLI"): the configured
       # algorithms, then per level each one's winning FAD and its origin,
       # whether isis4r can run it, whether this system takes part and why
-      # not, and every FAD offered, the winner first; and the findings on
-      # the FADs read. { enabled: false } without flex_algo.
+      # not, and every FAD offered, the winner first; the routes of each
+      # algorithm it takes part in, for its label table; and the findings
+      # on the FADs read. { enabled: false } without flex_algo.
       def flex_algo
         return { enabled: false } if @router.flex_config.empty?
 
@@ -162,11 +168,21 @@ module ISIS
         { enabled: true, configured: @router.flex_config.entries.map(&:to_hash),
           levels: @router.flex_algos.to_h do |l, f|
             h = f.to_hash.except(:level)
+            routes = @router.decisions[l]&.flex_routes || {}
             h[:algorithms] = h[:algorithms].map do |a|
               a = a.merge(candidates: a[:candidates].map { |c| c.merge(hostname: names[c[:origin]]).compact })
-              a[:winner] ? a.merge(winner: a[:winner].merge(hostname: names[a[:winner][:origin]]).compact) : a
+              a = a.merge(winner: a[:winner].merge(hostname: names[a[:winner][:origin]]).compact) if a[:winner]
+              a.merge(routes: (routes[a[:algorithm]] || {}).values.sort_by(&:prefix).map { flex_route(_1) })
             end
             [l, h]
+          end }
+      end
+
+      # One route of a flex-algo: its prefix, metric and next hops.
+      def flex_route(route)
+        { prefix: route.prefix, metric: route.metric,
+          next_hops: route.adjacencies.map do |a|
+            { address: a.next_hop(route.family), interface: interface_of(a.circuit) }
           end }
       end
 

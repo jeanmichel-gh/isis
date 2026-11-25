@@ -104,9 +104,11 @@ module ISIS
         @adapter.flush_labels if @adapter.respond_to?(:flush_labels)
       end
 
-      # +labels+ is the level's Spf::Labels, or nil for none.
-      def update(level, labels)
-        @tables[level] = labels ? labels.entries : {}
+      # +labels+ is the level's Spf::Labels, or nil for none; +more+ its
+      # flex-algos' tables, whose labels algorithm 0's never share
+      # (Spf::Labels, +taken+).
+      def update(level, labels, more = [])
+        @tables[level] = more.map(&:entries).push(labels ? labels.entries : {}).reduce({}, :merge)
         want = {}
         @tables.keys.sort.reverse_each { |l| want.merge!(@tables[l]) }
         (@installed.keys - want.keys).sort.each do |label|

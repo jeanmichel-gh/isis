@@ -11,7 +11,8 @@ module ISIS
   #
   # Four groups. Segment routing's (CATALOG): an LSP with one wrong thing
   # in its SR data. TI-LFA's topologies (TOPOLOGIES): well formed, each
-  # with the repair RFC 9855 expects. Packets at the PLR (PACKETS).
+  # with the repair RFC 9855 expects; flex-algo's (FLEX_ALGO_TOPOLOGIES),
+  # each with the path RFC 9350 expects. Packets at the PLR (PACKETS).
   # Behaviours (BEHAVIOURS): misbehaviour over time, a script the
   # simulator runs.
   #
@@ -162,6 +163,102 @@ module ISIS
                 (0..TOO_DEEP_CHAIN).map { |i| ["A#{i}", "F", "1"] } +
                 (0...TOO_DEEP_CHAIN).map { |i| ["A#{i}", "A#{i + 1}", "1000"] } },
        "S", [:node, "F"], "D", { unprotected: :too_deep }]
+    ].freeze
+
+    # Flex-algo's topologies (RFC 9350; docs/design/flex-algo.md, "3.
+    # Negative tests"), each a small graph with the path the RFC expects
+    # from S to D for algorithm FLEX_ALGO. Each entry: [name,
+    # description, rfc, the topology, the FADs, what the RFC expects].
+    #
+    # A topology is links [a, b, IGP metric, attributes, attributes back],
+    # each reported by both ends; the attributes are a's link to b,
+    # b's back the same unless given: affinity (groups: red 1, green 2,
+    # blue 3, yellow 4), delay (µs, sent
+    # as min and max), te_metric, srlg, and one_way, b does not report
+    # it. not_taking_part lists the systems whose SR-Algorithm lacks
+    # FLEX_ALGO. The FADs are system => FAD sub-TLV Hash; S advertises
+    # none. expect is the winner, then S's first hops to D and the metric,
+    # or unreachable, or taking_part false. Written by hand from the RFC,
+    # never computed.
+    #
+    # Systems are numbered as they first appear in the links, from 1:
+    # System ID 0000.0000.00NN, loopback 10.255.0.N/32, Prefix-SID index
+    # N for algorithm 0 and 100 + N for FLEX_ALGO.
+    FLEX_ALGO = 128
+
+    def self.square(top = {}, bottom = {}, top_d: top)
+      [["S", "A", 1, top], ["A", "D", 1, top_d], ["S", "B", 5, bottom], ["B", "D", 5, bottom]]
+    end
+
+    FLEX_ALGO_TOPOLOGIES = [
+      [:fa_exclude_any, "A to D is red; the FAD excludes red: by B", "RFC 9350 section 13, rule 1",
+       { links: square({}, {}, top_d: { affinity: [1] }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }] } },
+       { winner: "D", first_hops: ["B"], metric: 10 }],
+      [:fa_include_any, "A's links are blue, B's green; the FAD includes any of green and yellow: by B",
+       "RFC 9350 section 13, rule 3",
+       { links: square({ affinity: [3] }, { affinity: [2] }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_include_any_admin_group: { groups: [2, 4] } }] } },
+       { winner: "D", first_hops: ["B"], metric: 10 }],
+      [:fa_include_all, "A's links have green only, B's green and blue; the FAD includes all of both: by B",
+       "RFC 9350 section 13, rule 4",
+       { links: square({ affinity: [2] }, { affinity: [2, 3] }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_include_all_admin_group: { groups: [2, 3] } }] } },
+       { winner: "D", first_hops: ["B"], metric: 10 }],
+      [:fa_exclude_srlg, "A to D is in SRLG 10; the FAD excludes it: by B", "RFC 9350 section 13, rule 2",
+       { links: square({}, {}, top_d: { srlg: [10] }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_exclude_srlg: { srlgs: [10] } }] } },
+       { winner: "D", first_hops: ["B"], metric: 10 }],
+      [:fa_delay, "A's links 20 ms each, B's 2 ms; the FAD's metric is the delay: by B, 4 ms",
+       "RFC 9350 section 5.1, metric type 1",
+       { links: square({ delay: 20_000 }, { delay: 2_000 }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "delay" } },
+       { winner: "D", first_hops: ["B"], metric: 4_000 }],
+      [:fa_te_metric, "A's links TE metric 50 each, B's 3; the FAD's metric is TE: by B, 6",
+       "RFC 9350 section 5.1, metric type 2",
+       { links: square({ te_metric: 50 }, { te_metric: 3 }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "te" } },
+       { winner: "D", first_hops: ["B"], metric: 6 }],
+      [:fa_link_no_metric, "A to D has no delay; the FAD's metric is the delay: A to D is pruned, not 0, so by B",
+       "RFC 9350 section 13, rule 5",
+       { links: square({ delay: 1_000 }, { delay: 20_000 }, top_d: {}) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "delay" } },
+       { winner: "D", first_hops: ["B"], metric: 40_000 }],
+      [:fa_last_resort, "S to A has a delay of 2^24 - 1, the only path: used, as a last resort",
+       "RFC 9350 section 15.3",
+       { links: [["S", "A", 1, { delay: 0xFFFFFF }], ["A", "D", 1, { delay: 1 }]] },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "delay" } },
+       { winner: "D", first_hops: ["A"], metric: 0x1000000 }],
+      [:fa_node_not_participating, "A does not take part: it is pruned, so by B", "RFC 9350 section 13",
+       { links: square, not_taking_part: ["A"] },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100 } },
+       { winner: "D", first_hops: ["B"], metric: 10 }],
+      [:fa_one_way, "D's link back to A is red, A's to D is not; the FAD excludes red: the two-way check is " \
+                    "algorithm 0's, so by A",
+       "RFC 9350 section 13, the two-way check",
+       { links: [["S", "A", 1, {}], ["A", "D", 1, {}, { affinity: [1] }], ["S", "B", 5, {}], ["B", "D", 5, {}]] },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }] } },
+       { winner: "D", first_hops: ["A"], metric: 2 }],
+      [:fa_partition, "the only path is red; the FAD excludes red: D unreachable, no label route",
+       "RFC 9350 section 14.1",
+       { links: [["S", "A", 1, {}], ["A", "D", 1, { affinity: [1] }]] },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }] } },
+       { winner: "D", unreachable: true }],
+      [:fa_priority, "D's FAD, IGP, priority 100; B's, delay, priority 200: B's wins, so by B on delay",
+       "RFC 9350 section 5.3",
+       { links: square({ delay: 20_000 }, { delay: 2_000 }) },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100 },
+         "B" => { algorithm: FLEX_ALGO, priority: 200, metric_type: "delay" } },
+       { winner: "B", first_hops: ["B"], metric: 4_000 }],
+      [:fa_system_id_tie, "A's FAD, IGP, and B's, delay, both priority 100: B has the greater System ID and " \
+                          "wins, so by B on delay",
+       "RFC 9350 section 5.3",
+       { links: square({ delay: 20_000 }, { delay: 2_000 }) },
+       { "A" => { algorithm: FLEX_ALGO, priority: 100 },
+         "B" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "delay" } },
+       { winner: "B", first_hops: ["B"], metric: 4_000 }],
+      [:fa_no_fad, "no system advertises a FAD: S does not take part", "RFC 9350 section 5.3",
+       { links: square }, {}, { taking_part: false }]
     ].freeze
 
     # The third group: packets that reach the PLR while it repairs, sent by
@@ -359,6 +456,16 @@ module ISIS
         { name: name, description: description, rfc: rfc, links: topology[:links],
           overloaded: topology.fetch(:overloaded, []), plr: plr, failure: failure, destination: destination,
           expect: expect }
+      end
+    end
+
+    def flex_topology_names = FLEX_ALGO_TOPOLOGIES.map(&:first)
+
+    # The flex-algo topologies, as Hashes.
+    def flex_topologies
+      FLEX_ALGO_TOPOLOGIES.map do |name, description, rfc, topology, fads, expect|
+        { name: name, description: description, rfc: rfc, links: topology[:links],
+          not_taking_part: topology.fetch(:not_taking_part, []), fads: fads, expect: expect }
       end
     end
 

@@ -61,6 +61,16 @@ class TestForwardingLabelTable < Minitest::Test
     assert_equal 222, @table.installed[100].hops.first.last
   end
 
+  # A flex-algo's table goes in beside algorithm 0's, and leaves alone
+  # when the level stops taking part (docs/design/flex-algo.md, step 5).
+  def test_flex_algo_tables_beside
+    @table.update(1, labels(entry(100, "a", 200)), [labels(entry(110, "a", 210))])
+    assert_equal [[:install, 100, 200], [:install, 110, 210]], sent
+    @adapter.operations.clear
+    @table.update(1, labels(entry(100, "a", 200)), [])
+    assert_equal [[:withdraw, 110, 210]], sent
+  end
+
   # A label the kernel refused is not counted installed, so the next
   # update sends it again.
   def test_a_refusal_is_retried

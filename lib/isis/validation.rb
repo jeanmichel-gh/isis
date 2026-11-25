@@ -384,9 +384,12 @@ module ISIS
       list
     end
 
-    # The finding on +prefixes+, two or more, sharing +index+.
-    def prefix_sid_duplicate(index, prefixes)
-      finding(:prefix_sid_duplicate, "index #{index}", "the Prefix-SID of #{prefixes.sort.join(' and ')}; both left out")
+    # The finding on +prefixes+, two or more, sharing +index+. +left_out+
+    # names the one left out when another table keeps the index; both are
+    # left out otherwise.
+    def prefix_sid_duplicate(index, prefixes, left_out: nil)
+      finding(:prefix_sid_duplicate, "index #{index}",
+              "the Prefix-SID of #{prefixes.sort.join(' and ')}; #{left_out ? "#{left_out} left out" : 'both left out'}")
     end
   end
 end

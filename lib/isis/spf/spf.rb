@@ -117,11 +117,46 @@ module ISIS
     # adjacency Up (step 0 b), and +broadcast+ is [pseudonode ID, metric,
     # Adjacency to the DIS] for each broadcast circuit with a DIS other
     # than this system (step 0 i).
+    #
+    # With +algorithm+ K, a flex-algo, and +definition+, the winning FAD
+    # (Spf::Definitions::Definition), it computes K's tree instead (RFC
+    # 9350 section 13; docs/design/flex-algo.md, "Calculation"):
+    #
+    # * The node filter: a system whose SR-Algorithm does not list K is
+    #   pruned; this system and pseudonodes are kept.
+    # * The link reader: each TLV 22 entry on its own, its attributes from
+    #   Spf::LinkAttributes, pruned by section 13's five rules in order;
+    #   its metric is the FAD's metric type. A delay or TE metric of
+    #   2^24 - 1 is used, as a last resort (section 15.3); an IGP metric of
+    #   2^24 - 1 is not, as for algorithm 0. A pseudonode's links carry no
+    #   attributes and are taken at their metric: the router's link to the
+    #   pseudonode holds the attributes and the cost.
+    # * The first hops: this system's own link to the neighbour, as its
+    #   LSP gives it, not the circuit's metric. On a LAN, its link to the
+    #   pseudonode that lists the neighbour.
+    # * The two-way check is algorithm 0's ("The result of the existing
+    #   Flex-Algorithm-agnostic, two-way connectivity check is used").
+    # * Prefixes: those with a Prefix-SID for K, the first in the
+    #   lowest-numbered LSP, at their base metric. Intra-level only: an
+    #   entry with the up/down bit is left out, until the M flag is built.
+    #   No default route toward an attached system.
+    #
+    # The routes are for K's label table only; no IP route comes from them.
     class Calculation
-      attr_reader :paths, :routes, :attached
+      attr_reader :paths, :routes, :attached, :algorithm
+      # For a flex-algo, each link pruned: [node ID, neighbour ID, rule],
+      # rule one of :exclude_any, :exclude_srlg, :include_any,
+      # :include_all, :no_metric or :max_metric.
+      attr_reader :pruned
 
       def initialize(database:, system_id:, adjacencies:, broadcast: [], max_path_splits: MAXIMUM_PATH_SPLITS,
-                     max_path_metric: MAX_PATH_METRIC)
+                     max_path_metric: MAX_PATH_METRIC, algorithm: 0, definition: nil, policy: :rfc)
+        raise ArgumentError, "algorithm #{algorithm} needs its definition" if !algorithm.zero? && definition.nil?
+
+        @algorithm = algorithm
+        @definition = definition
+        @policy = policy
+        @pruned = []
         @database = database
         @self_id = (Pdu.dotted_octets(system_id) + "\x00".b).b
         @adjacencies = adjacencies
@@ -145,14 +180,20 @@ module ISIS
         # Step 0 b to g: TENT from the adjacencies Up, at the circuit's
         # metric.
         @adjacencies.each do |node, metric, adj|
-          next if metric > @max_path_metric
+          metric = first_hop(node.b, adj) if flex?
+          next if metric.nil? || metric > @max_path_metric || !participating?(node.b)
 
           offer(tent, node.b, metric, [adj])
         end
         # Step 0 h and i: the systems a neighbouring pseudonode LSP lists,
         # which have no entry yet, through the DIS.
         @broadcast.each do |pseudonode, metric, dis|
+          metric = first_hop(pseudonode.b, dis) if flex?
+          next if metric.nil?
+
           links(pseudonode.b)&.each_key do |n|
+            next unless participating?(n)
+
             offer(tent, n, metric, [dis]) unless tent.key?(n) || @paths.key?(n)
           end
         end
@@ -164,10 +205,12 @@ module ISIS
           @paths[node] = path
           extend_from(tent, node, path)
           add_prefixes(node)
-          add_attached(node, path)
+          add_attached(node, path) unless flex?
         end
         self
       end
+
+      def flex? = !@algorithm.zero?
 
       # True when a system reached is in another area: its LSP Number 0
       # lists area addresses, none of them among those this system's own
@@ -217,7 +260,7 @@ module ISIS
         links(node)&.each do |n, metric|
           dist = path.distance + metric
           next if dist > @max_path_metric || @paths.key?(n)
-          next unless links(n)&.key?(node)
+          next unless base_links(n)&.key?(node) && participating?(n)
 
           offer(tent, n, dist, path.adjacencies)
         end
@@ -283,6 +326,36 @@ module ISIS
         node_info(node)&.fetch(:links)
       end
 
+      # Algorithm 0's links, for the two-way check.
+      def base_links(node)
+        node_info(node)&.fetch(:base_links)
+      end
+
+      # Whether +node+ stays in the topology: always for algorithm 0, this
+      # system and a pseudonode; for a flex-algo, a system whose
+      # SR-Algorithm lists it (RFC 9350 section 13: "all nodes that do not
+      # advertise participation ... MUST be pruned").
+      def participating?(node)
+        return true unless flex?
+        return true if node == @self_id || !node.getbyte(-1).zero?
+
+        node_info(node)&.fetch(:algorithms)&.include?(@algorithm) || false
+      end
+
+      # This system's metric for algorithm K toward +node+ over +adj+: its
+      # own link to it, or on a LAN to the pseudonode that lists it. A link
+      # that names the neighbour's address is matched to the adjacency's.
+      # Nil when every such link is pruned.
+      def first_hop(node, adj)
+        own = node_info(@self_id)&.fetch(:flex_links) || []
+        found = own.select { _1.first == node }
+        if found.empty? && node.getbyte(-1).zero?
+          found = own.select { |n, *| !n.getbyte(-1).zero? && base_links(n)&.key?(node) }
+        end
+        found = found.select { |_, remote, _| remote.nil? || adj.address.nil? || remote == adj.address }
+        found.filter_map(&:last).min
+      end
+
       def prefixes(node)
         node_info(node)&.fetch(:prefixes)
       end
@@ -291,10 +364,99 @@ module ISIS
         return @nodes[node] if @nodes.key?(node)
 
         lsps = node_lsps(node)
-        @nodes[node] = lsps && { links: read_links(lsps), prefixes: read_prefixes(lsps),
-                                 overload: lsps.first.overload?,
-                                 attached: lsps.first.attached.include?(:default),
-                                 areas: read_areas(lsps.first) }
+        return @nodes[node] = nil unless lsps
+
+        base = read_links(lsps)
+        info = { links: base, base_links: base, prefixes: read_prefixes(lsps), overload: lsps.first.overload?,
+                 attached: lsps.first.attached.include?(:default), areas: read_areas(lsps.first) }
+        if flex?
+          info[:flex_links] = read_flex_links(node, lsps)
+          info[:links] = info[:flex_links].each_with_object({}) { |(n, _, m), h| keep_lower(h, n, m) if m }
+          info[:prefixes] = read_flex_prefixes(lsps)
+          info[:algorithms] = read_algorithms(lsps)
+        end
+        @nodes[node] = info
+      end
+
+      # Each TLV 22 and TLV 2 entry as [neighbour ID, the neighbour's IPv4
+      # address or nil, K's metric or nil when pruned].
+      def read_flex_links(node, lsps)
+        pseudonode = !node.getbyte(-1).zero?
+        attrs = LinkAttributes.new(lsps, policy: @policy, subject: SystemId.from_bytes(node.byteslice(0, 6)).to_s)
+        list = []
+        each_tlv(lsps) do |tlv|
+          case tlv
+          when Tlv::ExtendedIsReachability
+            tlv.entries.each do |e|
+              metric = pseudonode ? e.metric : flex_metric(node, e.neighbor.b, e.metric, attrs.for(e))
+              list << [e.neighbor.b, attrs.for(e)&.remote, metric]
+            end
+          when Tlv::IsReachability
+            tlv.entries.each do |e|
+              metric = pseudonode ? e.metrics.default : flex_metric(node, e.neighbor.b, e.metrics.default, nil)
+              list << [e.neighbor.b, nil, metric]
+            end
+          end
+        end
+        list
+      end
+
+      # RFC 9350 section 13's five rules, in order, then the FAD's metric
+      # type: the link's metric for K, or nil when a rule prunes it.
+      def flex_metric(node, neighbor, igp, link)
+        d = @definition
+        affinity = link&.affinity || []
+        rule = if !d.exclude_any.empty? && !(affinity & d.exclude_any).empty?
+                 :exclude_any
+               elsif !d.exclude_srlg.empty? && !((link&.srlg || []) & d.exclude_srlg).empty?
+                 :exclude_srlg
+               elsif !d.include_any.empty? && (affinity & d.include_any).empty?
+                 :include_any
+               elsif !d.include_all.empty? && !(d.include_all - affinity).empty?
+                 :include_all
+               end
+        metric = case d.metric_type
+                 when 1 then link&.min_delay
+                 when 2 then link&.te_metric
+                 else igp
+                 end
+        rule ||= :no_metric if metric.nil?
+        rule ||= :max_metric if d.metric_type.zero? && metric == MAX_LINK_METRIC
+        return metric unless rule
+
+        @pruned << [node, neighbor, rule]
+        nil
+      end
+
+      # The prefixes with a Prefix-SID for K, each with its Offer, the SID
+      # K's. A prefix with the up/down bit is inter-level, left out.
+      def read_flex_prefixes(lsps)
+        found = {}
+        each_tlv(lsps) do |tlv|
+          next unless tlv.is_a?(Tlv::ExtendedIpReachability) || tlv.is_a?(Tlv::Ipv6Reachability)
+
+          tlv.entries.each do |e|
+            next if e.prefix.nil? || e.up_down
+
+            sid = e.subtlvs&.find { |s| s.is_a?(SubTlv::PrefixSid) && s.algorithm == @algorithm }
+            keep_best(found, e.prefix, Offer.new(e.metric, false, false, sid)) if sid
+          end
+        end
+        found
+      end
+
+      # The algorithms the first SR-Algorithm sub-TLV lists, in the
+      # lowest-numbered LSP; none without one.
+      def read_algorithms(lsps)
+        lsps.each do |lsp|
+          lsp.tlvs.each do |t|
+            next unless t.is_a?(Tlv::RouterCapability)
+
+            found = t.subtlvs.to_a.find { _1.is_a?(SubTlv::SrAlgorithm) }
+            return found.algorithms if found
+          end
+        end
+        []
       end
 
       # The LSPs of +node+, LSP Number 0 first, or nil. Clause 7.2.5: "If the

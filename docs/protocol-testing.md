@@ -218,6 +218,48 @@ learns, and computes TI-LFA at the PLR. Each must give what it expects.
 isisd's and FRR's, and compares their repairs (`docs/ti-lfa.md`, "On
 real routers, against FRR").
 
+### Flex-algo's topologies
+
+The catalog's flex-algo topologies, `ISIS::Fault::FLEX_ALGO_TOPOLOGIES`:
+small graphs, each with the path RFC 9350 expects from S to D for
+algorithm 128, written by hand from the RFC. Each names the FAD that
+wins, then S's first hops and the metric, or why there is no path.
+Colors are groups: red 1, green 2, blue 3, yellow 4. Delays are in
+microseconds.
+
+| Entry | Section | Builds | Expects |
+| --- | --- | --- | --- |
+| `fa_exclude_any` | RFC 9350 section 13, rule 1 | A to D is red; the FAD excludes red: by B | D's FAD; via B, metric 10 |
+| `fa_include_any` | RFC 9350 section 13, rule 3 | A's links are blue, B's green; the FAD includes any of green and yellow: by B | D's FAD; via B, metric 10 |
+| `fa_include_all` | RFC 9350 section 13, rule 4 | A's links have green only, B's green and blue; the FAD includes all of both: by B | D's FAD; via B, metric 10 |
+| `fa_exclude_srlg` | RFC 9350 section 13, rule 2 | A to D is in SRLG 10; the FAD excludes it: by B | D's FAD; via B, metric 10 |
+| `fa_delay` | RFC 9350 section 5.1, metric type 1 | A's links 20 ms each, B's 2 ms; the FAD's metric is the delay: by B, 4 ms | D's FAD; via B, metric 4000 |
+| `fa_te_metric` | RFC 9350 section 5.1, metric type 2 | A's links TE metric 50 each, B's 3; the FAD's metric is TE: by B, 6 | D's FAD; via B, metric 6 |
+| `fa_link_no_metric` | RFC 9350 section 13, rule 5 | A to D has no delay; the FAD's metric is the delay: A to D is pruned, not 0, so by B | D's FAD; via B, metric 40000 |
+| `fa_last_resort` | RFC 9350 section 15.3 | S to A has a delay of 2^24 - 1, the only path: used, as a last resort | D's FAD; via A, metric 16777216 |
+| `fa_node_not_participating` | RFC 9350 section 13 | A does not take part: it is pruned, so by B | D's FAD; via B, metric 10 |
+| `fa_one_way` | RFC 9350 section 13, the two-way check | D's link back to A is red, A's to D is not; the FAD excludes red: the two-way check is algorithm 0's, so by A | D's FAD; via A, metric 2 |
+| `fa_partition` | RFC 9350 section 14.1 | the only path is red; the FAD excludes red: D unreachable, no label route | D's FAD; D unreachable, no label route |
+| `fa_priority` | RFC 9350 section 5.3 | D's FAD, IGP, priority 100; B's, delay, priority 200: B's wins, so by B on delay | B's FAD; via B, metric 4000 |
+| `fa_system_id_tie` | RFC 9350 section 5.3 | A's FAD, IGP, and B's, delay, both priority 100: B has the greater System ID and wins, so by B on delay | B's FAD; via B, metric 4000 |
+| `fa_no_fad` | RFC 9350 section 5.3 | no system advertises a FAD: S does not take part | S does not take part |
+
+Systems are numbered as they first appear in the links: system N is
+0000.0000.00NN, with loopback 10.255.0.N/32, Prefix-SID index N for
+algorithm 0 and 100 + N for 128, and the SRGB 16000 + 1000 N.
+
+```ruby
+ISIS::Fault.flex_topology_names     # the entries
+ISIS::Fault.flex_topologies         # each: links, not_taking_part, fads, expect
+```
+
+`test/unit/spf/flex_algo_calculation_test.rb` builds each entry's LSPs,
+selects the FAD at S (`Spf::FlexAlgo`), computes algorithm 128's tree
+(`Spf::Calculation`) and its label table (`Spf::Labels`). Each must
+give what it expects, and D's label must swap to the first hop's SRGB.
+TI-LFA per algorithm (`fa_ti_lfa_constraint`) and the injector's
+behaviours come with steps 6 and 7 (`docs/design/flex-algo.md`).
+
 ### Packets at the PLR
 
 The catalog's third group, `ISIS::Fault::PACKETS`: packets that reach

@@ -160,8 +160,25 @@ each prefix with an index for it gets a Prefix-SID for it, with the
 flags of its algorithm 0 one. With no FAD, or one it cannot run, it
 stops taking part and withdraws both. A change is an event of kind
 `flex_algo`. `show.flex_algo` shows the selection; `policy.flex_algo`
-changes a FAD while isisd runs. The paths per algorithm come in a later
-step (`docs/design/flex-algo.md`, "Work").
+changes a FAD while isisd runs.
+
+For each algorithm it takes part in, isisd computes the algorithm's own
+tree after each SPF run (RFC 9350 section 13). A system whose
+SR-Algorithm does not list the algorithm is pruned. A link is pruned by
+the FAD's rules, in the RFC's order: an excluded color, an excluded
+SRLG, no color of include-any, not every color of include-all, then no
+value for the FAD's metric type (never taken as 0). The metric is the
+IGP metric, the minimum delay or the TE metric, as the FAD says; a delay
+or TE metric of 16777215 is a last resort and still used. The attributes
+are those of the ASLA with the X bit. The two-way check is algorithm
+0's. The prefixes are those with a Prefix-SID for the algorithm, inside
+the level. Each algorithm gets a label table of its own, from its
+Prefix-SIDs and the same SRGBs, installed beside algorithm 0's; a
+prefix the algorithm does not reach has no label route, so a packet
+with its label is dropped (section 14.1). No IP route comes from an
+algorithm. A change of an algorithm's route is an event of kind
+`flex_algo_route`. TI-LFA per algorithm is a later step
+(`docs/design/flex-algo.md`, "Work").
 
 ```yaml
 segment_routing: {}
@@ -173,8 +190,9 @@ prefixes:
   - { prefix: 10.255.0.1/32, metric: 0, sid: 1, algorithm_sids: { 128: 101, 129: 201 } }
 ```
 
-`show.flex_algo` on a system that takes part in 128 without advertising
-it, the FAD coming from `a`:
+`show.flex_algo` on a system, `b`, that takes part in 128 without
+advertising it, the FAD coming from `a`, its neighbour at metric 10; its
+own loopback is a local route:
 
 ```json
 {
@@ -197,7 +215,7 @@ it, the FAD coming from `a`:
           "algorithm": 128,
           "participating": true,
           "winner": {
-            "metric_type": "delay",
+            "metric_type": "igp",
             "calc_type": 0,
             "priority": 100,
             "origin": "0000.0000.000a",
@@ -210,15 +228,68 @@ it, the FAD coming from `a`:
               "priority": 100,
               "hostname": "a"
             }
+          ],
+          "routes": [
+            {
+              "prefix": "10.255.0.1/32",
+              "metric": 10,
+              "next_hops": [
+                {
+                  "address": "10.0.12.1",
+                  "interface": "ab"
+                }
+              ]
+            },
+            {
+              "prefix": "10.255.0.2/32",
+              "metric": 0,
+              "next_hops": []
+            }
           ]
         }
       ],
-      "findings": [
-
-      ]
+      "findings": []
     }
   }
 }
+```
+
+`show.labels` on `b`, its Prefix-SID rows: `a`'s loopback has index 1
+for algorithm 0 and 101 for 128, both popped toward `a`, its owner:
+
+```json
+[
+  {
+    "level": 1,
+    "label": 16001,
+    "kind": "prefix_sid",
+    "fec": "10.255.0.1/32",
+    "op": "php",
+    "next_hops": [
+      {
+        "address": "10.0.12.1",
+        "interface": "ab",
+        "label": 3
+      }
+    ],
+    "algorithm": 0
+  },
+  {
+    "level": 1,
+    "label": 16101,
+    "kind": "prefix_sid",
+    "fec": "10.255.0.1/32",
+    "op": "php",
+    "next_hops": [
+      {
+        "address": "10.0.12.1",
+        "interface": "ab",
+        "label": 3
+      }
+    ],
+    "algorithm": 128
+  }
+]
 ```
 
 A change to this system's own LSP, an adjacency up or down among
@@ -260,8 +331,8 @@ Every method:
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
 | `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable, link attributes for flex-algo |
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
-| `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop); with TI-LFA a prefix's `backup` as on its route |
-| `show.flex_algo` | | `enabled`, the `configured` algorithms; per level the algorithms this system takes part in, and for each configured one the winning FAD with its origin, whether isis4r can run it, `participating`, the `reason` when not, every FAD offered (`candidates`, the winner first), and the `findings` on the FADs read |
+| `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop), and the `algorithm`, 0 or a flex-algo's; with TI-LFA an algorithm 0 prefix's `backup` as on its route |
+| `show.flex_algo` | | `enabled`, the `configured` algorithms; per level the algorithms this system takes part in, and for each configured one the winning FAD with its origin, whether isis4r can run it, `participating`, the `reason` when not, every FAD offered (`candidates`, the winner first), the `routes` of each algorithm it takes part in (prefix, metric, next hops), and the `findings` on the FADs read |
 | `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
