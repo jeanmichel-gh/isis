@@ -53,6 +53,8 @@ class TestProtocolTestingDoc < Minitest::Test
     return "S does not take part" if expect[:taking_part] == false
 
     path = expect[:unreachable] ? "D unreachable, no label route" : "via #{expect[:first_hops].join(', ')}, metric #{expect[:metric]}"
+    repair = expect[:repair]
+    path += "; link #{repair[:link]} repaired via #{repair[:first_hop]} (`#{repair[:case]}`), algorithm 0's via #{expect[:base_repair]}" if repair
     "#{expect[:winner]}'s FAD; #{path}"
   end
 

@@ -177,8 +177,15 @@ Prefix-SIDs and the same SRGBs, installed beside algorithm 0's; a
 prefix the algorithm does not reach has no label route, so a packet
 with its label is dropped (section 14.1). No IP route comes from an
 algorithm. A change of an algorithm's route is an event of kind
-`flex_algo_route`. TI-LFA per algorithm is a later step
-(`docs/design/flex-algo.md`, "Work").
+`flex_algo_route`.
+
+With `ti_lfa` on an interface, each algorithm's routes get TI-LFA
+backups too, computed on the algorithm's own graph (RFC 9855 section
+8): its systems, its surviving links at its metric, its Node-SIDs, and
+only the Adj-SIDs of surviving links with B clear. A repair through a
+system with no Node-SID for the algorithm is unprotected, `no_sid`. As
+algorithm 0's label backups, they are computed and shown, not yet
+installed. `show.ti_lfa` has a row per algorithm.
 
 ```yaml
 segment_routing: {}
@@ -333,7 +340,7 @@ Every method:
 | `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop), and the `algorithm`, 0 or a flex-algo's; with TI-LFA an algorithm 0 prefix's `backup` as on its route |
 | `show.flex_algo` | | `enabled`, the `configured` algorithms; per level the algorithms this system takes part in, and for each configured one the winning FAD with its origin, whether isis4r can run it, `participating`, the `reason` when not, every FAD offered (`candidates`, the winner first), the `routes` of each algorithm it takes part in (prefix, metric, next hops), and the `findings` on the FADs read |
-| `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, and the last computation's trees and milliseconds (`docs/ti-lfa.md`) |
+| `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, the `algorithm`, 0 or a flex-algo's, and the last computations' trees and milliseconds, all algorithms together (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |

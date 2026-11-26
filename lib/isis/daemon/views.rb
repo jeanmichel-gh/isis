@@ -125,9 +125,8 @@ module ISIS
                         interface: interface_of(a.circuit), label: out }
                     end,
                     algorithm: e.algorithm || 0 }
-            next row unless row[:algorithm].zero?
-
-            backup = @router.decisions[l].backups&.label(e.label)
+            d = @router.decisions[l]
+            backup = (row[:algorithm].zero? ? d.backups : d.flex_backups[row[:algorithm]])&.label(e.label)
             row.merge!(backup_fields(backup, e.fec.include?(":") ? :ipv6 : :ipv4, names)) if backup
             row
           end
@@ -135,8 +134,10 @@ module ISIS
       end
 
       # TI-LFA (docs/ti-lfa.md): per level, each protected interface with
-      # its neighbor and what it protects, and how long the last
-      # computation took. { enabled: false } when no interface has ti_lfa.
+      # its neighbor, what it protects and the algorithm, 0 or a flex-algo
+      # this system takes part in, and how long the last computations
+      # took, all algorithms together. { enabled: false } when no interface
+      # has ti_lfa.
       def ti_lfa
         names = @router.ti_lfa_interfaces
         return { enabled: false } if names.empty?
@@ -144,13 +145,16 @@ module ISIS
         hosts = hostnames
         { enabled: true, interfaces: names,
           levels: @router.levels.to_h do |l|
-            b = @router.decisions[l].backups
-            [l, { trees: b&.trees || 0, milliseconds: ((b&.seconds || 0) * 1000).round(1),
-                  protecting: (b&.summaries || []).map do |s|
-                    id = SystemId.from_bytes(s.neighbor).to_s
-                    { interface: interface_of(s.interface), neighbor: hosts.fetch(id, id), mode: s.mode.to_s,
-                      protected: s.protected, ecmp: s.ecmp, fallback: s.fallback,
-                      unprotected: s.unprotected.transform_keys(&:to_s) }
+            d = @router.decisions[l]
+            all = [d.backups, *d.flex_backups.values].compact
+            [l, { trees: all.sum(&:trees), milliseconds: (all.sum(&:seconds) * 1000).round(1),
+                  protecting: all.flat_map do |b|
+                    b.summaries.map do |s|
+                      id = SystemId.from_bytes(s.neighbor).to_s
+                      { interface: interface_of(s.interface), neighbor: hosts.fetch(id, id), mode: s.mode.to_s,
+                        protected: s.protected, ecmp: s.ecmp, fallback: s.fallback,
+                        unprotected: s.unprotected.transform_keys(&:to_s), algorithm: b.algorithm }
+                    end
                   end }]
           end }
       end

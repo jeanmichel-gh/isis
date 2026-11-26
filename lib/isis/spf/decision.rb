@@ -63,6 +63,9 @@ module ISIS
       # algorithm 0's. No IP route comes from them (docs/design/
       # flex-algo.md, "Calculation").
       attr_reader :flex_routes, :flex_labels
+      # With ti_lfa too, each such algorithm's Spf::Backups, on its own
+      # graph (docs/design/flex-algo.md, "TI-LFA per algorithm").
+      attr_reader :flex_backups
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -85,6 +88,7 @@ module ISIS
         @flex_algo = nil
         @flex_routes = {}
         @flex_labels = {}
+        @flex_backups = {}
         @circuits = []
         @routes = {}
         @paths = {}
@@ -209,8 +213,10 @@ module ISIS
       def flex(why)
         before = @flex_routes
         old_labels = @flex_labels
+        old_backups = @flex_backups
         @flex_routes = {}
         @flex_labels = {}
+        @flex_backups = {}
         taken = (@labels&.indexes || {}).transform_values { [_1, 0] }
         @flex_algo.participating.each do |k|
           calc = compute_flex(k, @flex_algo.statuses[k].winner)
@@ -225,9 +231,25 @@ module ISIS
             @log.warn("Level #{level} algorithm #{k} segment routing: #{text}", kind: :sr, level: level, algorithm: k)
           end
           report_flex(k, before[k] || {}, calc.routes, why)
+          protect_flex(k, calc.routes, table, old_backups[k]) if @ti_lfa.any?
         end
         # An algorithm no longer taken part in: each of its routes goes.
         (before.keys - @flex_routes.keys).each { report_flex(_1, before[_1], {}, why) }
+      end
+
+      # Algorithm +algorithm+'s backups, logged as algorithm 0's are, with
+      # the algorithm, when what they protect changes.
+      def protect_flex(algorithm, routes, table, old)
+        backups = Backups.new(database: @database, system_id: @system_id, routes: routes, labels: table,
+                              adjacencies: @circuits.flat_map(&:spf_adjacencies), interfaces: @ti_lfa,
+                              clock: @scheduler, algorithm: algorithm,
+                              definition: @flex_algo.statuses[algorithm].winner, policy: receive_policy).compute
+        @flex_backups[algorithm] = backups
+        text = summary_text(backups)
+        return if text == summary_text(old)
+
+        @log.info("Level #{level} algorithm #{algorithm} TI-LFA: #{text}, #{backups.trees} trees (RFC 9855 section 8)",
+                  kind: :ti_lfa, level: level, algorithm: algorithm, trees: backups.trees)
       end
 
       def report_flex(algorithm, before, after, why)
@@ -260,21 +282,21 @@ module ISIS
       # TI-LFA's backups for this run's routes. A reason a destination is
       # left unprotected is logged once, when it first appears.
       def protect
-        before = summary_text
+        before = summary_text(@backups)
         @backups = Backups.new(database: @database, system_id: @system_id, routes: @routes, labels: @labels,
                                adjacencies: @circuits.flat_map(&:spf_adjacencies), interfaces: @ti_lfa,
                                clock: @scheduler).compute
-        text = summary_text
+        text = summary_text(@backups)
         return if text == before
 
         @log.info("Level #{level} TI-LFA: #{text}, #{@backups.trees} trees (RFC 9855)",
                   kind: :ti_lfa, level: level, trees: @backups.trees)
       end
 
-      def summary_text
-        return nil unless @backups
+      def summary_text(backups)
+        return nil unless backups
 
-        @backups.summaries.map do |s|
+        backups.summaries.map do |s|
           left = s.unprotected.map { |k, v| "#{v} #{k}" }
           "#{s.interface} (#{s.mode}) #{s.protected} protected, #{s.ecmp} by ECMP" \
             "#{s.fallback.positive? ? ", #{s.fallback} by the link" : ''}" \

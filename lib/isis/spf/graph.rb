@@ -81,8 +81,18 @@ module ISIS
 
       # The graph of one level's database: every system and pseudonode
       # with an LSP Number 0, read as Calculation reads them.
-      def self.from_database(database)
-        reader = Calculation.new(database: database, system_id: "0000.0000.0000", adjacencies: [])
+      #
+      # With +algorithm+ K, a flex-algo, and +definition+, its winning FAD,
+      # the graph is K's (docs/design/flex-algo.md, "TI-LFA per
+      # algorithm"; RFC 9855 section 8): the systems that take part in K,
+      # the links that survive K's pruning at K's metric, as Calculation
+      # reads them; Node-SIDs are K's Prefix-SIDs with N set; Adj-SIDs only
+      # of links that survive, and only with B clear, "unprotected
+      # Adj-SIDs". Where two parallel links join one pair, the Adj-SID of a
+      # surviving one.
+      def self.from_database(database, algorithm: 0, definition: nil, policy: :rfc)
+        reader = Calculation.new(database: database, system_id: "0000.0000.0000", adjacencies: [],
+                                 algorithm: algorithm, definition: definition, policy: policy)
         ids = database.entries.select { |e| e.lsp && !e.purged? }.map { |e| e.lsp_id.byteslice(0, 7) }.uniq
         links = {}
         overloaded = []
@@ -91,6 +101,8 @@ module ISIS
         pseudonodes = []
         ids.each do |id|
           info = reader.node(id) or next
+          next unless reader.participates?(id)
+
           pseudonodes << id unless id.getbyte(-1).zero?
           overloaded << id if info[:overload]
           info[:links].each { |n, metric| links[[id, n]] = metric }
@@ -98,19 +110,24 @@ module ISIS
             sid = offer.sid
             node_sids[id] ||= sid.index if sid&.index && sid.flag?("N")
           end
-          read_adj_sids(reader.lsps(id), id, adj_sids)
+          read_adj_sids(reader.lsps(id), id, adj_sids, reader: algorithm.zero? ? nil : reader)
         end
         new(links, overloaded: overloaded, node_sids: node_sids, adj_sids: adj_sids, pseudonodes: pseudonodes)
       end
 
       # Each IPv4 Adj-SID label (F clear, V and L set) in +lsps+' TLV 22:
       # to the neighbor, or across a LAN to the system a LAN-Adj-SID names.
-      def self.read_adj_sids(lsps, id, found)
+      # With a flex-algo's +reader+, only on the entries it keeps, and only
+      # with B clear.
+      def self.read_adj_sids(lsps, id, found, reader: nil)
         lsps.each do |lsp|
           lsp.tlvs.grep(Tlv::ExtendedIsReachability).each do |tlv|
             tlv.entries.each do |e|
+              next if reader && !reader.kept?(id, e)
+
               e.subtlvs&.each do |s|
                 next unless s.is_a?(SubTlv::AdjSid) && !s.flag?("F") && s.label
+                next if reader && s.flag?("B")
                 next if s.is_a?(SubTlv::LanAdjSid) && s.neighbor.nil?
 
                 to = s.is_a?(SubTlv::LanAdjSid) ? (Pdu.dotted_octets(s.neighbor.to_s) + "\x00".b).b : e.neighbor.b

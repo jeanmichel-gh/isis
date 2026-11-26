@@ -123,6 +123,41 @@ class TestRouterFlexAlgo < Minitest::Test
     assert_equal 4, gone.size, "both prefixes, at A and at B: #{gone.map(&:message)}"
   end
 
+  # Step 6, TI-LFA per algorithm: a, b and c in a triangle, a protecting
+  # its link to b with ti_lfa. b's loopback in 128 gets a backup through
+  # c, as in algorithm 0: show.ti_lfa has a row for each algorithm, and
+  # b's 128 label row its backup, b's 128 index (102) in c's SRGB, since
+  # c, the neighbour, is Q (RFC 9855 section 8).
+  def test_ti_lfa_per_algorithm
+    ifaces = { "a" => %w[ab ac], "b" => %w[ab bc], "c" => %w[ac bc] }
+    address = ->(n, i) { "10.0.#{%w[ab ac bc].index(i) + 1}.#{i.index(n) + 1}" }
+    rs = %w[a b c].map do |n|
+      idx = n.ord - 96
+      config = { system_id: "0000.0000.000#{n}", hostname: n, minimum_lsp_interval: 1,
+                 segment_routing: { srgb: [{ start: 16_000 + (1_000 * idx), size: 1_000 }] },
+                 interfaces: ifaces[n].map do |i|
+                   h = { name: i, ip_addresses: [address.(n, i)], hello_interval: 1, hello_multiplier: 3 }
+                   n == "a" && i == "ab" ? h.merge(ti_lfa: "link") : h
+                 end,
+                 prefixes: [{ prefix: "10.255.0.#{idx}/32", metric: 0, sid: idx, algorithm_sids: { "128" => 100 + idx } }],
+                 flex_algo: [{ algorithm: 128, advertise: n == "a", priority: 100 }] }
+      host = SimHost.new(@wires, ifaces[n].to_h { [_1, "00:00:00:00:#{idx}0:#{_1}"] })
+      r = ISIS::Router.new(config, clock: @clock, scheduler: @scheduler, log: @log, host: host)
+      @routers << r
+      r
+    end
+    @routers.each(&:start)
+    run_for(20)
+    a = rs.first
+    views = ISIS::Daemon::Views.new(a)
+    rows = views.ti_lfa[:levels][1][:protecting]
+    assert_equal [[0, "ab", "b"], [128, "ab", "b"]], rows.map { _1.values_at(:algorithm, :interface, :neighbor) }
+    assert_equal [1, 1], rows.map { _1[:protected] }
+    row = views.labels(level: 1).find { _1[:label] == 17_102 }
+    assert_equal 128, row[:algorithm]
+    assert_equal [19_102], row.dig(:backup, :labels), row.inspect
+  end
+
   def test_refusals
     refuse = ->(c) { assert_raises(ArgumentError) { ISIS::Router.normalize(c) }.message }
     base = { segment_routing: {}, interfaces: [] }

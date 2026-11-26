@@ -243,6 +243,7 @@ microseconds.
 | `fa_priority` | RFC 9350 section 5.3 | D's FAD, IGP, priority 100; B's, delay, priority 200: B's wins, so by B on delay | B's FAD; via B, metric 4000 |
 | `fa_system_id_tie` | RFC 9350 section 5.3 | A's FAD, IGP, and B's, delay, both priority 100: B has the greater System ID and wins, so by B on delay | B's FAD; via B, metric 4000 |
 | `fa_no_fad` | RFC 9350 section 5.3 | no system advertises a FAD: S does not take part | S does not take part |
+| `fa_ti_lfa_constraint` | RFC 9855 section 8 | S protects its link to F with TI-LFA; A to D is red, the FAD excludes red: the repair goes by B, where algorithm 0's goes by A | D's FAD; via F, metric 2; link F repaired via B (`neighbor`), algorithm 0's via A |
 
 Systems are numbered as they first appear in the links: system N is
 0000.0000.00NN, with loopback 10.255.0.N/32, Prefix-SID index N for
@@ -256,9 +257,11 @@ ISIS::Fault.flex_topologies         # each: links, not_taking_part, fads, expect
 `test/unit/spf/flex_algo_calculation_test.rb` builds each entry's LSPs,
 selects the FAD at S (`Spf::FlexAlgo`), computes algorithm 128's tree
 (`Spf::Calculation`) and its label table (`Spf::Labels`). Each must
-give what it expects, and D's label must swap to the first hop's SRGB.
-TI-LFA per algorithm (`fa_ti_lfa_constraint`) and the injector's
-behaviours come with steps 6 and 7 (`docs/design/flex-algo.md`).
+give what it expects, and D's label must swap to the first hop's SRGB,
+or be popped toward D itself. An entry with a repair also runs TI-LFA
+for algorithm 128 at S (`Spf::Backups`) and for algorithm 0, each of
+which must take its own first hop. The injector's behaviours come with
+step 7 (`docs/design/flex-algo.md`).
 
 ### Packets at the PLR
 
