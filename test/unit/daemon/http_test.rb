@@ -76,6 +76,15 @@ class TestDaemonHttp < Minitest::Test
     assert_equal 200, post("/api/fault.clear", { "router" => "r1c2" }).first
   end
 
+  # A flex-algo entry (step 7): a FAD in a Router Capability with S set,
+  # in r1c2's LSPs.
+  def test_a_flex_algo_fault
+    status, body = post("/api/fault", { "case" => "fad_s_bit", "router" => "r1c2" })
+    assert_equal 200, status, body
+    assert_equal [:fad_s_bit, :fad_s_bit, :ignore_fad], body.values_at(:case, :finding, :expect)
+    assert_equal 200, post("/api/fault.clear", { "router" => "r1c2" }).first
+  end
+
   def test_a_plan_injects_nothing
     status, body = post("/api/plan", { "case" => "srgb_reserved", "router" => "r1c2" })
     assert_equal [200, true], [status, body[:plan]]
@@ -84,7 +93,7 @@ class TestDaemonHttp < Minitest::Test
 
   def test_the_catalog
     body = get("/api/catalog").last
-    assert_equal ISIS::Fault.names, body[:faults].map { _1[:name] }
+    assert_equal ISIS::Fault.names + ISIS::Fault.flex_algo_names, body[:faults].map { _1[:name] }
     assert_equal %w[link], body[:actions]["/api/link.down"]
     assert_equal ISIS::Fault.behaviour_names, body[:behaviours].map { _1[:name] }
   end

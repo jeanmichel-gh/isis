@@ -298,14 +298,19 @@ the PLR").
 The catalog's fourth group, `ISIS::Fault::BEHAVIOURS`: misbehaviour
 over time, each a named script isis4r-sim runs
 (`Sim::Simulator#behave`, `POST /api/behave`, `docs/simulator.md`). One
-runs at a time. `flap` ends on its own; the others hold until
-`behave_stop`, which undoes what they did.
+runs at a time. `flap`, `participation_flap`, `fad_takeover` and
+`delay_change` end on their own; the others hold until `behave_stop`.
+`behave_stop` undoes what any of them did. The flex-algo behaviours
+need a simulated system with `flex_algo` (`docs/simulator.md`).
 
 | Behaviour | Section | Parameters | The simulator | Expects |
 | --- | --- | --- | --- | --- |
 | `flap` | RFC 9855 1 | `circuit`, optional; `count` 3; `down` 10; `up` 10 | stops its hellos on circuit for down seconds, then sends them for up seconds, count times; every interface without circuit | the router across circuit uses its repair from each loss until it converges, and computes its backups again once the adjacency is back; after the last, they are those it had before |
 | `stale_lsp` | RFC 1142 7.2.8.2, 7.3.16.4 | `router` | router's neighbours report their links to it down, while its own LSP stays as it was, never refreshed, until it expires | no route and no repair crosses router, since only router reports its links; its LSP expires after its lifetime |
 | `srgb_change` | RFC 8660 2.4, RFC 9855 7.1 | `router`; `start`, optional | router's LSP 0 carries its SRGB moved to start, 100000 labels up unless given, while its Prefix-SIDs keep their indexes; what router forwards is not changed | a label in router's SRGB moves with the block: a repair's last label when router is Q, and a route's label when router is the next hop |
+| `fad_takeover` | RFC 9350 5.3 | `router`; `algorithm` 128; `priority` 255; `metric_type`, optional; `hold` 30 | router advertises a FAD for algorithm at priority, with metric_type when given, for hold seconds, then what it advertised before | every router that takes part in algorithm selects router's FAD while it is advertised, unless one of greater priority, or System ID at the same, is there, and the one before after; the paths follow the winner's metric type |
+| `participation_flap` | RFC 9350 11, 13 | `router`; `algorithm` 128; `count` 3; `down` 10; `up` 10 | router leaves algorithm out of its SR-Algorithm, and its Prefix-SIDs for it, for down seconds, then lists it again for up seconds, count times | every router prunes router from algorithm while it does not list it, so no path in algorithm crosses it and its prefixes have no label route in algorithm; all come back once it lists it again |
+| `delay_change` | RFC 9350 5.1, metric type 1 | `link`; `delay` 100000; `hold` 30 | link's delay, both ways, is delay microseconds for hold seconds, then what it was | a delay algorithm's paths leave link while its delay makes another path shorter, and come back after |
 
 ```ruby
 sim.behave(:flap, circuit: "a", count: 2, down: 8, up: 12)
@@ -328,6 +333,18 @@ Q:
   the expired copy.
 - `srgb_change` on Q: the repair's last label moves 100000 up with the
   block, and the Adj-SID before it stays. Stopped, both are back.
+
+`test/unit/sim/flex_algo_test.rb` runs the flex-algo ones against an
+ordinary Router taking part in 128, whose path to p3 in 128 avoids a red
+link through p2:
+
+- `fad_takeover` on p2, IGP at 255: the Router takes p2's FAD, and its
+  path in 128 takes the red link; after `hold`, p3's FAD and the path
+  through p2 again.
+- `participation_flap` on p2: the Router prunes p2 from 128, so p3 is
+  unreachable in 128 and its label route goes; both come back.
+- `delay_change` on p1--p2: the path's delay rises by the change, then
+  falls back. Stopped early, it is undone.
 
 ## The fault matrix
 

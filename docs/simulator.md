@@ -96,6 +96,7 @@ links:
 | `routers` | more systems, or more on a grid one by its name |
 | `links` | links between any two systems, the simulator included by its hostname or `sim` |
 | `segment_routing` | SR-MPLS (RFC 8667) for the simulated systems, and their blocks by default |
+| `affinity_map` | color names to groups, for the links' `affinity` and the routers' `flex_algo`, as isisd's |
 
 ### grid
 
@@ -127,6 +128,8 @@ links:
 | `lsp_buffer_size` | its LSP size budget, to spread prefixes over LSP Numbers |
 | `sid` | with `segment_routing`: its loopback's Prefix-SID index; needs an IPv4 `loopback` |
 | `srgb` | its own SRGB, a list of `{ start, size }`, in place of the file's |
+| `flex_algo` | with `segment_routing`: the algorithms it takes part in, as isisd's `flex_algo` list |
+| `algorithm_sids` | its loopback's Prefix-SID index per algorithm, `{ 128: 103 }`; needs `flex_algo` and `loopback` |
 
 ### segment_routing
 
@@ -169,10 +172,41 @@ The first prefix names the group, which is how an action withdraws it.
 | `metric` | 10 by default |
 | `one_way` | only `from` lists `to`, so the two-way check (RFC 1142 7.2.8.2) fails on purpose; FRR 8.4.4 routes over it anyway, measured 2026-11-02 |
 | `state` | `up` (the default) or `down` |
+| `affinity` | colors from `affinity_map`, both ways, as isisd's interface key |
+| `delay` | microseconds, 0 to 16777215, both ways |
+| `te_metric` | 0 to 16777215, both ways |
+| `srlg` | SRLG values, both ways; the link gets IPv4 addresses for TLV 238 |
 
 A link is named `from--to` and found either way round, or by its number
 from 1. It is carried at the levels both ends run, and at Level 1 only
 when they share an area. A link with no level left is refused.
+
+### Flex-algo
+
+With `segment_routing`, a simulated system with `flex_algo` sends what
+isisd sends (`docs/isisd.md`): the FADs of the algorithms it advertises,
+in TLV 242; SR-Algorithm with 0 and each of its algorithms; a Prefix-SID
+for each of its loopback's `algorithm_sids`. Unlike isisd it does not
+select: it lists every algorithm of its `flex_algo`, whatever FAD wins,
+since a simulator sends what it is told. A behaviour can take one out
+(`participation_flap`). A link's `affinity`, `delay`, `te_metric` and
+`srlg` go in an ASLA sub-TLV with the X bit, and the SRLGs in TLV 238,
+from both ends; the simulator's own end of a link to a simulated system
+carries them too. Link N with `srlg` joins 198.18.0.0 + 4N + 1 at its
+`from` end to + 2 at its `to` end, since TLV 238 names a link by its
+addresses. `sim.state` gives each system's `algorithms`, and each link's
+`attributes`.
+
+```yaml
+simulator: { ..., segment_routing: {}, router_id: 10.255.0.9, flex_algo: [{ algorithm: 128, advertise: false }] }
+segment_routing: { srgb: [{ start: 16000, size: 1000 }] }
+affinity_map: { red: 1 }
+routers:
+  - { name: p3, system_id: 0000.0000.0103, loopback: 10.255.1.3, sid: 3, algorithm_sids: { 128: 103 },
+      flex_algo: [{ algorithm: 128, priority: 200, metric_type: delay, exclude_any: [red] }] }
+links:
+  - { from: p1, to: p3, delay: 2000, affinity: [red], srlg: [10] }
+```
 
 ## Actions
 
@@ -252,7 +286,7 @@ method other than GET and POST.
 | `GET /api/sent` | the faults injected and the octets sent, each with when |
 | `GET /api/catalog` | the fault catalog (`ISIS::Fault`, `docs/protocol-testing.md`) and each POST's parameters |
 | `GET /api/events` | the events after `since=N`, as the socket's `events.subscribe` replays them |
-| `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a system's LSPs, a simulated one's or the simulator's own |
+| `POST /api/fault` | `case`, `router`, `prefix`, `index`: a catalog entry in a system's LSPs, a simulated one's or the simulator's own; the segment routing entries and the flex-algo ones |
 | `POST /api/plan` | the same, built and answered, injected nowhere |
 | `POST /api/fault.clear` | `router`: takes the injected TLVs out, of one system or, without it, every one |
 | `POST /api/behave` | `name` and its parameters: runs a behaviour of the catalog, one at a time |
@@ -276,7 +310,10 @@ A behaviour (`docs/protocol-testing.md`, "Behaviours") is misbehaviour
 over time: `flap` stops and starts the simulator's hellos on a circuit;
 `stale_lsp` leaves a simulated system's LSP as it was while its
 neighbours report it gone; `srgb_change` moves a system's SRGB, the
-simulator's own included. `GET /api/status` names the one running, and
+simulator's own included; `fad_takeover` has a simulated system
+advertise a FAD at a priority for a while; `participation_flap` takes
+an algorithm out of a simulated system's SR-Algorithm and puts it back;
+`delay_change` changes a link's delay for a while. `GET /api/status` names the one running, and
 `GET /api/catalog` lists them with what the RFC expects. While
 `stale_lsp` holds a system, the actions that would change its LSP are
 refused, and `refresh`, `flush` and `restore` pass it by.

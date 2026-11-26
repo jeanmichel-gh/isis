@@ -40,7 +40,8 @@ module ISIS
         "/api/fault" => [%w[case router prefix index], ->(h, p) { h.fault(p, plan: false) }],
         "/api/plan" => [%w[case router prefix index], ->(h, p) { h.fault(p, plan: true) }],
         "/api/fault.clear" => [%w[router], ->(h, p) { h.simulator.fault_clear(p["router"]) }],
-        "/api/behave" => [%w[name circuit count down up router start], ->(h, p) { h.behave(p) }],
+        "/api/behave" => [%w[name circuit count down up router start algorithm priority metric_type hold link delay],
+                          ->(h, p) { h.behave(p) }],
         "/api/behave.stop" => [[], ->(h, _) { h.simulator.behave_stop }],
         "/api/send" => [%w[octets circuit], lambda do |h, p|
           hex = p.fetch("octets") { raise ArgumentError, "send needs octets, in hex" }.to_s
@@ -94,7 +95,7 @@ module ISIS
       end
 
       def catalog
-        { faults: Fault.catalog.map { _1.except(:build) }, behaviours: Fault.behaviours,
+        { faults: (Fault.catalog + Fault.flex_algo_catalog).map { _1.except(:build) }, behaviours: Fault.behaviours,
           actions: ACTIONS.transform_values(&:first) }
       end
 

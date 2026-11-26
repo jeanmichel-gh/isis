@@ -24,16 +24,33 @@ module ISIS
       # reachability, the far end's System ID with a zero pseudonode octet,
       # at the link's metric, while the link is up. It floods nothing: the
       # Flooder does.
+      #
+      # A link with SRLGs answers its IPv4 addresses too, which TLV 238
+      # names it by: link +number+ N joins 198.18.0.0 + 4N + 1, its from
+      # end, to + 2, its to end (Topology).
       class VirtualLink
         attr_reader :link, :neighbor
 
-        def initialize(link, neighbor_id)
+        SRLG_BASE = IPAddr.new("198.18.0.0").to_i
+
+        def initialize(link, neighbor_id, number: nil, from: true)
           @link = link
           @neighbor = Pdu.dotted_octets(neighbor_id)
+          @number = number
+          @from = from
         end
 
         def is_neighbor
-          [(@neighbor + "\x00".b).b, @link.metric] if @link.up?
+          return nil unless @link.up?
+
+          n = [(@neighbor + "\x00".b).b, @link.metric]
+          @link.srlg && @number ? n << addresses : n
+        end
+
+        def addresses
+          here, there = @from ? [1, 2] : [2, 1]
+          { interface: IPAddr.new(SRLG_BASE + (4 * @number) + here, Socket::AF_INET).to_s,
+            neighbor: IPAddr.new(SRLG_BASE + (4 * @number) + there, Socket::AF_INET).to_s }
         end
 
         # The link's name, which keys this end's Adj-SID.
@@ -86,7 +103,25 @@ module ISIS
         "neighbor.stop" => :neighbor_stop, "neighbor.start" => :neighbor_start
       }.freeze
 
+      # A simulated system's flex-algo, as Originator asks it: the
+      # algorithms it takes part in, every one configured but those a
+      # behaviour withdrew, and the FADs it sends.
+      class FlexAlgo
+        attr_reader :config, :withdrawn
+
+        def initialize(config)
+          @config = config
+          @withdrawn = []
+        end
+
+        def participating = @config.algorithms - @withdrawn
+        def fads = @config.fads
+      end
+
       attr_reader :topology, :router, :originators, :log
+      # Each simulated system's FlexAlgo, by name, and its links'
+      # attributes, by name then link name, which behaviours change.
+      attr_reader :flex_algos, :link_attributes
 
       # +originators+ is { system name => { level => Originator } }, the
       # simulator's own system included, whose originators are the
@@ -105,6 +140,16 @@ module ISIS
         @sent = []
         @behaviour = nil
         @stale = []
+        @flex_algos = {}
+        @link_attributes = Hash.new { |h, k| h[k] = {} }
+        topology.links.each do |l|
+          next unless l.attributes && !l.attributes.empty?
+
+          [l.from, l.to].each { @link_attributes[_1][l.name] = l.attributes }
+        end
+        # The simulator's own end of a link to a simulated system carries the
+        # link's attributes too, beside its interfaces' own.
+        @router.originators.each_value { |o| o.link_attributes.merge!(@link_attributes[topology.simulator.name]) }
         @originators = { topology.simulator.name => @router.levels.to_h { |l| [l, @router.originators[l]] } }
         topology.systems.each { |s| @originators[s.name] = build_originators(s) }
         attach_links
@@ -410,7 +455,105 @@ module ISIS
         @behaviour[:undo] = -> { os.each { |o| o.inject([], "simulator: srgb_change stopped") } }
         { srgb: { from: sr.srgb, to: moved.srgb } }
       end
-      private :behave_flap, :behave_stale_lsp, :behave_srgb_change
+
+      # +router+ advertises a FAD for +algorithm+ at +priority+, and
+      # +metric_type+ when given, then after +hold+ seconds what it did
+      # before; the behaviour ends then.
+      def behave_fad_takeover(p)
+        s = live(p[:router])
+        f = flex_of(s, p[:algorithm])
+        algorithm = Integer(p[:algorithm])
+        hold = Float(p[:hold])
+        raise ArgumentError, "fad_takeover needs a hold over 0" unless hold.positive?
+
+        before = f.config[algorithm].to_hash.except(:algorithm)
+        changes = { advertise: true, priority: Integer(p[:priority]) }
+        changes[:metric_type] = p[:metric_type].to_s if p[:metric_type]
+        f.config.change(algorithm, changes)
+        changed([s.name], "#{s.name} advertises a FAD for #{algorithm} at priority #{changes[:priority]}")
+        undo = lambda do
+          f.config.change(algorithm, before)
+          changed([s.name], "#{s.name}'s FAD for #{algorithm} as before")
+        end
+        @behaviour[:undo] = undo
+        @behaviour[:timers] << @scheduler.after(hold) do
+          @behaviour[:undo] = nil if @behaviour
+          undo.call
+          finish(:fad_takeover)
+        end
+        { fad: f.config[algorithm].to_hash, before: before, ends_in: hold }
+      end
+
+      # +router+ leaves +algorithm+ out of SR-Algorithm for +down+ seconds,
+      # then lists it for +up+, +count+ times; it ends listing it.
+      def behave_participation_flap(p)
+        s = live(p[:router])
+        f = flex_of(s, p[:algorithm])
+        algorithm = Integer(p[:algorithm])
+        count = Integer(p[:count])
+        down = Float(p[:down])
+        up = Float(p[:up])
+        raise ArgumentError, "participation_flap needs a count of 1 or more, and down and up over 0" unless count.positive? && down.positive? && up.positive?
+
+        set = lambda do |listed|
+          listed ? f.withdrawn.delete(algorithm) : (f.withdrawn << algorithm unless f.withdrawn.include?(algorithm))
+          changed([s.name], "#{s.name} #{listed ? 'lists' : 'leaves out'} algorithm #{algorithm} in SR-Algorithm")
+        end
+        count.times do |i|
+          t = i * (down + up)
+          @behaviour[:timers] << @scheduler.after(t) { set.call(false) }
+          @behaviour[:timers] << @scheduler.after(t + down) do
+            set.call(true)
+            finish(:participation_flap) if i == count - 1
+          end
+        end
+        @behaviour[:undo] = -> { set.call(true) if f.withdrawn.include?(algorithm) }
+        { ends_in: ((count * down) + ((count - 1) * up)).round(3) }
+      end
+
+      # +link+'s delay is +delay+ µs, both ways, for +hold+ seconds, then
+      # what it was; the behaviour ends then.
+      def behave_delay_change(p)
+        l = @topology.link(p[:link]) or raise ArgumentError, "no link #{p[:link]}"
+        delay = Integer(p[:delay])
+        hold = Float(p[:hold])
+        raise ArgumentError, "delay_change needs a delay of 0 to #{Router::MAX_24}" unless delay.between?(0, Router::MAX_24)
+        raise ArgumentError, "delay_change needs a hold over 0" unless hold.positive?
+        ends = [l.from, l.to]
+        ends.each { |n| raise ArgumentError, "#{n} is stale (the stale_lsp behaviour); stop it first" if stale?(n) }
+
+        sim = @topology.simulator.name
+        l.attributes ||= {}
+        attrs = l.attributes
+        ends.each do |n|
+          @link_attributes[n][l.name] = attrs
+          @originators[n].each_value { |o| o.link_attributes[l.name] = attrs } if n == sim
+        end
+        was = attrs[:delay]
+        attrs[:delay] = delay
+        changed(ends, "#{l.name} delay #{delay} µs")
+        undo = lambda do
+          was ? attrs[:delay] = was : attrs.delete(:delay)
+          changed(ends, "#{l.name} delay #{was ? "#{was} µs" : 'none'} again")
+        end
+        @behaviour[:undo] = undo
+        @behaviour[:timers] << @scheduler.after(hold) do
+          @behaviour[:undo] = nil if @behaviour
+          undo.call
+          finish(:delay_change)
+        end
+        { link: l.name, delay: { from: was, to: delay }, ends_in: hold }
+      end
+
+      # +sys+'s FlexAlgo, which must configure +algorithm+.
+      def flex_of(sys, algorithm)
+        f = @flex_algos[sys.name] or raise ArgumentError, "#{sys.name} has no flex_algo"
+        raise ArgumentError, "#{sys.name} has no flex_algo algorithm #{algorithm}" unless f.config[Integer(algorithm)]
+
+        f
+      end
+      private :behave_flap, :behave_stale_lsp, :behave_srgb_change, :behave_fad_takeover,
+              :behave_participation_flap, :behave_delay_change, :flex_of
 
       # Sends +octets+, any PDU or none, as they are, on +circuit+'s
       # circuits, or every interface's. Pdu.factory keeps what it cannot
@@ -456,6 +599,7 @@ module ISIS
 
       def build_originators(sys)
         sr = segment_routing(sys)
+        @flex_algos[sys.name] = FlexAlgo.new(sys.flex) if sr && sys.flex && !sys.flex.empty?
         (sys.levels & levels).to_h do |level|
           v4, v6 = sys.prefixes.partition { |p| IPAddr.new(p.prefix).ipv4? }
           lo = sys.loopback && IPAddr.new(sys.loopback)
@@ -470,7 +614,8 @@ module ISIS
             is_type: sys.levels == [1, 2] ? 3 : nil,
             level1_database: level == 2 && levels.include?(1) ? @router.databases[1] : nil,
             overload: sys.overload ? true : false, lifetime: @topology.lsp_lifetime,
-            refresh_interval: refresh_interval, segment_routing: sr
+            refresh_interval: refresh_interval, segment_routing: sr,
+            link_attributes: @link_attributes[sys.name], flex_algo: @flex_algos[sys.name]
           )
           o.attached = true if level == 1 && sys.attached
           o.attach(Flooder.new(@router.databases[level]))
@@ -497,12 +642,12 @@ module ISIS
       end
 
       def attach_links
-        @topology.links.each do |l|
+        @topology.links.each_with_index do |l, i|
           a = @topology.system(l.from)
           b = @topology.system(l.to)
           l.levels.each do |level|
-            @originators.dig(a.name, level)&.attach(VirtualLink.new(l, b.system_id))
-            @originators.dig(b.name, level)&.attach(VirtualLink.new(l, a.system_id)) unless l.one_way
+            @originators.dig(a.name, level)&.attach(VirtualLink.new(l, b.system_id, number: i + 1, from: true))
+            @originators.dig(b.name, level)&.attach(VirtualLink.new(l, a.system_id, number: i + 1, from: false)) unless l.one_way
           end
         end
       end
@@ -588,12 +733,19 @@ module ISIS
         { name: s.name, system_id: s.system_id, hostname: s.hostname, simulator: s.simulator?, levels: s.levels,
           overload: s.overload ? true : false, attached: s.attached ? true : false,
           prefixes: s.prefixes.size, externals: s.externals.size, groups: (s.prefixes + s.externals).map(&:group).uniq,
-          withdrawn: @withdrawn[s.name].dup, lsps: lsps }
+          withdrawn: @withdrawn[s.name].dup, lsps: lsps }.merge(flex_state(s))
+      end
+
+      # A system's flex-algo, when it has one: the algorithms it lists, and
+      # those a behaviour withdrew.
+      def flex_state(s)
+        f = @flex_algos[s.name] or return {}
+        { algorithms: f.participating, algorithms_withdrawn: f.withdrawn.dup }
       end
 
       def link_state(l)
         { name: l.name, from: l.from, to: l.to, metric: l.metric, state: l.up? ? "up" : "down",
-          one_way: l.one_way ? true : false, levels: l.levels }
+          one_way: l.one_way ? true : false, levels: l.levels }.merge(l.attributes&.any? ? { attributes: l.attributes } : {})
       end
 
       def event(kind, text)
