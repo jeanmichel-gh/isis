@@ -18,7 +18,29 @@ require_relative "../support/fault_matrix"
 class TestFrrFlexAlgoTopology < Minitest::Test
   FRR_VERSION = "10.5.1"
 
-  FRR = {}.freeze
+  # What FRR 10.5.1 did, measured 2026-11-26. It runs a FAD with the IGP
+  # metric and affinity rules as the RFC asks, and protects 128's label
+  # route with TI-LFA. It elects a FAD with a delay or TE metric, or with
+  # an Exclude SRLG, then disables it as an "unsupported definition" and
+  # does not take part (RFC 9350 section 5.3).
+  BY_B = { winner: "D", first_hops: ["B"], metric: 10 }.freeze
+  UNSUPPORTED = "disabled (unsupported definition)"
+  FRR = {
+    fa_exclude_any: BY_B, fa_include_any: BY_B, fa_include_all: BY_B,
+    fa_exclude_srlg: { taking_part: false, winner: "D", state: UNSUPPORTED },
+    fa_delay: { taking_part: false, winner: "D", state: UNSUPPORTED },
+    fa_te_metric: { taking_part: false, winner: "D", state: UNSUPPORTED },
+    fa_link_no_metric: { taking_part: false, winner: "D", state: UNSUPPORTED },
+    fa_last_resort: { taking_part: false, winner: "D", state: UNSUPPORTED },
+    fa_node_not_participating: BY_B,
+    fa_one_way: { winner: "D", first_hops: ["A"], metric: 2 },
+    fa_partition: { winner: "D", unreachable: true },
+    fa_priority: { taking_part: false, winner: "B", state: UNSUPPORTED },
+    fa_system_id_tie: { taking_part: false, winner: "B", state: UNSUPPORTED },
+    fa_no_fad: { taking_part: false },
+    fa_ti_lfa_constraint: { winner: "D", first_hops: ["F"], metric: 2,
+                            repair: { first_hop: "B", segments: [[:node, "D"]] } }
+  }.freeze
 
   def setup
     ok, why = FrrLab.available?
@@ -54,7 +76,7 @@ class TestFrrFlexAlgoTopology < Minitest::Test
       got = reading(name, :frr)
       FaultMatrix.record(:flex_topology, name, :frr, FaultMatrix.flex_cell(got, FaultMatrix.flex_expected(entry)))
       skip "FRR #{frr_version} recorded for the matrix, not held to #{FRR_VERSION}'s answers" unless frr_version == FRR_VERSION
-      assert_equal FRR.fetch(name) { flunk "#{name}: FRR not recorded; it gave #{got.inspect}" }, got, entry[:description]
+      assert_equal FRR.fetch(name), got, entry[:description]
     end
   end
 

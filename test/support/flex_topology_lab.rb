@@ -117,11 +117,59 @@ class FlexTopologyLab < TopologyLab
     end
   end
 
-  # FRR's: `show isis flex-algo` in text, and its label route for D's
-  # Prefix-SID for 128, from `show mpls table json`.
+  # FRR's, read from text, since FRR 10.5.1 gives neither in JSON: the
+  # elected FAD's source and FRR's local state from `show isis flex-algo
+  # 128`, and D's row in the routing table of `show isis route algorithm
+  # 128`.
   def frr_flex
-    mpls = JSON.parse(vtysh("show mpls table json"))[k_label(plr, "D").to_s]
-    { frr_text: [vtysh("show isis flex-algo #{K}"), vtysh("show isis route algorithm #{K}"), JSON.generate(mpls)].join("\n") }
+    fad = vtysh("show isis flex-algo #{K}")
+    source = fad[/Source: (\h{4}\.\h{4}\.\h{4})/, 1]
+    state = fad[/Local state: (.*?)\s*$/, 1]
+    return { taking_part: false } unless source
+    return { taking_part: false, winner: name_of(source), state: state } unless state == "enabled"
+
+    out = { winner: name_of(source) }
+    route = frr_algorithm_route(vtysh("show isis route algorithm #{K}"))
+    if route then out.merge!(route)
+    else out[:unreachable] = true
+    end
+    @entry[:failure] ? out.merge(repair: frr_flex_repair) : out
+  end
+
+  # D's row of the "IPv4 routing table" section: first hops and metric.
+  # A further next hop of an equal cost route is a row of its own with
+  # the prefix and metric blank.
+  def self.algorithm_route(text, prefix)
+    table = text.split("IPv4 routing table:", 2)[1] or return nil
+    hops = []
+    metric = nil
+    table.each_line do |line|
+      if (m = line.match(%r{^\s*(\d+\.\d+\.\d+\.\d+/\d+)\s+(\d+)\s+(\S+)\s+(\S+)}))
+        break if metric
+
+        next unless m[1] == prefix
+
+        metric = Integer(m[2])
+        hops << m[3]
+      elsif metric && (m = line.match(/^\s{10,}(to\S+)\s+\d+\.\d+\.\d+\.\d+/))
+        hops << m[1]
+      end
+    end
+    metric && { interfaces: hops, metric: metric }
+  end
+
+  def frr_algorithm_route(text)
+    r = self.class.algorithm_route(text, destination_prefix) or return nil
+    { first_hops: r[:interfaces].map { peer_of(_1) }.sort, metric: r[:metric] }
+  end
+
+  # FRR's backup for D's label route in 128, from the label table: the
+  # backup next hop and its labels, if FRR has one.
+  def frr_flex_repair
+    e = JSON.parse(vtysh("show mpls table json"))[k_label(plr, "D").to_s] or return nil
+    b = Array(e["backupNexthops"]).first or return { none: true }
+    hop = peer_of(b["interface"])
+    { first_hop: hop, segments: segments_of(Array(b["outLabelStack"]).reject { _1 == 3 }, hop) }
   end
 
   private
@@ -178,21 +226,24 @@ class FlexTopologyLab < TopologyLab
   # in any entry.
   def frr_global_lines(_name) = used_colors.map { "affinity-map b#{_1} bit-position #{_1}" }
 
-  def frr_interface_lines(name, iface, metric, peer)
-    a = attributes(name, peer)
-    params = []
-    params << "  metric #{a[:te_metric]}" if a[:te_metric]
-    params << "  delay #{a[:delay]} min #{a[:delay]} max #{a[:delay]}" if a[:delay]
-    params << "  affinity #{color_names(a[:affinity]).join(' ')}" if a[:affinity]
-    lines = super
-    lines += [" link-params", "  enable", *params, " exit-link-params"] unless params.empty?
-    lines
+  # Each interface's link-params, which are zebra's: its affinity, TE
+  # metric and delay.
+  def frr_zebra_lines(name)
+    frr_global_lines(name) + interfaces(name).flat_map do |iface, _, _, peer|
+      a = attributes(name, peer)
+      params = []
+      params << "  metric #{a[:te_metric]}" if a[:te_metric]
+      params << "  delay #{a[:delay]} min #{a[:delay]} max #{a[:delay]}" if a[:delay]
+      params << "  affinity #{color_names(a[:affinity]).join(' ')}" if a[:affinity]
+      params.empty? ? [] : ["interface #{iface}", "link-params", *params.map(&:strip), "exit-link-params", "exit"]
+    end
   end
 
   def frr_router_lines(name)
     raise ArgumentError, "FlexTopologyLab: FRR as S takes part" if @entry[:not_taking_part].include?(name)
 
-    ["segment-routing prefix 10.255.0.#{number(name)}/32 algorithm #{K} index #{100 + number(name)}",
+    ["mpls-te on", "mpls-te router-address 10.255.0.#{number(name)}",
+     "segment-routing prefix 10.255.0.#{number(name)}/32 algorithm #{K} index #{100 + number(name)}",
      "flex-algo #{K}", " dataplane sr-mpls", " exit"]
   end
 end

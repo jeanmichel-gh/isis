@@ -671,8 +671,9 @@ new entries. The behaviours run under `/api/behave`, as `flap` does
 today. They become `sim:` steps and MCP actions in routescope, as
 TI-LFA's step 6e2 did.
 
-As built in step 7, which is two pull requests: 7a, the injector, and
-7b, the interop and the fault matrix against FRR in network namespaces.
+As built in step 7, which is three pull requests: 7a, the injector;
+7b, the interop and the topologies in the fault matrix, against FRR in
+network namespaces; 7c, the codec entries in the fault matrix.
 7a: the topology file takes `affinity_map`, a router's `flex_algo` and
 `algorithm_sids` (its loopback's), and a link's `affinity`, `delay`,
 `te_metric` and `srlg`, checked as isisd checks them. A simulated
@@ -684,6 +685,38 @@ link's attributes. `/api/catalog` lists the flex-algo codec entries
 beside the SR ones, and `/api/fault` injects them. The three behaviours
 end on their own after `hold`, or after `count` flaps for
 `participation_flap`; `behave_stop` undoes them early.
+
+7b, against FRR 10.5.1, the release the interop jobs install, at Level
+1 (measured 2026-11-26):
+
+- `test/interop/frr_flex_algo_test.rb`, isisd and FRR on one link. Each
+  reads the other's FAD, and both elect the same winner, FRR's at
+  priority 200 and then isisd's at 250. Each installs the other's
+  Prefix-SID for 128 as a label route that pops toward it. Each reads
+  the other's link attributes. FRR sends them twice, as legacy
+  sub-TLVs and in an ASLA with X whose user-defined mask is 0x10.
+  isisd sends only the ASLA, and FRR prints it as X alone.
+- FRR 10.5.1 sends no link attributes unless `mpls-te on` is set. It
+  takes `link-params` only through mgmtd. zebra drops them from its own
+  file, and mgmtd, which has no `-f`, did not read that file. So the
+  labs start mgmtd and give zebra's lines through vtysh (`FrrLab`'s
+  `frr_zebra`). The affinity-map must be given to zebra as well as to
+  isisd.
+- `test/interop/frr_flex_algo_topology_test.rb` runs the 15 topology
+  cases on real routers, a namespace per system
+  (`test/support/flex_topology_lab.rb`). S is isisd or FRR. isisd gives
+  every case's answer. FRR gives the answer wherever it runs the FAD:
+  exclude-any, include-any, include-all, a system that does not take
+  part, the two-way check, the partition, and TI-LFA's repair through B
+  with D's 128 label in B's SRGB. It elects a FAD with a delay or TE
+  metric, or with an Exclude SRLG, then disables it as an "unsupported
+  definition" and does not take part. So FRR 10.5.1, like 10.7.1, runs
+  only IGP-metric FADs, and no SRLG rule. FRR gives an algorithm's
+  routes and its FAD in text only.
+- The topologies are a group of their own in `docs/fault-matrix.md`.
+- Found against FRR and fixed: `policy.flex_algo` refused any change to
+  an algorithm with colors ("color 1 is not in affinity_map"), since it
+  checked the entry's groups again as names.
 
 ### 5 to 7. API, configuration, CLI
 

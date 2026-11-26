@@ -158,7 +158,9 @@ module FaultMatrix
   def flex_text(r)
     return "none" if r.nil?
     return r[:frr_text] if r[:frr_text]
-    return "not taking part" if r[:taking_part] == false
+    if r[:taking_part] == false
+      return r[:state] ? "not taking part: winner #{r[:winner]}, #{r[:state]}" : "not taking part"
+    end
 
     parts = ["winner #{r[:winner]}"]
     parts << (r[:unreachable] ? "D unreachable" : "by #{r[:first_hops].join(' and ')}, metric #{r[:metric]}")

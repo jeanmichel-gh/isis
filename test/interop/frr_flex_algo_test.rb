@@ -37,9 +37,9 @@ class TestFrrFlexAlgo < Minitest::Test
                          prefixes: [{ prefix: "10.255.0.1/32", metric: 0, sid: 1, algorithm_sids: { K => 101 } }],
                          link: { affinity: ["red"], delay: 5_000, te_metric: 100 } },
                frr_global: ["affinity-map red bit-position 1", "affinity-map far bit-position 40"],
-               frr_interface: ["link-params", " enable", " metric 77", " delay 5000 min 4000 max 6000",
-                               " affinity red", " exit-link-params"],
-               frr_router: ["segment-routing on", "segment-routing global-block 18000 25999",
+               frr_zebra: ["affinity-map red bit-position 1", "affinity-map far bit-position 40", "interface veth0", "link-params", "metric 77", "delay 5000 min 4000 max 6000",
+                           "affinity red", "exit-link-params"],
+               frr_router: ["mpls-te on", "mpls-te router-address 10.255.0.2", "segment-routing on", "segment-routing global-block 18000 25999",
                             "segment-routing prefix 10.255.0.2/32 index 2",
                             "segment-routing prefix 10.255.0.2/32 algorithm #{K} index 102",
                             "flex-algo #{K}", " dataplane sr-mpls", " advertise-definition", " priority #{frr_priority}",
@@ -47,7 +47,13 @@ class TestFrrFlexAlgo < Minitest::Test
     assert @lab.wait_for(40) { adjacency_up? && isisd_holds_frr? }, "adjacency and LSPs\n#{probe}"
   end
 
-  def adjacency_up? = @lab.isisd("show.adjacencies").any? { _1["state"] == "up" } && @lab.frr_adjacency_state == "Up"
+  # isisd's socket comes a moment after it starts.
+  def adjacency_up?
+    @lab.isisd("show.adjacencies").any? { _1["state"] == "up" } && @lab.frr_adjacency_state == "Up"
+  rescue SystemCallError
+    false
+  end
+
   def isisd_holds_frr? = @lab.isisd("show.database").any? { _1["lsp_id"] == "#{FrrLab::FRR_ID}.00-00" }
 
   def isisd_algo
@@ -93,8 +99,10 @@ class TestFrrFlexAlgo < Minitest::Test
     assert_equal [["10.0.12.1", 3]], frr["nexthops"].map { _1.values_at("nexthop", "outLabel") }, probe
   end
 
-  # isisd reads FRR's ASLA: red, TE metric 77, minimum delay 4000. FRR
-  # prints isisd's ASLA: red, TE metric 100, delay 5000.
+  # isisd reads FRR's link attributes: red, TE metric 77, minimum delay
+  # 4000. FRR 10.5.1 sends them twice, as legacy sub-TLVs and in an ASLA
+  # with X whose user-defined mask is 0x10. FRR reads isisd's ASLA, X
+  # alone: red, TE metric 100, delay 5000.
   def test_link_attributes_read_both_ways
     start
     link = nil
@@ -103,7 +111,13 @@ class TestFrrFlexAlgo < Minitest::Test
       link = node && node["neighbors"].find { _1["id"] == "#{FrrLab::ISIS4R_ID}.00" }
     }, "isisd's view of FRR's link\n#{probe}"
     assert_equal [[1], 77, 4_000], [link["affinity"], link["te_metric"], link.dig("delay", "min")], probe
-    detail = @lab.frr_database_detail(1)["#{FrrLab::ISIS4R_ID}.00-00"].to_s
-    assert_match(/ASLA|Application/, detail, probe)
+    detail = nil
+    assert @lab.wait_for(30) {
+      detail = @lab.frr_database_detail(1).find { |id, _| id.start_with?("isisd.") || id.start_with?(FrrLab::ISIS4R_ID) }&.last
+      detail&.include?("Extended Reachability")
+    }, "FRR holds isisd's link\n#{probe}"
+    asla = detail[/Application Specific Link Attributes:\n((?:      .*\n)+)/, 1].to_s
+    ["Standard Applications: 0x10 Flex-Algo", "Ext Admin Group: 0x00000002", "Traffic Engineering Metric: 100",
+     "Normal Min/Max Link Delay: 5000 / 5000"].each { assert_includes asla, _1, probe }
   end
 end

@@ -76,7 +76,11 @@ module ISIS
       i = @entries.index { _1.algorithm == Integer(algorithm) }
       raise ArgumentError, "flex_algo has no algorithm #{algorithm}; it has #{algorithms.join(', ')}" unless i
 
-      e = entry(@entries[i].to_hash.merge(changes.transform_keys(&:to_sym)).merge(algorithm: @entries[i].algorithm))
+      # The entry holds its colors as groups; they are checked again as
+      # names, so each goes back to a name of the map.
+      names = @affinity_map.invert
+      base = @entries[i].to_hash.to_h { |k, v| [k, RULES.key?(k) ? v.map { names.fetch(_1) } : v] }
+      e = entry(base.merge(changes.transform_keys(&:to_sym)).merge(algorithm: @entries[i].algorithm))
       @entries[i] = e
     end
 
