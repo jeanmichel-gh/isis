@@ -521,6 +521,25 @@ taking part "SHOULD advertise at least one Flex-Algorithm-specific
 Node-SID". Without one, a repair through that router cannot be built,
 and the backup says why.
 
+As built in step 6: `Graph.from_database` and `Spf::Backups` take
+`algorithm:` and `definition:`. The graph reads the database through
+the same `Calculation` as the algorithm's tree, so the node filter, the
+five rules and the metric are one code path; `Calculation#kept?` says
+whether one TLV 22 entry survives, for its Adj-SIDs. `Spf::TiLfa` is
+unchanged, and its `:no_sid` is the reason a repair through a system
+without the algorithm's Node-SID is unprotected. The Decision Process
+computes each algorithm's backups after its label table, when any
+interface has `ti_lfa`, and logs a change as algorithm 0's, kind
+`:ti_lfa`, with the algorithm. `show.ti_lfa` gives a row per protected
+interface and algorithm, with `algorithm`, and its trees and
+milliseconds count every algorithm; a flex-algo label row carries its
+backup as algorithm 0's does. As for algorithm 0, the label routes'
+backups are computed and shown, not installed: that waits for
+routescope's TI-LFA step 2c. `fa_ti_lfa_constraint` is in
+`Fault::FLEX_ALGO_TOPOLOGIES`: the repair goes by B in 128, where
+algorithm 0's goes by A over a red link. Not yet checked against FRR:
+that is step 7's.
+
 ### API and CLI
 
 - `show.flex_algo`: per level, per configured algorithm: the winning

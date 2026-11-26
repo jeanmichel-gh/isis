@@ -178,8 +178,12 @@ module ISIS
     # it. not_taking_part lists the systems whose SR-Algorithm lacks
     # FLEX_ALGO. The FADs are system => FAD sub-TLV Hash; S advertises
     # none. expect is the winner, then S's first hops to D and the metric,
-    # or unreachable, or taking_part false. Written by hand from the RFC,
-    # never computed.
+    # or unreachable, or taking_part false. With repair, S protects its
+    # link to repair's link with TI-LFA, and D's route in FLEX_ALGO has
+    # that repair (RFC 9855 section 8): its case, first hop and segments,
+    # as TOPOLOGIES writes them; base_repair is algorithm 0's first hop,
+    # which the constraint rules out. Written by hand from the RFC, never
+    # computed.
     #
     # Systems are numbered as they first appear in the links, from 1:
     # System ID 0000.0000.00NN, loopback 10.255.0.N/32, Prefix-SID index
@@ -258,7 +262,15 @@ module ISIS
          "B" => { algorithm: FLEX_ALGO, priority: 100, metric_type: "delay" } },
        { winner: "B", first_hops: ["B"], metric: 4_000 }],
       [:fa_no_fad, "no system advertises a FAD: S does not take part", "RFC 9350 section 5.3",
-       { links: square }, {}, { taking_part: false }]
+       { links: square }, {}, { taking_part: false }],
+      [:fa_ti_lfa_constraint, "S protects its link to F with TI-LFA; A to D is red, the FAD excludes red: " \
+                              "the repair goes by B, where algorithm 0's goes by A",
+       "RFC 9855 section 8",
+       { links: [["S", "F", 1, {}], ["F", "D", 1, {}], ["S", "A", 1, {}], ["A", "D", 2, { affinity: [1] }],
+                 ["S", "B", 5, {}], ["B", "D", 5, {}]] },
+       { "D" => { algorithm: FLEX_ALGO, priority: 100, subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }] } },
+       { winner: "D", first_hops: ["F"], metric: 2,
+         repair: { link: "F", case: :neighbor, first_hop: "B", segments: [] }, base_repair: "A" }]
     ].freeze
 
     # The third group: packets that reach the PLR while it repairs, sent by

@@ -248,6 +248,22 @@ module ISIS
         node_lsps(id.b)
       end
 
+      # Whether node +id+ stays in this algorithm's topology (the node
+      # filter); always for algorithm 0.
+      def participates?(id) = participating?(id.b)
+
+      # Whether +entry+, one of node +id+'s TLV 22 entries, survives this
+      # algorithm's pruning; always for algorithm 0, and for a
+      # pseudonode's. Not kept in #pruned.
+      def kept?(id, entry)
+        id = id.b
+        return true if !flex? || !id.getbyte(-1).zero?
+
+        @attributes ||= {}
+        attrs = @attributes[id] ||= LinkAttributes.new(node_lsps(id) || [], policy: @policy)
+        !flex_metric(id, entry.neighbor.b, entry.metric, attrs.for(entry), record: false).nil?
+      end
+
       private
 
       # Step 1 for P, just placed on PATHS: each neighbour N its LSPs
@@ -403,7 +419,7 @@ module ISIS
 
       # RFC 9350 section 13's five rules, in order, then the FAD's metric
       # type: the link's metric for K, or nil when a rule prunes it.
-      def flex_metric(node, neighbor, igp, link)
+      def flex_metric(node, neighbor, igp, link, record: true)
         d = @definition
         affinity = link&.affinity || []
         rule = if !d.exclude_any.empty? && !(affinity & d.exclude_any).empty?
@@ -424,7 +440,7 @@ module ISIS
         rule ||= :max_metric if d.metric_type.zero? && metric == MAX_LINK_METRIC
         return metric unless rule
 
-        @pruned << [node, neighbor, rule]
+        @pruned << [node, neighbor, rule] if record
         nil
       end
 

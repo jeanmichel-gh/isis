@@ -29,6 +29,12 @@ module ISIS
     # where there is one, a fallback: the neighbour's own prefixes always
     # do, since nothing avoids the node they are on. As FRR's
     # "node-protection link-fallback".
+    #
+    # With +algorithm+ K and +definition+, its winning FAD, the backups of
+    # K's routes, on K's graph (Graph.from_database): the P-space, the
+    # Q-space and the post-convergence path all K's (RFC 9855 section 8).
+    # A repair through a system with no Node-SID for K is unprotected,
+    # :no_sid, since RFC 9350 section 14.1 only says it "SHOULD" have one.
     class Backups
       # A route's backup: the adjacency it leaves on, the labels top first,
       # and the repair it encodes. +fallback+ is true for a link backup
@@ -55,13 +61,17 @@ module ISIS
       # protected against the link because the node left them unprotected.
       Summary = Struct.new(:interface, :neighbor, :mode, :protected, :ecmp, :unprotected, :fallback)
 
-      attr_reader :routes, :labels, :summaries, :trees, :seconds
+      attr_reader :routes, :labels, :summaries, :trees, :seconds, :algorithm
 
       # +routes+, prefix => Route, and +labels+, the run's Spf::Labels;
       # +adjacencies+, [node ID, metric, Adjacency] for each adjacency Up;
       # +interfaces+, name => :link or :node, the interfaces with ti_lfa (a
       # list of names is :link for each); +clock+ times the work.
-      def initialize(database:, system_id:, routes:, labels:, adjacencies:, interfaces:, clock: nil)
+      def initialize(database:, system_id:, routes:, labels:, adjacencies:, interfaces:, clock: nil,
+                     algorithm: 0, definition: nil, policy: :rfc)
+        @algorithm = algorithm
+        @definition = definition
+        @policy = policy
         @database = database
         @root = (Pdu.dotted_octets(system_id) + "\x00".b).b
         @all = routes
@@ -78,7 +88,7 @@ module ISIS
 
       def compute
         started = @clock&.now
-        graph = Graph.from_database(@database)
+        graph = Graph.from_database(@database, algorithm: @algorithm, definition: @definition, policy: @policy)
         ti = TiLfa.new(graph, root: @root)
         @adjacencies.each do |node, _metric, adj|
           mode = @interfaces[adj.circuit] or next
