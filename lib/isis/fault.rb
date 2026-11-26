@@ -325,7 +325,24 @@ module ISIS
        "RFC 8660 2.4, RFC 9855 7.1",
        "a label in router's SRGB moves with the block: a repair's last label when router is Q, " \
        "and a route's label when router is the next hop",
-       { router: nil, start: nil }, [:router]]
+       { router: nil, start: nil }, [:router]],
+      [:fad_takeover, "router advertises a FAD for algorithm at priority, with metric_type when given, for hold " \
+                      "seconds, then what it advertised before",
+       "RFC 9350 5.3",
+       "every router that takes part in algorithm selects router's FAD while it is advertised, unless one of " \
+       "greater priority, or System ID at the same, is there, and the one before after; the paths follow the " \
+       "winner's metric type",
+       { router: nil, algorithm: 128, priority: 255, metric_type: nil, hold: 30 }, [:router]],
+      [:participation_flap, "router leaves algorithm out of its SR-Algorithm, and its Prefix-SIDs for it, for down " \
+                            "seconds, then lists it again for up seconds, count times",
+       "RFC 9350 11, 13",
+       "every router prunes router from algorithm while it does not list it, so no path in algorithm crosses " \
+       "it and its prefixes have no label route in algorithm; all come back once it lists it again",
+       { router: nil, algorithm: 128, count: 3, down: 10, up: 10 }, [:router]],
+      [:delay_change, "link's delay, both ways, is delay microseconds for hold seconds, then what it was",
+       "RFC 9350 5.1, metric type 1",
+       "a delay algorithm's paths leave link while its delay makes another path shorter, and come back after",
+       { link: nil, delay: 100_000, hold: 30 }, [:link]]
     ].freeze
 
     # How far srgb_change moves a block unless told.

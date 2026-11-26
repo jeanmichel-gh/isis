@@ -671,6 +671,20 @@ new entries. The behaviours run under `/api/behave`, as `flap` does
 today. They become `sim:` steps and MCP actions in routescope, as
 TI-LFA's step 6e2 did.
 
+As built in step 7, which is two pull requests: 7a, the injector, and
+7b, the interop and the fault matrix against FRR in network namespaces.
+7a: the topology file takes `affinity_map`, a router's `flex_algo` and
+`algorithm_sids` (its loopback's), and a link's `affinity`, `delay`,
+`te_metric` and `srlg`, checked as isisd checks them. A simulated
+system lists every algorithm of its `flex_algo` in SR-Algorithm,
+whatever FAD wins, since a simulator sends what it is told. A link with
+`srlg` gets IPv4 addresses, 198.18.0.0 + 4N + 1 and + 2, for TLV 238.
+The simulator's own end of a link to a simulated system carries the
+link's attributes. `/api/catalog` lists the flex-algo codec entries
+beside the SR ones, and `/api/fault` injects them. The three behaviours
+end on their own after `hold`, or after `count` flaps for
+`participation_flap`; `behave_stop` undoes them early.
+
 ### 5 to 7. API, configuration, CLI
 
 Above.

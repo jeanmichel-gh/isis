@@ -37,6 +37,16 @@ module ISIS
     #   segment_routing:            optional: SR-MPLS (RFC 8667) for every
     #     srgb: [{ start: 16000, size: 8000 }]   simulated system, with
     #     srlb: { start: 15000, size: 1000 }     these blocks by default
+    #   affinity_map: { red: 1 }    optional: color names, as isisd's
+    #
+    # Flex-algo (docs/design/flex-algo.md, step 7), with isisd's keys: a
+    # router's flex_algo list and algorithm_sids, the indexes of its
+    # loopback per algorithm; a link's affinity, delay, te_metric and
+    # srlg, the same both ways. A simulated system lists in SR-Algorithm
+    # every algorithm of its flex_algo, whatever FAD wins: a simulator
+    # sends what it is told. A link with srlg gets IPv4 addresses, which
+    # TLV 238 names it by: link N joins 198.18.0.4N + 1 at its from end to
+    # + 2 at its to end.
     #
     # With segment_routing, a grid's sids gives r1c1 that index and each
     # next system the next, row by row, on its loopback; a router's sid gives
@@ -53,32 +63,42 @@ module ISIS
 
       # One prefix as it goes in an LSP. +group+ is the prefix a count was
       # given from, so a group can be withdrawn by its first prefix.
-      Prefix = Struct.new(:prefix, :metric, :group, :sid, keyword_init: true) do
-        def to_h = sid ? { prefix: prefix, metric: metric, sid: sid } : { prefix: prefix, metric: metric }
+      Prefix = Struct.new(:prefix, :metric, :group, :sid, :algorithm_sids, keyword_init: true) do
+        def to_h
+          h = sid ? { prefix: prefix, metric: metric, sid: sid } : { prefix: prefix, metric: metric }
+          algorithm_sids ? h.merge(algorithm_sids: algorithm_sids) : h
+        end
       end
 
       # One system. +levels+ is [1], [2] or [1, 2]; +grid+ is [row, column]
       # for a grid system.
+      # +flex_algo+ is the file's list, +flex+ its FlexAlgoConfig, and
+      # +algorithm_sids+ the loopback's { algorithm => index }.
       System = Struct.new(:name, :system_id, :hostname, :levels, :areas, :attached, :overload, :loopback,
                           :prefixes, :externals, :lsp_buffer_size, :grid, :simulator, :sid, :srgb,
-                          keyword_init: true) do
+                          :flex_algo, :flex, :algorithm_sids, keyword_init: true) do
         def simulator? = simulator ? true : false
       end
 
       # One link, named "from--to". +levels+ are those it is carried at:
       # the levels both ends run, Level 1 only with an area in common.
-      Link = Struct.new(:from, :to, :metric, :one_way, :state, :levels, keyword_init: true) do
+      # +affinity+ (color names), +delay+, +te_metric+ and +srlg+ as the
+      # file gives them; +attributes+ the same for the originator, colors
+      # as groups, or nil.
+      Link = Struct.new(:from, :to, :metric, :one_way, :state, :levels, :affinity, :delay, :te_metric, :srlg,
+                        :attributes, keyword_init: true) do
         def name = "#{from}--#{to}"
         def up? = state != :down
       end
 
-      TOP_KEYS = %w[simulator grid routers links segment_routing].freeze
+      TOP_KEYS = %w[simulator grid routers links segment_routing affinity_map].freeze
       GRID_KEYS = %w[columns rows metric system_id_base loopbacks level areas sids].freeze
       ROUTER_KEYS = %w[name system_id hostname level areas attached overload loopback prefixes externals
-                       lsp_buffer_size sid srgb].freeze
+                       lsp_buffer_size sid srgb flex_algo algorithm_sids].freeze
       SR_KEYS = %w[srgb srlb].freeze
       PREFIX_KEYS = %w[prefix count metric].freeze
-      LINK_KEYS = %w[from to metric one_way state].freeze
+      LINK_KEYS = %w[from to metric one_way state affinity delay te_metric srlg].freeze
+      ATTRIBUTE_KEYS = %w[affinity delay te_metric srlg].freeze
       SIM_ONLY_KEYS = %w[lsp_lifetime].freeze
 
       # The largest value each metric style can carry: the six bit original
@@ -95,6 +115,8 @@ module ISIS
       # The segment_routing block as { srgb: [[first, size]], srlb: [first,
       # size] }, or nil when the file has none.
       attr_reader :segment_routing
+      # The affinity_map, names to groups, empty when the file has none.
+      attr_reader :affinity_map
 
       def self.load(path)
         from_hash(ConfigFile.load(path), source: path)
@@ -158,13 +180,16 @@ module ISIS
             attached: s.attached, overload: s.overload, loopback: lo ? s.loopback.split("/").first : nil,
             prefixes: (lo ? s.prefixes.drop(1) : s.prefixes).map { _1.to_h.except(:sid) },
             externals: s.externals.map(&:to_h), lsp_buffer_size: s.lsp_buffer_size, sid: s.sid,
-            srgb: s.srgb && block.(s.srgb) }.compact
+            srgb: s.srgb && block.(s.srgb), flex_algo: s.flex_algo, algorithm_sids: s.algorithm_sids }.compact
         end
         sr = @segment_routing && { segment_routing: { srgb: block.(@segment_routing[:srgb]),
                                                       srlb: block.([@segment_routing[:srlb]]).first } }
-        { simulator: sim, routers: routers,
-          links: @links.map { |l| { from: l.from, to: l.to, metric: l.metric, one_way: l.one_way || nil, state: l.state == :down ? "down" : nil }.compact } }
-          .merge(sr || {})
+        links = @links.map do |l|
+          { from: l.from, to: l.to, metric: l.metric, one_way: l.one_way || nil, state: l.state == :down ? "down" : nil,
+            affinity: l.affinity, delay: l.delay, te_metric: l.te_metric, srlg: l.srlg }.compact
+        end
+        { simulator: sim, routers: routers, links: links }.merge(sr || {})
+          .merge(@affinity_map.empty? ? {} : { affinity_map: @affinity_map })
       end
 
       private
@@ -175,12 +200,74 @@ module ISIS
         return unless @simulator
 
         read_segment_routing(h["segment_routing"]) if h.key?("segment_routing")
+        read_affinity_map(h["affinity_map"])
         read_grid(h["grid"]) if h.key?("grid")
         Array(h["routers"]).each_with_index { |r, i| read_router(r, "routers[#{i}]") }
         read_ids
         Array(h["links"]).each_with_index { |l, i| read_link(l, "links[#{i}]") }
         read_reachable
         check_sids
+      end
+
+      def read_affinity_map(map)
+        @affinity_map = Router.affinity_map(affinity_map: map)
+      rescue ArgumentError => e
+        @affinity_map = {}
+        error("affinity_map", e.message.delete_prefix("affinity_map: "))
+      end
+
+      # A router's flex_algo, checked as isisd checks it, and its
+      # loopback's algorithm_sids.
+      def read_flex(sys, r, at)
+        if r.key?("flex_algo")
+          begin
+            sys.flex = FlexAlgoConfig.new(symbolize(r["flex_algo"]), affinity_map: @affinity_map,
+                                                                   segment_routing: @segment_routing ? true : false)
+            sys.flex_algo = r["flex_algo"]
+          rescue ArgumentError => e
+            return error("#{at}.flex_algo", e.message)
+          end
+        end
+        return unless r.key?("algorithm_sids")
+        return error("#{at}.algorithm_sids", "needs flex_algo") unless sys.flex
+        return error("#{at}.algorithm_sids", "needs a loopback, whose Prefix-SIDs they are") unless sys.loopback
+
+        begin
+          sids = sys.flex.algorithm_sids(prefix: sys.loopback, algorithm_sids: r["algorithm_sids"])
+        rescue ArgumentError => e
+          return error("#{at}.algorithm_sids", e.message)
+        end
+        sys.algorithm_sids = r["algorithm_sids"]
+        lo = sys.prefixes.find { _1.prefix == sys.loopback }
+        lo.algorithm_sids = sids if lo
+      end
+
+      # A link's attributes, checked as isisd checks an interface's.
+      def read_attributes(l, at)
+        given = l.slice(*ATTRIBUTE_KEYS)
+        return {} if given.empty?
+
+        begin
+          # The simulator gives a link with srlg its addresses (VirtualLink).
+          Router.link_attributes(symbolize(given).merge(ip_addresses: ["198.18.0.1"]), at, { affinity_map: @affinity_map })
+        rescue ArgumentError => e
+          return error(at, e.message.delete_prefix("interface #{at}: ")) || {}
+        end
+        attributes = {}
+        attributes[:affinity] = Array(given["affinity"]).map { @affinity_map.fetch(_1.to_s) }.uniq.sort if given["affinity"]
+        attributes[:delay] = given["delay"] if given["delay"]
+        attributes[:te_metric] = given["te_metric"] if given["te_metric"]
+        attributes[:srlg] = Array(given["srlg"]).uniq if given["srlg"]
+        { affinity: given["affinity"], delay: given["delay"], te_metric: given["te_metric"], srlg: given["srlg"],
+          attributes: attributes }
+      end
+
+      def symbolize(v)
+        case v
+        when Hash then v.to_h { |k, x| [k.to_s.match?(/\A\d+\z/) ? k : k.to_sym, symbolize(x)] }
+        when Array then v.map { symbolize(_1) }
+        else v
+        end
       end
 
       # The blocks every simulated system with SR uses by default. They must
@@ -339,6 +426,7 @@ module ISIS
           lo = sys.prefixes.find { _1.prefix == sys.loopback }
           lo.sid = sys.sid if lo
         end
+        read_flex(sys, r, at)
       end
 
       def prefixes(list, at)
@@ -399,10 +487,10 @@ module ISIS
         return error("#{at}.state", "is up or down") unless %w[up down].include?(state)
 
         one_way = l.key?("one_way") ? flag(l["one_way"], "#{at}.one_way") : false
-        add_link(from.name, to.name, metric, one_way || false, state.to_sym, at)
+        add_link(from.name, to.name, metric, one_way || false, state.to_sym, at, **read_attributes(l, at))
       end
 
-      def add_link(from, to, metric, one_way, state, at)
+      def add_link(from, to, metric, one_way, state, at, **attributes)
         return if metric.nil?
 
         if link("#{from}--#{to}")
@@ -418,7 +506,8 @@ module ISIS
                            "#{' (Level 1 needs an area in common)' if (a.levels & b.levels) == [1]}")
         end
 
-        @links << Link.new(from: from, to: to, metric: metric, one_way: one_way, state: state, levels: levels)
+        @links << Link.new(from: from, to: to, metric: metric, one_way: one_way, state: state, levels: levels,
+                           **attributes)
       end
 
       # A system the simulator reaches by no link floods nothing anyone
