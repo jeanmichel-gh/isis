@@ -89,6 +89,8 @@ class FrrLab
   # adds lines under FRR's interface and +frr_router+ under its router isis.
   # +frr_loopback+, a prefix such as "198.51.100.2/32", goes on FRR's lo
   # and into IS-IS as a passive circuit.
+  # +frr_global+ adds lines before the interfaces, such as an
+  # affinity-map, which FRR reads before an interface names its colors.
   # +frr_is_type+ overrides the first FRR's is-type, which is otherwise
   # the lab's level.
   # +frr_lsp_gen_interval+ is FRR's lsp-gen-interval on both FRRs, the
@@ -122,8 +124,9 @@ class FrrLab
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
             ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil,
-            frr_lsp_gen_interval: 1)
+            frr_lsp_gen_interval: 1, frr_global: [])
     cleanup
+    @frr_global = frr_global
     @isis4r_hostname = isis4r[:hostname]
     @frr_lsp_gen_interval = frr_lsp_gen_interval
     @daemon = daemon
@@ -513,13 +516,15 @@ class FrrLab
 
   # With +daemon+, isis4r runs as exe/isisd, from a YAML file made from
   # the runner's configuration, and answers on its API socket; there is
-  # no state file.
+  # no state file. The configuration's +link+ adds keys to the
+  # interface, such as affinity or delay.
   def start_isisd(config)
     lan = config[:network] == "broadcast"
     iface = { "name" => config[:interface], "network" => lan ? "broadcast" : "point-to-point",
               "ip_addresses" => config[:ip_addresses], "hello_interval" => config[:hello_interval],
               "hello_multiplier" => config[:hello_multiplier] }
-    yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier)
+    iface.merge!(config[:link].transform_keys(&:to_s)) if config[:link]
+    yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier, :link)
                  .merge(interfaces: [iface])
     # The lab's 1 s fixed hold, unless the test times generation itself:
     # lsp_generation and minimum_lsp_interval are not given together.
@@ -570,6 +575,7 @@ class FrrLab
       hostname #{@name}
       log file #{File.join(@dir, 'isisd.log')} debugging
       debug isis adj-packets
+      #{Array(@frr_global).join("\n")}
       interface veth0
        ip router isis LAB
       #{@ipv6 ? ' ipv6 router isis LAB' : ''}

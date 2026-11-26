@@ -13,13 +13,14 @@ require "fileutils"
 # docs/fault-matrix.md from the lines (FaultMatrix.render). Nothing is
 # measured twice: the matrix is what the interop tests found.
 #
-# Three groups, as the catalog's: SR data (frr_sr_fault_test.rb), the
-# topologies (frr_ti_lfa_test.rb) and the packets at the PLR
-# (kernel_ti_lfa_test.rb). The behaviours act over time and are not
-# in it.
+# Four groups, as the catalog's: SR data (frr_sr_fault_test.rb), the
+# topologies (frr_ti_lfa_test.rb), the packets at the PLR
+# (kernel_ti_lfa_test.rb) and flex-algo's topologies
+# (frr_flex_algo_topology_test.rb). The behaviours act over time and
+# are not in it.
 module FaultMatrix
   RECEIVERS = { isisd: "isisd", frr: "FRR isisd" }.freeze
-  GROUPS = %i[sr topology packet].freeze
+  GROUPS = %i[sr topology packet flex_topology].freeze
 
   module_function
 
@@ -132,6 +133,44 @@ module FaultMatrix
     cell(packet_text(got), agrees)
   end
 
+  # --- Flex-algo's topologies ------------------------------------------
+
+  # What RFC 9350 expects of S in a flex-algo topology entry, as
+  # FlexTopologyLab#flex_reading reads S: not taking part; or the
+  # winner, and D's route or none; and a repair, its first hop and
+  # segments.
+  def flex_expected(entry)
+    e = entry[:expect]
+    return { taking_part: false } if e[:taking_part] == false
+
+    out = { winner: e[:winner] }
+    if e[:unreachable] then out[:unreachable] = true
+    else out.merge!(first_hops: e[:first_hops], metric: e[:metric])
+    end
+    if (r = e[:repair])
+      q = r.fetch(:q, r[:first_hop])
+      last = q == "D" ? [] : [[:node, "D"]]
+      out[:repair] = { first_hop: r[:first_hop], segments: r[:segments] + last }
+    end
+    out
+  end
+
+  def flex_text(r)
+    return "none" if r.nil?
+    return r[:frr_text] if r[:frr_text]
+    return "not taking part" if r[:taking_part] == false
+
+    parts = ["winner #{r[:winner]}"]
+    parts << (r[:unreachable] ? "D unreachable" : "by #{r[:first_hops].join(' and ')}, metric #{r[:metric]}")
+    parts << "repair #{repair_text(r[:repair])}" if r.key?(:repair)
+    parts.join("; ")
+  end
+
+  def flex_cell(got, expected)
+    seen = got && got[:repair] ? got.merge(repair: got[:repair].slice(:first_hop, :segments)) : got
+    cell(flex_text(got), seen == expected)
+  end
+
   # --- The document ----------------------------------------------------
 
   def expect_text(entry, group)
@@ -141,6 +180,7 @@ module FaultMatrix
       entry[:channel] == :gaps ? "a gap of isis4r (#{rfc})" : "#{entry[:expect]} (#{rfc})"
     when :topology then repair_text(rfc_repair(entry))
     when :packet then entry[:expect] == :repair ? "the repair, then D's label in Q's SRGB" : "record"
+    when :flex_topology then flex_text(flex_expected(entry))
     end
   end
 
@@ -212,6 +252,17 @@ module FaultMatrix
       isisd's node repair on `ti_lfa_too_deep` falls back to the link's,
       as its node protection does (`docs/ti-lfa.md`). FRR shows no backup
       where there is no repair, or another primary next hop.
+
+      ## Flex-algo topologies
+
+      `test/interop/frr_flex_algo_topology_test.rb`, on real routers in
+      network namespaces, as the topologies above: isisd at every system,
+      S isisd or FRR. Every system takes part in algorithm #{ISIS::Fault::FLEX_ALGO} but those
+      the entry leaves out. A cell says the FAD S selects, and S's route
+      to D in #{ISIS::Fault::FLEX_ALGO}: its first hops and metric.
+
+      #{head}
+      #{rows.call(:flex_topology, ISIS::Fault.flex_topologies, ->(e) { e[:description] }).join("\n")}
 
       ## Packets at the PLR
 
