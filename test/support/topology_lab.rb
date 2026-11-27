@@ -469,19 +469,37 @@ class TopologyLab
     FileUtils.touch(File.join(@dir, "#{name}-frr.log"))
     sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
     # Zebra's lines, link-params among them, go in through mgmtd, as
-    # FrrLab's frr_zebra do.
+    # FrrLab's frr_zebra do, and before isisd starts. Given while isisd
+    # started, FRR 10.5.1's isisd once kept an LSP with no neighbor and no
+    # prefix, though its adjacencies were up (2026-11-27, #146).
     zebra_lines = frr_zebra_lines(name)
-    daemons = { "zebra" => zebra, "isisd" => conf }
-    daemons = { "mgmtd" => nil }.merge(daemons) unless zebra_lines.empty?
-    daemons.each do |d, file|
+    start = lambda do |d, file|
       out = File.join(@dir, "#{d}.start.log")
       cmd = "ip netns exec #{ns(name)} #{FRR}/#{d} -N #{@prefix} -d #{"-f #{file} " if file}-i #{@run}/#{d}.pid"
       system("#{cmd} > #{out} 2>&1") or raise "failed: #{cmd}\n#{File.read(out)}"
     end
-    return if zebra_lines.empty?
+    start.call("mgmtd", nil) unless zebra_lines.empty?
+    start.call("zebra", zebra)
+    configure_zebra(name, zebra_lines) unless zebra_lines.empty?
+    start.call("isisd", conf)
+  end
 
-    Open3.capture3("ip", "netns", "exec", ns(name), "vtysh", "-N", @prefix, "-c", "configure",
-                   *zebra_lines.flat_map { ["-c", _1] })
+  # Gives zebra +lines+ through vtysh once mgmtd and zebra answer on their
+  # vty sockets, again until the running configuration has link-params,
+  # or the first line when no interface has any.
+  def configure_zebra(name, lines)
+    want = lines.include?("link-params") ? "link-params" : lines.first
+    socks = %w[mgmtd zebra].map { "#{@run}/#{_1}.vty" }
+    raise "FRR on #{name}: no vty socket for mgmtd and zebra" unless wait_for(20) { socks.all? { File.socket?(_1) } }
+
+    said = nil
+    ok = wait_for(30) do
+      said = Open3.capture3("ip", "netns", "exec", ns(name), "vtysh", "-N", @prefix, "-c", "configure",
+                            *lines.flat_map { ["-c", _1] }).first(2)
+      sleep 1
+      vtysh("show running-config").include?(want)
+    end
+    raise "FRR on #{name} did not take #{want}; vtysh said #{said.inspect}" unless ok
   end
 
   # FRR's file for +name+: its interfaces, then router isis.

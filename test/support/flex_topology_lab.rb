@@ -61,15 +61,16 @@ class FlexTopologyLab < TopologyLab
     raise "#{plr}'s algorithm #{K} did not settle in #{timeout} s: #{readings.inspect}\n#{report}"
   end
 
-  # Whether FRR as S sends its own links' attributes: an ASLA for each
-  # interface with link-params, in its own LSP. They go in through vtysh
-  # after FRR starts, so its first LSPs have none, and S then prunes its
-  # own links (seen once on CI, fa_include_all, #146).
+  # Whether FRR as S sends its own LSP whole: an IS reachability entry
+  # for each of its links, each with its attributes when it has them.
+  # FRR's first LSPs have neither (seen on CI, #146).
   def frr_attributes_sent?
     return true unless @plr_kind == :frr
 
+    links = vtysh("show isis database detail #{plr}.00-00").split("Extended Reachability:").drop(1)
     want = interfaces(plr).count { |*, peer| attributes(plr, peer).slice(:affinity, :delay, :te_metric).any? }
-    vtysh("show isis database detail #{plr}.00-00").scan("Application Specific Link Attributes").size >= want
+    links.size >= interfaces(plr).size &&
+      links.count { _1.match?(/Link Delay|Traffic Engineering Metric|Admin Group/) } >= want
   end
 
   # S's algorithm 128, as the catalog's expect reads it: { taking_part:
