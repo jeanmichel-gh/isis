@@ -97,7 +97,8 @@ module ISIS
       private
 
       # Each system's Definitions, System ID => Spf::Definitions, and the
-      # findings on all of them.
+      # findings on all of them: on its FADs, and on its prefixes'
+      # sub-TLVs (Spf::PrefixMetrics), whose FAPMs isisd does not use yet.
       def read
         nodes = @database.entries.reject { _1.placeholder? || _1.purged? }
                          .select { _1.lsp_id.getbyte(6).zero? }
@@ -108,10 +109,12 @@ module ISIS
           next if id == @system_id
           next unless entries.any? { _1.lsp_id.getbyte(7).zero? }
 
-          d = Definitions.new(entries.sort_by { _1.lsp_id.getbyte(7) }.map(&:lsp), policy: @policy,
-                              subject: SystemId.from_bytes(id).to_s)
+          lsps = entries.sort_by { _1.lsp_id.getbyte(7) }.map(&:lsp)
+          subject = SystemId.from_bytes(id).to_s
+          d = Definitions.new(lsps, policy: @policy, subject: subject)
           found[id] = d
           findings.concat(d.findings)
+          findings.concat(PrefixMetrics.new(lsps, policy: @policy, subject: subject).findings)
         end
         own = [Own.new([Tlv::RouterCapability.new(router_id: "0.0.0.0", subtlvs: @config.fads)])]
         found[@system_id] = Definitions.new(own, policy: @policy, subject: SystemId.from_bytes(@system_id).to_s)

@@ -23,10 +23,6 @@ class TestFrrFlexFault < Minitest::Test
   S1 = "0000.0000.0009"
   K = ISIS::Fault::FLEX_ALGO
 
-  # isisd reads no FAPM (decision 2), and Spf::PrefixMetrics, which names
-  # the Prefix-SID finding, is not called yet: no finding for these.
-  NO_FINDING = %i[fapm_algorithm_range fapm_twice prefix_sid_algorithm_twice].freeze
-
   # What FRR 10.5.1 did, measured 2026-11-26. It prints a link's ASLA as
   # it parsed it, but for one with a SABM of 9 octets, which it drops. It
   # uses a FAD where RFC 9350 asks it be ignored: with one sub-TLV twice
@@ -170,7 +166,7 @@ class TestFrrFlexFault < Minitest::Test
       cell = FaultMatrix.flex_data_cell(name, mine, first: SrFaultLab::ISISD_SRGB + index)
       FaultMatrix.record(:flex, name, :isisd, cell)
       refute_equal false, cell[:agrees], "isisd, #{name}: #{cell[:text]}"
-      assert_equal name.to_s, mine[:finding], "isisd names #{name}: #{cell[:text]}" unless NO_FINDING.include?(name)
+      assert_equal name.to_s, mine[:finding], "isisd names #{name}: #{cell[:text]}"
       theirs = frr_reading(name, base[:frr], taken)
       FaultMatrix.record(:flex, name, :frr, FaultMatrix.flex_data_cell(name, theirs, first: SrFaultLab::FRR_SRGB + index))
       assert_equal FRR.fetch(name), theirs, "FRR, #{name}, as recorded" if check_frr
