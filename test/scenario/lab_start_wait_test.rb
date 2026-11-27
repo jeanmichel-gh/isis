@@ -32,6 +32,11 @@ class TestLabStartWait < Minitest::Test
         waits = cmd.scan(/until ip link show (\S+)/).flatten
         # `for i in eth1 eth2; do until ip link show $i ...` waits for each.
         waits += cmd.scan(/for (\w+) in ([\w ]+?); do until ip link show \$\1\b/).flat_map { |_, list| list.split }
+        # A node that gives an interface an address waits first: a command
+        # with no wait gave isis4r-tilfa's s1 none ("-c \"1 ip addr add").
+        addresses = cmd.scan(/ip addr add \S+ dev (eth\d+)/).flatten
+        refute(waits.empty? && !addresses.empty?,
+               "#{File.basename(file)} #{node} gives #{addresses.join(", ")} an address without waiting for them")
         next if waits.empty?
 
         checked += 1
