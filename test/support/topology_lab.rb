@@ -504,6 +504,9 @@ class TopologyLab
 
   # FRR's file for +name+: its interfaces, then router isis.
   def frr_conf(name)
+    # lsp-gen-interval comes first: is-type schedules an LSP, at the
+    # interval then set. After it, FRR 10.5.1 kept its 30 s default, and its
+    # own LSP stayed empty for 30 s (2026-11-27).
     <<~CONF
       hostname #{name}
       log file #{File.join(@dir, "#{name}-frr.log")} informational
@@ -513,10 +516,10 @@ class TopologyLab
        ip router isis LAB
        isis passive
       router isis LAB
+       lsp-gen-interval 1
        net 49.0001.#{system_id(name)}.00
        is-type level-1
        metric-style wide
-       lsp-gen-interval 1
        segment-routing on
        segment-routing global-block #{srgb(name)} #{srgb(name) + 999}
        segment-routing prefix 10.255.0.#{number(name)}/32 index #{number(name)}
