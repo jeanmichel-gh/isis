@@ -29,6 +29,24 @@ class TestFlexAlgo < Minitest::Test
     @db.entry(ISIS::Pdu.lsp_id_octets(id)).store(lsp)
   end
 
+  # Another system's prefix sub-TLVs are checked too (Spf::PrefixMetrics):
+  # a FAPM outside 128 to 255, two FAPMs or two Prefix-SIDs for one
+  # algorithm, each a finding on that system and prefix.
+  def test_prefix_findings
+    reach = ISIS::Tlv::ExtendedIpReachability.new(
+      { prefix: "10.255.0.2/32", metric: 0,
+        subtlvs: [{ fapm: { algorithm: 100, metric: 10 } }, { fapm: { algorithm: 128, metric: 10 } },
+                  { fapm: { algorithm: 128, metric: 20 } },
+                  { prefix_sid: { flags: %w[N], algorithm: 128, index: 102 } },
+                  { prefix_sid: { flags: %w[N], algorithm: 128, index: 112 } }] }
+    )
+    lsp = ISIS::Pdu::Lsp.new(level: 1, lsp_id: "0000.0000.0002.00-00", lifetime: 1200, sequence: 1, tlvs: [reach])
+    @db.entry(ISIS::Pdu.lsp_id_octets("0000.0000.0002.00-00")).store(lsp)
+    f = flex({ algorithm: 128, priority: 100 })
+    assert_equal %i[fapm_algorithm_range fapm_twice prefix_sid_algorithm_twice], f.findings.map(&:name)
+    assert_equal ["0000.0000.0002 10.255.0.2/32"], f.findings.map(&:subject).uniq
+  end
+
   # Its own FAD alone: it wins, and this system takes part from the start.
   def test_own_fad
     f = flex({ algorithm: 128, metric_type: "delay", priority: 100, exclude_any: ["red"] })

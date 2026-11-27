@@ -727,9 +727,10 @@ end on their own after `hold`, or after `count` flaps for
   second link from s1 toward FRR.
 - isisd does what the RFC asks on every entry it reads, and names each
   finding. It reads no FAPM: FAPMs wait for the M flag (decision 2). It
-  uses the first of two Prefix-SIDs for one algorithm, but names no
-  finding: `Spf::PrefixMetrics`, which makes the FAPM and Prefix-SID
-  findings, is not called by isisd yet. Found, not fixed here.
+  uses the first of two Prefix-SIDs for one algorithm. It names the
+  FAPM and Prefix-SID findings too: `Spf::FlexAlgo` runs
+  `Spf::PrefixMetrics` on each system's LSPs, beside its FADs, and
+  `show.flex_algo` lists them with the FAD findings.
 - FRR uses a FAD that RFC 9350 asks be ignored: one with a sub-TLV
   twice (the second wins), one with the S bit. Of FADs split across
   sub-TLVs it uses the last, not the first. It discards the whole LSP

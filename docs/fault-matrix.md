@@ -94,9 +94,9 @@ elects it; or the label routes it added.
 | `prefix_sid_algorithm_twice` | two Prefix-SIDs for algorithm 0 on the loopback, indexes 3 and 4 | use_first (RFC 8402 3.1) | adds 23984 | adds 25984 |
 
 isisd reads no FAPM: FAPMs wait for the M flag (`docs/design/flex-algo.md`,
-decision 2). It uses the first of two Prefix-SIDs for one algorithm,
-and names no finding for it: `Spf::PrefixMetrics`, which makes the
-FAPM and Prefix-SID findings, is not called by isisd yet.
+decision 2). It uses the first of two Prefix-SIDs for one algorithm.
+It names each finding on these three, from `Spf::PrefixMetrics`, in
+`show.flex_algo`.
 
 ## Flex-algo topologies
 
