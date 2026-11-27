@@ -4,7 +4,7 @@ What isisd and FRR's isisd do with each entry of the fault catalog
 (`ISIS::Fault`, `docs/protocol-testing.md`), beside what the RFC
 expects. As bfd4r's and vtep4r's `docs/fault-matrix.md`.
 
-**Generated** by `rake fault_matrix` on 2026-11-26, Linux 7.0.0-1020-azure,
+**Generated** by `rake fault_matrix` on 2026-11-27, Linux 7.0.0-1020-azure,
 isis4r 0.1.0, Ruby 3.3.14, FRR 10.5.1. Do not edit it by hand; run again, as root:
 
 ```sh
@@ -64,6 +64,40 @@ isisd's node repair on `ti_lfa_too_deep` falls back to the link's,
 as its node protection does (`docs/ti-lfa.md`). FRR shows no backup
 where there is no repair, or another primary next hop.
 
+## Flex-algo data
+
+`test/interop/frr_flex_fault_test.rb`. The same s1 as for SR data,
+with isisd and FRR each taking part in algorithm 128 and advertising
+no FAD, so a FAD in s1's LSP is the only one. A link entry is a second
+link from s1 toward FRR, 10.0.0.1 to 10.0.0.2. A cell says what the
+receiver reads of it: isisd the attributes it uses, FRR what it
+prints, which does not say which it uses; s1's FAD as the receiver
+elects it; or the label routes it added.
+
+| Entry | What | RFC expects | isisd | FRR isisd |
+| --- | --- | --- | --- | --- |
+| `asla_mask_too_long` | an ASLA sub-TLV with X and a SABM of 9 octets | ignore_subtlv (RFC 9479 4.2) | link with no attributes; finding asla_mask_too_long | prints nothing for the link |
+| `asla_l_flag_values` | an ASLA sub-TLV with X and L set that carries a TE metric | ignore_values (RFC 9479 4.2) | link from the legacy sub-TLVs (L set); finding asla_l_flag_values | prints an ASLA with L, TE metric 100 |
+| `asla_l_flag_mixed` | two ASLA sub-TLVs with X on one link, L set in one | legacy (RFC 9479 4.2) | link from the legacy sub-TLVs (L set); finding asla_l_flag_mixed | prints an ASLA with L; an ASLA, TE metric 100 |
+| `asla_conflict` | two ASLA sub-TLVs with X on one link, TE metrics 100 and 200 | use_first (RFC 9479 4.2) | link te metric 100; finding asla_conflict | prints an ASLA, TE metric 100; an ASLA, TE metric 200 |
+| `asla_srlg_no_link_id` | a TLV 238 with X and SRLG 10, and no link identifier | ignore_tlv (RFC 9479 4.3) | link te metric 100; finding asla_srlg_no_link_id | prints an ASLA, TE metric 100 |
+| `admin_group_mismatch` | an ASLA sub-TLV with X, Admin Group 1 and Extended Admin Group 2 | use_ag (RFC 7308 2.3.1) | link affinity 1; finding admin_group_mismatch | prints an ASLA, Admin Group 1, Ext Admin Group 2 |
+| `fad_algorithm_range` | a FAD for algorithm 127 | ignore_fad (RFC 9350 5.3) | no FAD, not taking part; finding fad_algorithm_range | no FAD, not taking part |
+| `fad_subtlv_twice` | a FAD with two Exclude Admin Group sub-TLVs | ignore_fad (RFC 9350 6.1) | no FAD, not taking part; finding fad_subtlv_twice | **s1's FAD, priority 0, exclude 2, taking part** |
+| `fad_split_differs` | two FADs for algorithm 128, priorities 100 and 200 | use_first (RFC 9350 6) | s1's FAD, priority 100, taking part; finding fad_split_differs | **s1's FAD, priority 200, taking part** |
+| `fad_split_subtlv_twice` | two FADs for algorithm 128, each with an Exclude Admin Group | use_first (RFC 9350 6.1) | s1's FAD, priority 0, exclude 1, taking part; finding fad_split_subtlv_twice | **s1's FAD, priority 0, exclude 2, taking part** |
+| `fad_s_bit` | a FAD for algorithm 128 in a Router Capability TLV with S set | ignore_fad (RFC 9350 5.1) | no FAD, not taking part; finding fad_s_bit | **s1's FAD, priority 0, taking part** |
+| `fad_eag_length` | a FAD whose Exclude Admin Group is 5 octets | ignore_fad (RFC 9350 6.1) | no FAD, not taking part; finding fad_eag_length | **discards s1's LSP, keeps the one before** |
+| `fad_unsupported` | a FAD for algorithm 128 with calculation type 1 | stop_participating (RFC 9350 5.3) | s1's FAD, priority 0, not taking part; finding fad_unsupported | s1's FAD, priority 0, not taking part |
+| `fapm_algorithm_range` | a FAPM for algorithm 100 on the loopback | ignore_fapm (RFC 9350 8) | no FAPM read | prints no FAPM |
+| `fapm_twice` | two FAPMs for algorithm 128 on the loopback, metrics 10 and 20 | use_first (RFC 9350 8) | no FAPM read | prints no FAPM |
+| `prefix_sid_algorithm_twice` | two Prefix-SIDs for algorithm 0 on the loopback, indexes 3 and 4 | use_first (RFC 8402 3.1) | adds 23984 | adds 25984 |
+
+isisd reads no FAPM: FAPMs wait for the M flag (`docs/design/flex-algo.md`,
+decision 2). It uses the first of two Prefix-SIDs for one algorithm,
+and names no finding for it: `Spf::PrefixMetrics`, which makes the
+FAPM and Prefix-SID findings, is not called by isisd yet.
+
 ## Flex-algo topologies
 
 `test/interop/frr_flex_algo_topology_test.rb`, on real routers in
@@ -113,4 +147,4 @@ known gap of isisd: a label route has no backup in the kernel
 The catalog's behaviours act over time and are not in the matrix.
 `test/unit/sim/behaviour_test.rb` runs each against a PLR.
 
-Differs from the RFC: `packet_prefix_sid` (isisd), `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `ti_lfa_too_deep` (FRR isisd), `ti_lfa_figure_1` (FRR isisd), `fa_priority` (FRR isisd), `fa_delay` (FRR isisd), `fa_link_no_metric` (FRR isisd), `fa_exclude_srlg` (FRR isisd), `fa_last_resort` (FRR isisd), `fa_system_id_tie` (FRR isisd), `fa_te_metric` (FRR isisd).
+Differs from the RFC: `fad_subtlv_twice` (FRR isisd), `fad_split_differs` (FRR isisd), `fad_split_subtlv_twice` (FRR isisd), `fad_s_bit` (FRR isisd), `fad_eag_length` (FRR isisd), `packet_prefix_sid` (isisd), `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_too_deep` (FRR isisd), `ti_lfa_figure_1` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `fa_system_id_tie` (FRR isisd), `fa_priority` (FRR isisd), `fa_last_resort` (FRR isisd), `fa_te_metric` (FRR isisd), `fa_exclude_srlg` (FRR isisd), `fa_delay` (FRR isisd), `fa_link_no_metric` (FRR isisd).

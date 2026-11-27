@@ -51,9 +51,9 @@ module ISIS
        ->(c) { Fault.sr(c, more: [[c[:second], { flags: [], algorithm: 0, index: c[:index] }]]) }]
     ].freeze
 
-    # The flex-algo entries, built as the SR entries are, in their own
-    # group until the fault matrix against FRR covers them (docs/design/
-    # flex-algo.md, work step 7). First the link attributes (RFC 9479, RFC
+    # The flex-algo entries, built as the SR entries are, in a group of
+    # their own, which the fault matrix gives isisd and FRR as it gives
+    # the SR entries (test/interop/frr_flex_fault_test.rb). First the link attributes (RFC 9479, RFC
     # 7308): one link to the context's first neighbour, its addresses
     # 10.0.0.1 and 10.0.0.2, with one wrong thing in its attributes for
     # flex-algo; Spf::LinkAttributes makes the finding. Then the FADs (RFC

@@ -13,14 +13,14 @@ require "fileutils"
 # docs/fault-matrix.md from the lines (FaultMatrix.render). Nothing is
 # measured twice: the matrix is what the interop tests found.
 #
-# Four groups, as the catalog's: SR data (frr_sr_fault_test.rb), the
+# Five groups, as the catalog's: SR data (frr_sr_fault_test.rb), the
 # topologies (frr_ti_lfa_test.rb), the packets at the PLR
-# (kernel_ti_lfa_test.rb) and flex-algo's topologies
-# (frr_flex_algo_topology_test.rb). The behaviours act over time and
+# (kernel_ti_lfa_test.rb), flex-algo's data (frr_flex_fault_test.rb)
+# and flex-algo's topologies (frr_flex_algo_topology_test.rb). The behaviours act over time and
 # are not in it.
 module FaultMatrix
   RECEIVERS = { isisd: "isisd", frr: "FRR isisd" }.freeze
-  GROUPS = %i[sr topology packet flex_topology].freeze
+  GROUPS = %i[sr topology packet flex flex_topology].freeze
 
   module_function
 
@@ -133,6 +133,79 @@ module FaultMatrix
     cell(packet_text(got), agrees)
   end
 
+  # --- Flex-algo's data -------------------------------------------------
+
+  # What RFC 9350, RFC 9479 and RFC 7308 expect a receiver to read of each
+  # flex-algo entry, by its rfc action: s1's link's attributes for
+  # flex-algo, as Spf::LinkAttributes gives them; s1's FAD for 128, or
+  # none; or the label routes the entry added. :record where isisd does
+  # not read the entry yet: a FAPM waits for the M flag (docs/design/
+  # flex-algo.md, decision 2).
+  FLEX_OUTCOME = {
+    asla_mask_too_long: { link: {} }, asla_l_flag_values: { link: { asla_legacy: true } },
+    asla_l_flag_mixed: { link: { asla_legacy: true } }, asla_conflict: { link: { te_metric: 100 } },
+    asla_srlg_no_link_id: { link: { te_metric: 100 } }, admin_group_mismatch: { link: { affinity: [1] } },
+    fad_algorithm_range: { fad: nil }, fad_subtlv_twice: { fad: nil },
+    fad_split_differs: { fad: { priority: 100, exclude: [], taking_part: true } },
+    fad_split_subtlv_twice: { fad: { priority: 0, exclude: [1], taking_part: true } },
+    fad_s_bit: { fad: nil }, fad_eag_length: { fad: nil },
+    fad_unsupported: { fad: { priority: 0, exclude: [], taking_part: false } },
+    fapm_algorithm_range: :record, fapm_twice: :record,
+    prefix_sid_algorithm_twice: { labels: :first }
+  }.freeze
+
+  # A receiver's reading, in words.
+  def flex_data_text(name, got)
+    return "discards s1's LSP, keeps the one before" if got[:taken] == false
+
+    parts = []
+    case name.to_s
+    when /\Aasla|admin_group/
+      parts << (got[:link] ? "link #{link_text(got[:link])}" : "prints #{got[:printed] || 'nothing for the link'}")
+    when /\Afad/
+      parts << fad_text(got[:fad])
+    when /\Afapm/
+      parts << if got[:printed] then "prints #{got[:printed]}"
+               elsif got.key?(:printed) then "prints no FAPM"
+               else "no FAPM read"
+               end
+    else
+      parts << (got[:added].empty? ? "no label added" : "adds #{got[:added].join(', ')}")
+    end
+    parts << "finding #{got[:finding]}" if got[:finding]
+    parts.join("; ")
+  end
+
+  def link_text(link)
+    return "with no attributes" if link.empty?
+
+    link.map { |k, v| k == :asla_legacy ? "from the legacy sub-TLVs (L set)" : "#{k.to_s.tr('_', ' ')} #{Array(v).join(', ')}" }
+        .join(", ")
+  end
+
+  def fad_text(fad)
+    return "no FAD, not taking part" unless fad
+
+    text = "s1's FAD, priority #{fad[:priority]}"
+    text += ", exclude #{fad[:exclude].join(', ')}" unless fad[:exclude].empty?
+    text + (fad[:taking_part] ? ", taking part" : ", not taking part")
+  end
+
+  # +got+: { taken:, link:, fad:, added:, finding:, printed: } as the
+  # receiver showed it; +first+ the label the entry's first Prefix-SID
+  # takes. Only what the receiver shows it uses is judged: FRR prints a
+  # link's attributes without saying which it uses.
+  def flex_data_cell(name, got, first: nil)
+    want = FLEX_OUTCOME.fetch(name)
+    agrees = if got[:taken] == false then false
+             elsif want == :record then nil
+             elsif want.key?(:link) then got.key?(:link) ? got[:link] == want[:link] : nil
+             elsif want.key?(:fad) then got[:fad] == want[:fad]
+             else got[:added] == [first]
+             end
+    cell(flex_data_text(name, got), agrees)
+  end
+
   # --- Flex-algo's topologies ------------------------------------------
 
   # What RFC 9350 expects of S in a flex-algo topology entry, as
@@ -155,7 +228,7 @@ module FaultMatrix
     out
   end
 
-  def flex_text(r)
+  def flex_topology_text(r)
     return "none" if r.nil?
     return r[:frr_text] if r[:frr_text]
     if r[:taking_part] == false
@@ -170,7 +243,12 @@ module FaultMatrix
 
   def flex_cell(got, expected)
     seen = got && got[:repair] ? got.merge(repair: got[:repair].slice(:first_hop, :segments)) : got
-    cell(flex_text(got), seen == expected)
+    cell(flex_topology_text(got), seen == expected)
+  end
+
+  def flex_expect_text(entry)
+    rfc = entry[:rfc][/RFC (\d+) section ([\d.]+)/] && "RFC #{$1} #{$2}"
+    "#{entry[:expect]} (#{rfc})"
   end
 
   # --- The document ----------------------------------------------------
@@ -182,7 +260,8 @@ module FaultMatrix
       entry[:channel] == :gaps ? "a gap of isis4r (#{rfc})" : "#{entry[:expect]} (#{rfc})"
     when :topology then repair_text(rfc_repair(entry))
     when :packet then entry[:expect] == :repair ? "the repair, then D's label in Q's SRGB" : "record"
-    when :flex_topology then flex_text(flex_expected(entry))
+    when :flex then flex_expect_text(entry)
+    when :flex_topology then flex_topology_text(flex_expected(entry))
     end
   end
 
@@ -254,6 +333,24 @@ module FaultMatrix
       isisd's node repair on `ti_lfa_too_deep` falls back to the link's,
       as its node protection does (`docs/ti-lfa.md`). FRR shows no backup
       where there is no repair, or another primary next hop.
+
+      ## Flex-algo data
+
+      `test/interop/frr_flex_fault_test.rb`. The same s1 as for SR data,
+      with isisd and FRR each taking part in algorithm #{ISIS::Fault::FLEX_ALGO} and advertising
+      no FAD, so a FAD in s1's LSP is the only one. A link entry is a second
+      link from s1 toward FRR, 10.0.0.1 to 10.0.0.2. A cell says what the
+      receiver reads of it: isisd the attributes it uses, FRR what it
+      prints, which does not say which it uses; s1's FAD as the receiver
+      elects it; or the label routes it added.
+
+      #{head}
+      #{rows.call(:flex, ISIS::Fault.flex_algo_catalog, ->(e) { e[:description] }).join("\n")}
+
+      isisd reads no FAPM: FAPMs wait for the M flag (`docs/design/flex-algo.md`,
+      decision 2). It uses the first of two Prefix-SIDs for one algorithm,
+      and names no finding for it: `Spf::PrefixMetrics`, which makes the
+      FAPM and Prefix-SID findings, is not called by isisd yet.
 
       ## Flex-algo topologies
 
