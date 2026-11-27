@@ -166,6 +166,9 @@ class SrFaultLab
   def start_frr
     FileUtils.mkdir_p([@run, @etc])
     conf = File.join(@etc, "frr.conf")
+    # lsp-gen-interval comes first: is-type schedules an LSP, at the
+    # interval then set. After it, FRR 10.5.1 kept its 30 s default, and its
+    # own LSP stayed empty for 30 s (2026-11-27).
     File.write(conf, <<~CONF)
       hostname frr
       log file #{File.join(@dir, 'frr.log')} informational
@@ -178,10 +181,10 @@ class SrFaultLab
        ip router isis LAB
        isis passive
       router isis LAB
+       lsp-gen-interval 1
        net 49.0001.0000.0000.0002.00
        is-type level-1
        metric-style wide
-       lsp-gen-interval 1
        segment-routing on
        segment-routing global-block #{FRR_SRGB} #{FRR_SRGB + SIZE - 1}
        segment-routing prefix 10.255.0.2/32 index 2
