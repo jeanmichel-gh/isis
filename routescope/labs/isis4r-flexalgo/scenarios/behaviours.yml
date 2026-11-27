@@ -1,0 +1,38 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: Flex-algo behaviours from t1
+description: >
+  Two of the catalog's flex-algo behaviours, run by isis4r-sim on t1, the
+  simulated system behind s1, one at a time, with their defaults:
+  fad_takeover, t1's FAD for 128 at priority 255 on the IGP metric for
+  30 s; participation_flap, t1 out of 128 for 10 s, three times.
+timeout: 420
+
+steps:
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 120
+
+  - sim: behave
+    behaviour: fad_takeover
+    router: t1
+  - expect: { mpls_label: { node: r1, label: 21104, op: swap, out_label: 22104, next_hop: r2 } }
+    within: 20
+    name: t1's FAD wins, 128 on the IGP metric, over the top
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 60
+    name: after 30 s, r4's FAD again, over the bottom
+
+  - sim: behave
+    behaviour: participation_flap
+    router: t1
+  - expect: { mpls_label: { node: r1, label: 21110, present: false } }
+    within: 20
+    name: t1 leaves 128, and its 128 label goes
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    name: r4's stays
+  - expect: { mpls_label: { node: r1, label: 21110, next_hop: r3 } }
+    within: 30
+    name: t1 back in 128
+  - sleep: 45
+  - expect: { mpls_label: { node: r1, label: 21110, op: swap, out_label: 23110, next_hop: r3 } }
+    within: 30
+    name: after the last flap, t1 in 128

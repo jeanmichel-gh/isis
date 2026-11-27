@@ -1,0 +1,88 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: FAD and Prefix-SID faults from s1
+description: >
+  Entries of the fault catalog's flex-algo group (isis
+  docs/protocol-testing.md) in s1's own LSP, through isis4r-sim's HTTP
+  API. r4's FAD for 128 is at priority 0, so s1's, when it is used, wins
+  on System ID. A FAD RFC 9350 asks be ignored leaves 128 on the delay,
+  over the bottom; one used makes 128 the IGP metric, over the top; one
+  isis4r cannot run stops every isis4r router taking part in 128. Each
+  is cleared after. Then two Prefix-SIDs for one prefix and algorithm:
+  the first is used.
+timeout: 600
+
+steps:
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 120
+
+  - sim: fault
+    case: fad_split_differs
+    router: s1
+  - expect: { mpls_label: { node: r1, label: 21104, op: swap, out_label: 22104, next_hop: r2 } }
+    within: 30
+    name: fad_split_differs, the first FAD (priority 100) is used and wins, 128 on the IGP metric
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 30
+
+  - sim: fault
+    case: fad_unsupported
+    router: s1
+  - expect: { mpls_label: { node: r1, label: 21104, present: false } }
+    within: 30
+    name: fad_unsupported, calculation type 1 wins, and r1 stops taking part in 128
+  - expect: { mpls_label: { node: r4, label: 24110, present: false } }
+    within: 30
+  - expect: { mpls_label: { node: r1, label: 21204, next_hop: f1 } }
+    name: 129 goes on
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 30
+
+  - sim: fault
+    case: fad_s_bit
+    router: s1
+  - sleep: 8
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    name: fad_s_bit, s1's FAD is ignored, 128 stays on the delay
+  - sim: fault.clear
+    router: s1
+
+  - sim: fault
+    case: fad_subtlv_twice
+    router: s1
+  - sleep: 8
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    name: fad_subtlv_twice, s1's FAD is ignored
+  - sim: fault.clear
+    router: s1
+
+  - sim: fault
+    case: fad_eag_length
+    router: s1
+  - sleep: 8
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    name: fad_eag_length, s1's FAD is ignored
+  - sim: fault.clear
+    router: s1
+
+  - sim: fault
+    case: prefix_sid_algorithm_twice
+    router: s1
+    prefix: 10.255.250.1/32
+    index: 500
+  - expect: { mpls_label: { node: r4, label: 24500, op: php, next_hop: s1 } }
+    within: 30
+    name: the first Prefix-SID, index 500, at r4
+  - expect: { mpls_label: { node: r4, label: 24501, present: false } }
+    name: not the second, 501
+  - expect: { mpls_label: { node: f1, label: 16500, op: swap, out_label: 24500 } }
+    within: 30
+    name: and at f1, FRR
+  - expect: { mpls_label: { node: f1, label: 16501, present: false } }
+  - sim: fault.clear
+    router: s1
+  - expect: { mpls_label: { node: r4, label: 24500, present: false } }
+    within: 30

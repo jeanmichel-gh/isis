@@ -819,6 +819,28 @@ FAD state reads the text.
 Its `ABOUT.md` says f1 is the interop check (CLAUDE.md, "Our own Ruby
 code first"), as `isis4r-tilfa`'s does.
 
+As built in step 8 (measured on ospflab, 2026-11-27):
+
+- The lab is as designed above, with s1 simulating one system, t1,
+  behind r4. Its `ABOUT.md` gives the measured labels and times.
+- r4 advertises both FADs: 128's, the delay, at priority 0, so a FAD
+  from s1 at priority 0 wins on System ID; and 129's with no constraint,
+  at priority 100, below f1's, which excludes red at 200. So the
+  election scenario can lower f1's through vtysh and see 129 go over
+  the top.
+- Its five scenarios read label tables only (`mpls_label`): routescope
+  has no condition yet for the FAD a router elects, no `policy.flex_algo`
+  step, and its `sim:` step drops the behaviours' `algorithm`,
+  `priority`, `metric_type`, `hold` and `delay`, so they run with their
+  defaults. No packet is sent on an algorithm's label: no scenario step
+  sends a chosen label stack. These wait for routescope's specification.
+- The catalog's link entries are not run here: s1's extra link goes
+  toward a system that does not report it back, so the two-way check
+  drops it. The fault matrix covers them (step 7c).
+- f1's ASLA and isisd's are read both ways in the namespace tests
+  (step 7b). Here only their effect shows: 128 on the delay over the
+  bottom, 129 around red.
+
 A teaching lab in routescope, with pauses, as `ti-lfa` is, belongs to
 the routescope specification.
 
