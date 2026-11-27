@@ -89,6 +89,11 @@ class FrrLab
   # adds lines under FRR's interface and +frr_router+ under its router isis.
   # +frr_loopback+, a prefix such as "198.51.100.2/32", goes on FRR's lo
   # and into IS-IS as a passive circuit.
+  # +frr_zebra+ is zebra's own lines, such as an interface's
+  # link-params, which zebra holds and isisd reads from it; they go in
+  # through vtysh, under configure, once FRR is up.
+  # +frr_global+ adds lines before the interfaces, such as an
+  # affinity-map, which FRR reads before an interface names its colors.
   # +frr_is_type+ overrides the first FRR's is-type, which is otherwise
   # the lab's level.
   # +frr_lsp_gen_interval+ is FRR's lsp-gen-interval on both FRRs, the
@@ -122,8 +127,10 @@ class FrrLab
   def start(hello_interval: 1, hello_multiplier: 3, isis4r: {}, frr_interface: [], frr_router: [],
             network: :point_to_point, level: 1, frr_loopback: nil, frr_is_type: nil, frr2: nil,
             ipv6: false, frr_loopback6: nil, host: false, frr_connected: nil, daemon: false, sim: nil,
-            frr_lsp_gen_interval: 1)
+            frr_lsp_gen_interval: 1, frr_global: [], frr_zebra: [])
     cleanup
+    @frr_global = frr_global
+    @frr_zebra = frr_zebra
     @isis4r_hostname = isis4r[:hostname]
     @frr_lsp_gen_interval = frr_lsp_gen_interval
     @daemon = daemon
@@ -513,13 +520,15 @@ class FrrLab
 
   # With +daemon+, isis4r runs as exe/isisd, from a YAML file made from
   # the runner's configuration, and answers on its API socket; there is
-  # no state file.
+  # no state file. The configuration's +link+ adds keys to the
+  # interface, such as affinity or delay.
   def start_isisd(config)
     lan = config[:network] == "broadcast"
     iface = { "name" => config[:interface], "network" => lan ? "broadcast" : "point-to-point",
               "ip_addresses" => config[:ip_addresses], "hello_interval" => config[:hello_interval],
               "hello_multiplier" => config[:hello_multiplier] }
-    yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier)
+    iface.merge!(config[:link].transform_keys(&:to_s)) if config[:link]
+    yaml = config.except(:interface, :network, :extra_interfaces, :hello_interval, :hello_multiplier, :link)
                  .merge(interfaces: [iface])
     # The lab's 1 s fixed hold, unless the test times generation itself:
     # lsp_generation and minimum_lsp_interval are not given together.
@@ -570,6 +579,7 @@ class FrrLab
       hostname #{@name}
       log file #{File.join(@dir, 'isisd.log')} debugging
       debug isis adj-packets
+      #{Array(@frr_global).join("\n")}
       interface veth0
        ip router isis LAB
       #{@ipv6 ? ' ipv6 router isis LAB' : ''}
@@ -594,7 +604,14 @@ class FrrLab
     File.write(zebra_conf, "hostname #{@name}\n")
     FileUtils.touch(File.join(@dir, "isisd.log"))
     sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
-    { "zebra" => zebra_conf, "isisd" => conf }.each { |d, file| start_daemon(d, file) }
+    # FRR 10.5.1 takes zebra's interface lines, link-params among them,
+    # through mgmtd: zebra drops them from its own file, and mgmtd, which
+    # has no -f, did not read it either. So mgmtd runs, and the lines go
+    # in through vtysh once the daemons are up.
+    daemons = { "zebra" => zebra_conf, "isisd" => conf }
+    daemons = { "mgmtd" => nil }.merge(daemons) unless @frr_zebra.empty?
+    daemons.each { |d, file| start_daemon(d, file) }
+    vtysh_config(*@frr_zebra) unless @frr_zebra.empty?
   end
 
   # The second FRR's namespace and its link to the first's veth1.
@@ -663,7 +680,7 @@ class FrrLab
   # forks, so keep that output and put it in the error.
   def start_daemon(daemon, file, ns: @frr_ns, name: @name, run: @run)
     out = File.join(@dir, "#{name}-#{daemon}.start.log")
-    cmd = "ip netns exec #{ns} #{FRR}/#{daemon} -N #{name} -d -f #{file} -i #{run}/#{daemon}.pid"
+    cmd = "ip netns exec #{ns} #{FRR}/#{daemon} -N #{name} -d #{"-f #{file} " if file}-i #{run}/#{daemon}.pid"
     return if system("#{cmd} > #{out} 2>&1")
 
     raise "failed (#{$?.exitstatus}): #{cmd}\n#{File.read(out)}"
@@ -698,7 +715,7 @@ class FrrLab
   end
 
   def cleanup
-    [@run, @run2].product(%w[isisd zebra]).each do |run, d|
+    [@run, @run2].product(%w[isisd zebra mgmtd]).each do |run, d|
       pid_file = "#{run}/#{d}.pid"
       next unless File.exist?(pid_file)
 

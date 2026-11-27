@@ -435,8 +435,16 @@ class TopologyLab
   end
 
   def start_isisd(name)
+    file = File.join(@dir, "#{name}.yml")
+    File.write(file, isisd_config(name).to_yaml)
+    @pids[name] = Process.spawn("ip", "netns", "exec", ns(name), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
+                                "-s", socket(name), "-l", "-", %i[out err] => File.join(@dir, "#{name}.log"))
+  end
+
+  # The isisd file of +name+, as a Hash.
+  def isisd_config(name)
     failure_kind, neighbor = @entry[:failure]
-    config = {
+    {
       "system_id" => system_id(name), "hostname" => name, "areas" => ["49.0001"], "level" => 1,
       "metric_style" => "wide", "minimum_lsp_interval" => 1, "forwarding" => @forwarding && name == plr,
       "overload" => @entry[:overloaded].include?(name),
@@ -448,30 +456,41 @@ class TopologyLab
         name == plr && peer == neighbor ? i.merge("ti_lfa" => failure_kind.to_s) : i
       end
     }
-    file = File.join(@dir, "#{name}.yml")
-    File.write(file, config.to_yaml)
-    @pids[name] = Process.spawn("ip", "netns", "exec", ns(name), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
-                                "-s", socket(name), "-l", "-", %i[out err] => File.join(@dir, "#{name}.log"))
   end
 
   # FRR 10.5.1 as the PLR: isisd and zebra, TI-LFA on the failure's
   # interface, node-protection for a node failure.
   def start_frr(name)
-    failure_kind, neighbor = @entry[:failure]
     FileUtils.mkdir_p([@run, @etc])
-    stanzas = interfaces(name).map do |iface, _, metric, peer|
-      lines = ["interface #{iface}", " ip router isis LAB", " isis network point-to-point", " isis metric #{metric}",
-               " isis hello-interval 1", " isis hello-multiplier #{HELLO_MULTIPLIER}"]
-      if peer == neighbor
-        lines << (failure_kind == :node ? " isis fast-reroute ti-lfa node-protection" : " isis fast-reroute ti-lfa")
-      end
-      lines.join("\n")
-    end
     conf = File.join(@etc, "frr.conf")
-    File.write(conf, <<~CONF)
+    File.write(conf, frr_conf(name))
+    zebra = File.join(@etc, "zebra.conf")
+    File.write(zebra, "hostname #{name}\n")
+    FileUtils.touch(File.join(@dir, "#{name}-frr.log"))
+    sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
+    # Zebra's lines, link-params among them, go in through mgmtd, as
+    # FrrLab's frr_zebra do.
+    zebra_lines = frr_zebra_lines(name)
+    daemons = { "zebra" => zebra, "isisd" => conf }
+    daemons = { "mgmtd" => nil }.merge(daemons) unless zebra_lines.empty?
+    daemons.each do |d, file|
+      out = File.join(@dir, "#{d}.start.log")
+      cmd = "ip netns exec #{ns(name)} #{FRR}/#{d} -N #{@prefix} -d #{"-f #{file} " if file}-i #{@run}/#{d}.pid"
+      system("#{cmd} > #{out} 2>&1") or raise "failed: #{cmd}\n#{File.read(out)}"
+    end
+    return if zebra_lines.empty?
+
+    Open3.capture3("ip", "netns", "exec", ns(name), "vtysh", "-N", @prefix, "-c", "configure",
+                   *zebra_lines.flat_map { ["-c", _1] })
+  end
+
+  # FRR's file for +name+: its interfaces, then router isis.
+  def frr_conf(name)
+    <<~CONF
       hostname #{name}
       log file #{File.join(@dir, "#{name}-frr.log")} informational
-      #{stanzas.join("\n")}
+      #{frr_global_lines(name).join("\n")}
+      #{interfaces(name).map { |iface, _, metric, peer| frr_interface_lines(name, iface, metric, peer).join("\n") }.join("\n")}
       interface lo
        ip router isis LAB
        isis passive
@@ -483,16 +502,23 @@ class TopologyLab
        segment-routing on
        segment-routing global-block #{srgb(name)} #{srgb(name) + 999}
        segment-routing prefix 10.255.0.#{number(name)}/32 index #{number(name)}
+      #{frr_router_lines(name).map { " #{_1}" }.join("\n")}
     CONF
-    zebra = File.join(@etc, "zebra.conf")
-    File.write(zebra, "hostname #{name}\n")
-    FileUtils.touch(File.join(@dir, "#{name}-frr.log"))
-    sh "chown -R frr:frr #{@run} #{@etc} #{@dir}"
-    { "zebra" => zebra, "isisd" => conf }.each do |d, file|
-      out = File.join(@dir, "#{d}.start.log")
-      cmd = "ip netns exec #{ns(name)} #{FRR}/#{d} -N #{@prefix} -d -f #{file} -i #{@run}/#{d}.pid"
-      system("#{cmd} > #{out} 2>&1") or raise "failed: #{cmd}\n#{File.read(out)}"
+  end
+
+  def frr_global_lines(_name) = []
+  def frr_zebra_lines(_name) = []
+  def frr_router_lines(_name) = []
+
+  # The stanza of +name+'s interface +iface+, TI-LFA on the failure's.
+  def frr_interface_lines(_name, iface, metric, peer)
+    failure_kind, neighbor = @entry[:failure]
+    lines = ["interface #{iface}", " ip router isis LAB", " isis network point-to-point", " isis metric #{metric}",
+             " isis hello-interval 1", " isis hello-multiplier #{HELLO_MULTIPLIER}"]
+    if peer == neighbor
+      lines << (failure_kind == :node ? " isis fast-reroute ti-lfa node-protection" : " isis fast-reroute ti-lfa")
     end
+    lines
   end
 
   def cleanup
@@ -504,7 +530,7 @@ class TopologyLab
       nil
     end
     @pids.clear
-    %w[isisd zebra].each do |d|
+    %w[isisd zebra mgmtd].each do |d|
       f = "#{@run}/#{d}.pid"
       next unless File.exist?(f)
 

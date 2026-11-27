@@ -98,6 +98,17 @@ class TestFlexAlgo < Minitest::Test
   end
 
   # The findings on the FADs read, by system.
+  # policy.flex_algo changes one key and keeps the colors the entry has:
+  # found against FRR (step 7b), where a change of priority alone was
+  # refused, "color 1 is not in affinity_map".
+  def test_change_keeps_the_colors
+    c = config({ algorithm: 128, priority: 100, exclude_any: ["red"], include_any: ["red"] })
+    e = c.change(128, { priority: 250 })
+    assert_equal({ algorithm: 128, advertise: true, priority: 250, metric_type: "igp", exclude_any: [1], include_any: [1] },
+                 e.to_hash)
+    assert_equal [], c.change(128, { exclude_any: [] }).exclude_any
+  end
+
   def test_findings
     store(2, [{ algorithm: 127 }])
     assert_equal [["fad_algorithm_range", "0000.0000.0002"]],

@@ -260,8 +260,13 @@ selects the FAD at S (`Spf::FlexAlgo`), computes algorithm 128's tree
 give what it expects, and D's label must swap to the first hop's SRGB,
 or be popped toward D itself. An entry with a repair also runs TI-LFA
 for algorithm 128 at S (`Spf::Backups`) and for algorithm 0, each of
-which must take its own first hop. The injector's behaviours come with
-step 7 (`docs/design/flex-algo.md`).
+which must take its own first hop.
+
+`test/interop/frr_flex_algo_topology_test.rb` runs each entry again on
+real routers, a network namespace per system
+(`test/support/flex_topology_lab.rb`): isisd at every system, and S
+either isisd or FRR's isisd. isisd is held to the entry; FRR to what
+it did on its recorded version. Both go in `docs/fault-matrix.md`.
 
 ### Packets at the PLR
 

@@ -4,7 +4,7 @@ What isisd and FRR's isisd do with each entry of the fault catalog
 (`ISIS::Fault`, `docs/protocol-testing.md`), beside what the RFC
 expects. As bfd4r's and vtep4r's `docs/fault-matrix.md`.
 
-**Generated** by `rake fault_matrix` on 2026-11-23, Linux 7.0.0-1020-azure,
+**Generated** by `rake fault_matrix` on 2026-11-26, Linux 7.0.0-1020-azure,
 isis4r 0.1.0, Ruby 3.3.14, FRR 10.5.1. Do not edit it by hand; run again, as root:
 
 ```sh
@@ -64,6 +64,32 @@ isisd's node repair on `ti_lfa_too_deep` falls back to the link's,
 as its node protection does (`docs/ti-lfa.md`). FRR shows no backup
 where there is no repair, or another primary next hop.
 
+## Flex-algo topologies
+
+`test/interop/frr_flex_algo_topology_test.rb`, on real routers in
+network namespaces, as the topologies above: isisd at every system,
+S isisd or FRR. Every system takes part in algorithm 128 but those
+the entry leaves out. A cell says the FAD S selects, and S's route
+to D in 128: its first hops and metric.
+
+| Entry | What | RFC expects | isisd | FRR isisd |
+| --- | --- | --- | --- | --- |
+| `fa_exclude_any` | A to D is red; the FAD excludes red: by B | winner D; by B, metric 10 | winner D; by B, metric 10 | winner D; by B, metric 10 |
+| `fa_include_any` | A's links are blue, B's green; the FAD includes any of green and yellow: by B | winner D; by B, metric 10 | winner D; by B, metric 10 | winner D; by B, metric 10 |
+| `fa_include_all` | A's links have green only, B's green and blue; the FAD includes all of both: by B | winner D; by B, metric 10 | winner D; by B, metric 10 | winner D; by B, metric 10 |
+| `fa_exclude_srlg` | A to D is in SRLG 10; the FAD excludes it: by B | winner D; by B, metric 10 | winner D; by B, metric 10 | **not taking part: winner D, disabled (unsupported definition)** |
+| `fa_delay` | A's links 20 ms each, B's 2 ms; the FAD's metric is the delay: by B, 4 ms | winner D; by B, metric 4000 | winner D; by B, metric 4000 | **not taking part: winner D, disabled (unsupported definition)** |
+| `fa_te_metric` | A's links TE metric 50 each, B's 3; the FAD's metric is TE: by B, 6 | winner D; by B, metric 6 | winner D; by B, metric 6 | **not taking part: winner D, disabled (unsupported definition)** |
+| `fa_link_no_metric` | A to D has no delay; the FAD's metric is the delay: A to D is pruned, not 0, so by B | winner D; by B, metric 40000 | winner D; by B, metric 40000 | **not taking part: winner D, disabled (unsupported definition)** |
+| `fa_last_resort` | S to A has a delay of 2^24 - 1, the only path: used, as a last resort | winner D; by A, metric 16777216 | winner D; by A, metric 16777216 | **not taking part: winner D, disabled (unsupported definition)** |
+| `fa_node_not_participating` | A does not take part: it is pruned, so by B | winner D; by B, metric 10 | winner D; by B, metric 10 | winner D; by B, metric 10 |
+| `fa_one_way` | D's link back to A is red, A's to D is not; the FAD excludes red: the two-way check is algorithm 0's, so by A | winner D; by A, metric 2 | winner D; by A, metric 2 | winner D; by A, metric 2 |
+| `fa_partition` | the only path is red; the FAD excludes red: D unreachable, no label route | winner D; D unreachable | winner D; D unreachable | winner D; D unreachable |
+| `fa_priority` | D's FAD, IGP, priority 100; B's, delay, priority 200: B's wins, so by B on delay | winner B; by B, metric 4000 | winner B; by B, metric 4000 | **not taking part: winner B, disabled (unsupported definition)** |
+| `fa_system_id_tie` | A's FAD, IGP, and B's, delay, both priority 100: B has the greater System ID and wins, so by B on delay | winner B; by B, metric 4000 | winner B; by B, metric 4000 | **not taking part: winner B, disabled (unsupported definition)** |
+| `fa_no_fad` | no system advertises a FAD: S does not take part | not taking part | not taking part | not taking part |
+| `fa_ti_lfa_constraint` | S protects its link to F with TI-LFA; A to D is red, the FAD excludes red: the repair goes by B, where algorithm 0's goes by A | winner D; by F, metric 2; repair via B: Node-SID(D) | winner D; by F, metric 2; repair via B: Node-SID(D) | winner D; by F, metric 2; repair via B: Node-SID(D) |
+
 ## Packets at the PLR
 
 `test/interop/kernel_ti_lfa_test.rb`, on `ti_lfa_pq_node`. The PLR's
@@ -87,4 +113,4 @@ known gap of isisd: a label route has no backup in the kernel
 The catalog's behaviours act over time and are not in the matrix.
 `test/unit/sim/behaviour_test.rb` runs each against a PLR.
 
-Differs from the RFC: `packet_prefix_sid` (isisd), `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_figure_1` (FRR isisd), `ti_lfa_too_deep` (FRR isisd).
+Differs from the RFC: `packet_prefix_sid` (isisd), `packet_ip` (FRR isisd), `packet_prefix_sid` (FRR isisd), `prefix_sid_vl_invalid` (FRR isisd), `algorithm_not_advertised` (FRR isisd), `ti_lfa_pq_node` (FRR isisd), `ti_lfa_figure_2` (FRR isisd), `ti_lfa_too_deep` (FRR isisd), `ti_lfa_figure_1` (FRR isisd), `fa_priority` (FRR isisd), `fa_delay` (FRR isisd), `fa_link_no_metric` (FRR isisd), `fa_exclude_srlg` (FRR isisd), `fa_last_resort` (FRR isisd), `fa_system_id_tie` (FRR isisd), `fa_te_metric` (FRR isisd).

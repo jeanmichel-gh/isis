@@ -35,7 +35,7 @@ TI_LFA_INTEROP = "test/interop/frr_ti_lfa_test.rb"
 # They are left out of `rake interop`: CI's interop (TI-LFA) job runs
 # them, as `rake fault_matrix`, and keeps the document it writes.
 FAULT_MATRIX = %w[test/interop/frr_sr_fault_test.rb test/interop/frr_ti_lfa_test.rb
-                  test/interop/kernel_ti_lfa_test.rb].freeze
+                  test/interop/kernel_ti_lfa_test.rb test/interop/frr_flex_algo_topology_test.rb].freeze
 
 desc "Run the FRR interop tests, one process per file, but the fault matrix's"
 task :interop do

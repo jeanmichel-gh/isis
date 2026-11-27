@@ -176,13 +176,15 @@ jobs:
   # measured for the matrix and not held to 10.5.1's. The document it
   # writes, docs/fault-matrix.md, is kept as an artifact; on a loaded
   # machine ti_lfa_too_deep's 33 routers lose their adjacencies, so the
-  # one in the repository comes from here.
+  # one in the repository comes from here. Flex-algo's topologies
+  # (frr_flex_algo_topology_test.rb) added 706 s, and the job took 24 min
+  # of its 25 (2026-11-26, #145), so it has 40.
   interop-ti-lfa:
     name: interop (TI-LFA)
     needs: changes
     if: needs.changes.outputs.reuse != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
         with:
