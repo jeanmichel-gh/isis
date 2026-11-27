@@ -1,0 +1,45 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: Three algorithms, three paths
+description: >
+  Each algorithm's path from r1 to r4, read from the label tables. r1's
+  label for r4's Prefix-SID in each algorithm swaps to its next hop's
+  SRGB: algorithm 0 over the top, through r2; 128, the delay, over the
+  bottom, through r3; 129, excluding red, through f1, FRR, on f1's own
+  label. f1 does not take part in 128, so it has no 128 label, and r2,
+  whose links are all red, has no 129 route to r4. No pauses: a check of
+  isis4r, not a lesson.
+timeout: 240
+
+steps:
+  - expect: { isis_adjacencies: { node: r1, level: 1, up: 3 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: r4, level: 1, up: 4 } }
+    within: 90
+  - expect: { isis_adjacencies: { node: f1, level: 1, up: 2 } }
+    within: 90
+
+  - expect: { mpls_label: { node: r1, label: 21004, op: swap, out_label: 22004, next_hop: r2, state: installed } }
+    within: 60
+    name: algorithm 0, r1 to r4 over the top, IGP 20
+  - expect: { mpls_label: { node: r1, label: 21104, op: swap, out_label: 23104, next_hop: r3, state: installed } }
+    within: 60
+    name: algorithm 128, the delay, over the bottom, 4 ms
+  - expect: { mpls_label: { node: r1, label: 21204, op: swap, out_label: 16204, next_hop: f1, state: installed } }
+    within: 60
+    name: algorithm 129, excluding red, through f1, IGP 30
+  - expect: { mpls_label: { node: r1, label: 21110, op: swap, out_label: 23110, next_hop: r3 } }
+    name: t1, simulated behind s1, in 128
+  - expect: { mpls_label: { node: r1, label: 21210, op: swap, out_label: 16210, next_hop: f1 } }
+    name: t1 in 129
+
+  - expect: { mpls_label: { node: f1, label: 16204, op: php, next_hop: 10.0.47.1 } }
+    within: 30
+    name: f1 pops r4's 129 label toward r4
+  - expect: { mpls_label: { node: f1, label: 16210, op: swap, out_label: 24210 } }
+    name: f1 swaps t1's 129 label to r4's SRGB
+  - expect: { mpls_label: { node: f1, label: 16104, present: false } }
+    name: f1 runs no delay FAD, so it has no 128 label
+  - expect: { mpls_label: { node: r2, label: 22204, present: false } }
+    name: r2's links are all red, so 129 does not reach r4 from it
+  - expect: { mpls_label: { node: r3, label: 23204, op: php, next_hop: r4 } }
+    name: r3, on 129's way over the bottom, pops it toward r4

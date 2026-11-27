@@ -1,0 +1,115 @@
+# isis's lab for testing flex-algo (RFC 9350): four isis4r routers and
+# one FRR, three paths from r1 to r4, and an isis4r-sim behind r4. isis
+# docs/design/flex-algo.md, step 8; ABOUT.md says what each scenario
+# checks.
+#
+#          r2              top: IGP 10 + 10, delay 20 ms each, red
+#        /    \
+#      r1 - f1 - r4 -- s1 -- t1 (simulated)
+#        \    /           middle: IGP 15 + 15, delay 5 ms each
+#          r3              bottom: IGP 20 + 20, delay 2 ms each
+#
+#   r1  21000   r2  22000   r3  23000   r4  24000   SRGB start; Node-SID
+#   f1  16000 (FRR)         s1  19000   t1  30000   index N on 10.255.0.N,
+#                                                   100 + N for 128, 200 + N for 129
+#
+# Every router is at Level 1. Algorithm 0 takes the top, IGP 20.
+# Algorithm 128, the delay, no constraint, takes the bottom, 4 ms: f1
+# does not take part in 128, so 128 prunes it. Algorithm 129, the IGP
+# metric excluding red, takes the middle, through f1, IGP 30. r4
+# advertises both FADs; f1 advertises 129's at priority 200, and wins it.
+#
+# Links 10.0.AB.0/30 between rA and rB, f1 as 7, s1 as 9: r1-r2
+# 10.0.12.0/30, r1-f1 10.0.17.0/30, r4-f1 10.0.47.0/30, r4-s1 10.0.49.0/30.
+#
+# TI-LFA (link) on each of r1's interfaces.
+#
+# Label routes need the mpls_router and mpls_iptunnel modules on the host
+# (the lab VMs load them at boot). Each isis4r node sets its label table
+# size through /proc, since the isis4r image has no sysctl.
+#
+# Images: isis4r:latest, built in an isis checkout beside datalink-socket
+# and bfd4r, and FRR:
+#   docker build -t isis4r --build-context datalink-socket=../datalink-socket --build-context bfd4r=../bfd4r .
+#   docker pull quay.io/frrouting/frr:10.7.1
+#   sudo containerlab deploy -t isis4r-flexalgo.clab.yml
+name: isis4r-flexalgo
+
+topology:
+  defaults:
+    labels: { routescope.protocols: isis }
+  nodes:
+    r1:
+      kind: linux
+      image: isis4r:latest
+      binds: [r1:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "for i in eth1 eth2 eth3; do until ip link show $i >/dev/null 2>&1; do sleep 0.2; done; done;
+        ip addr add 10.0.12.1/30 dev eth1; ip addr add 10.0.17.1/30 dev eth2; ip addr add 10.0.13.1/30 dev eth3;
+        ip addr add 10.255.0.1/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r2:
+      kind: linux
+      image: isis4r:latest
+      binds: [r2:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "for i in eth1 eth2; do until ip link show $i >/dev/null 2>&1; do sleep 0.2; done; done;
+        ip addr add 10.0.12.2/30 dev eth1; ip addr add 10.0.24.1/30 dev eth2;
+        ip addr add 10.255.0.2/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r3:
+      kind: linux
+      image: isis4r:latest
+      binds: [r3:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "for i in eth1 eth2; do until ip link show $i >/dev/null 2>&1; do sleep 0.2; done; done;
+        ip addr add 10.0.13.2/30 dev eth1; ip addr add 10.0.34.1/30 dev eth2;
+        ip addr add 10.255.0.3/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    r4:
+      kind: linux
+      image: isis4r:latest
+      binds: [r4:/etc/isis4r]
+      entrypoint: sh
+      cmd: >-
+        -c "for i in eth1 eth2 eth3 eth4; do until ip link show $i >/dev/null 2>&1; do sleep 0.2; done; done;
+        ip addr add 10.0.24.2/30 dev eth1; ip addr add 10.0.47.1/30 dev eth2; ip addr add 10.0.34.2/30 dev eth3; ip addr add 10.0.49.1/30 dev eth4;
+        ip addr add 10.255.0.4/32 dev lo; ip route del default dev eth0 2>/dev/null;
+        echo 1 > /proc/sys/net/ipv4/ip_forward; echo 100000 > /proc/sys/net/mpls/platform_labels;
+        exec isisd -c /etc/isis4r/isisd.yml -l -"
+    # s1 simulates t1; the same image as the routers, told apart by its
+    # command and its labels.
+    s1:
+      kind: linux
+      image: isis4r:latest
+      labels:
+        routescope.kind: isis4r-sim
+        routescope.protocols: isis
+      binds: [s1:/lab]
+      entrypoint: sh
+      cmd: >-
+        -c "until ip link show eth1 >/dev/null 2>&1; do sleep 0.2; done;
+        ip addr add 10.0.49.2/30 dev eth1; ip addr add 10.255.0.9/32 dev lo;
+        ip route del default dev eth0 2>/dev/null;
+        exec isis4r-sim -c /lab/sim.yml -l -"
+    f1:
+      kind: linux
+      image: quay.io/frrouting/frr:10.7.1
+      binds: [f1:/etc/frr]
+      exec:
+        - sh -c "ip route del default dev eth0 2>/dev/null || true"
+        - sysctl -qw net.mpls.platform_labels=100000 net.mpls.conf.eth1.input=1 net.mpls.conf.eth2.input=1
+  links:
+    - endpoints: ["r1:eth1", "r2:eth1"]
+    - endpoints: ["r1:eth2", "f1:eth1"]
+    - endpoints: ["r1:eth3", "r3:eth1"]
+    - endpoints: ["r2:eth2", "r4:eth1"]
+    - endpoints: ["r3:eth2", "r4:eth3"]
+    - endpoints: ["f1:eth2", "r4:eth2"]
+    - endpoints: ["r4:eth4", "s1:eth1"]

@@ -1,0 +1,39 @@
+# s1, the simulator: a real IS-IS system on eth1, toward r4, with one
+# simulated system, t1, behind it, both Level 1 in 49.0001 with SR-MPLS
+# and both taking part in algorithms 128 and 129 (isis docs/simulator.md).
+# Its HTTP API, on port 8080 in the container, takes the fault catalog
+# and the behaviours (POST /api/fault, /api/behave), as routescope's
+# `sim:` steps send them.
+#
+#   r4 -- s1 -- t1
+#
+# s1's SRGB starts at 19000 and t1's at 30000, so a label from the wrong
+# block shows. t1's loopback, 10.255.0.10, has Node-SID index 10, 110
+# for 128 and 210 for 129. A simulated system forwards nothing.
+simulator:
+  system_id: 0000.0000.0009
+  hostname: s1
+  areas: [49.0001]
+  level: 1
+  metric_style: wide
+  minimum_lsp_interval: 1
+  router_id: 10.255.0.9
+  segment_routing:
+    srgb: [{ start: 19000, size: 1000 }]
+    srlb: { start: 15000, size: 1000 }
+  affinity_map: { red: 1 }
+  flex_algo:
+    - { algorithm: 128, advertise: false }
+    - { algorithm: 129, advertise: false }
+  prefixes:
+    - { prefix: 10.255.0.9/32, metric: 0, sid: 9, algorithm_sids: { 128: 109, 129: 209 } }
+  interfaces:
+    - { name: eth1, ip_addresses: [10.0.49.2], metric: 10, delay: 1000, hello_interval: 1, hello_multiplier: 10 }
+segment_routing: {}
+affinity_map: { red: 1 }
+routers:
+  - { name: t1, system_id: 0000.0000.0010, loopback: 10.255.0.10, sid: 10, srgb: [{ start: 30000, size: 1000 }],
+      algorithm_sids: { 128: 110, 129: 210 },
+      flex_algo: [{ algorithm: 128, advertise: false }, { algorithm: 129, advertise: false }] }
+links:
+  - { from: s1, to: t1, metric: 10, delay: 1000 }

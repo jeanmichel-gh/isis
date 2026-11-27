@@ -1,0 +1,44 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: f1 and r4 elect 129's FAD
+description: >
+  Two FADs for 129: f1's, FRR, excluding red at priority 200, and r4's,
+  isis4r, with no constraint at 100. f1's wins, and 129 goes through f1.
+  f1's priority goes to 50: every router elects r4's, and 129 goes over
+  the top, red no longer excluded, at isis4r and at FRR alike. Back to
+  200, and 129 through f1 again.
+timeout: 300
+
+steps:
+  - expect: { mpls_label: { node: r1, label: 21204, op: swap, out_label: 16204, next_hop: f1 } }
+    within: 120
+    name: f1's FAD wins, 129 excludes red, through f1
+
+  - vtysh: |
+      configure terminal
+      router isis 1
+      flex-algo 129
+      priority 50
+    node: f1
+  - expect: { mpls_label: { node: r1, label: 21204, op: swap, out_label: 22204, next_hop: r2 } }
+    within: 30
+    measure: r4_wins
+    name: r4's FAD wins at r1, 129 over the top
+  - expect: { mpls_label: { node: r2, label: 22204, op: php, next_hop: r4 } }
+    within: 30
+    name: r2, all red, now on 129's way
+  - expect: { mpls_label: { node: f1, label: 16201, op: php, next_hop: 10.0.17.1 } }
+    within: 30
+    name: FRR follows r4's FAD too, and still reaches r1
+
+  - vtysh: |
+      configure terminal
+      router isis 1
+      flex-algo 129
+      priority 200
+    node: f1
+  - expect: { mpls_label: { node: r1, label: 21204, op: swap, out_label: 16204, next_hop: f1 } }
+    within: 30
+    measure: f1_wins
+    name: f1's FAD wins again, through f1
+  - expect: { mpls_label: { node: r2, label: 22204, present: false } }
+    within: 30

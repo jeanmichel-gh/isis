@@ -1,0 +1,26 @@
+# isis4r in the flex-algo lab. See ../isis4r-flexalgo.clab.yml.
+system_id: 0000.0000.0004
+hostname: r4
+areas: [49.0001]
+level: 1
+metric_style: wide
+minimum_lsp_interval: 1
+forwarding: true
+segment_routing:
+  srgb: [{ start: 24000, size: 1000 }]
+  srlb: { start: 15000, size: 1000 }
+affinity_map: { red: 1 }
+# r4 advertises both FADs. 128's is at priority 0, so a FAD from s1 at
+# priority 0 wins on System ID: the faults scenario relies on it. 129's
+# has no constraint, at priority 100; f1's, excluding red at 200, wins,
+# until the election scenario lowers f1's.
+flex_algo:
+  - { algorithm: 128, metric_type: delay, priority: 0 }
+  - { algorithm: 129, priority: 100 }
+prefixes:
+  - { prefix: 10.255.0.4/32, metric: 0, sid: 4, algorithm_sids: { 128: 104, 129: 204 } }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.24.2], metric: 10, delay: 20000, affinity: [red], hello_interval: 1, hello_multiplier: 10 }
+  - { name: eth2, ip_addresses: [10.0.47.1], metric: 15, delay: 5000, hello_interval: 1, hello_multiplier: 10 }
+  - { name: eth3, ip_addresses: [10.0.34.2], metric: 20, delay: 2000, hello_interval: 1, hello_multiplier: 10 }
+  - { name: eth4, ip_addresses: [10.0.49.1], metric: 10, delay: 1000, hello_interval: 1, hello_multiplier: 10 }

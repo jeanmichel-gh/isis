@@ -1,0 +1,57 @@
+# A scenario for routescope's Scenarios panel (routescope docs/scenarios.md).
+name: Each algorithm loses its path
+description: >
+  r1 loses each of its three links in turn, and each algorithm moves to
+  the path its constraint allows. With the bottom down, 128 goes over
+  the top: f1 is pruned from 128. With f1 down, 129 goes over the
+  bottom, never the top: it is red. With the top down, algorithm 0 goes
+  through f1. Each link comes back, and each path with it. These are
+  where TI-LFA's backups on r1 point (ABOUT.md); the backups of label
+  routes are computed and shown, not installed, so the labels move when
+  isisd converges.
+timeout: 420
+
+steps:
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 120
+  - expect: { mpls_label: { node: r1, label: 21204, next_hop: f1 } }
+    within: 60
+  - expect: { mpls_label: { node: r1, label: 21004, next_hop: r2 } }
+    within: 60
+
+  - interface: r1:eth3
+    state: down
+  - expect: { mpls_label: { node: r1, label: 21104, op: swap, out_label: 22104, next_hop: r2, state: installed } }
+    within: 30
+    measure: algo_128
+    name: 128 over the top, since f1 is pruned from 128
+  - expect: { mpls_label: { node: r1, label: 21204, next_hop: f1 } }
+    name: 129 stays through f1
+  - interface: r1:eth3
+    state: up
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    within: 60
+
+  - interface: r1:eth2
+    state: down
+  - expect: { mpls_label: { node: r1, label: 21204, op: swap, out_label: 23204, next_hop: r3, state: installed } }
+    within: 30
+    measure: algo_129
+    name: 129 over the bottom, never the red top
+  - interface: r1:eth2
+    state: up
+  - expect: { mpls_label: { node: r1, label: 21204, next_hop: f1 } }
+    within: 60
+
+  - interface: r1:eth1
+    state: down
+  - expect: { mpls_label: { node: r1, label: 21004, op: swap, out_label: 16004, next_hop: f1, state: installed } }
+    within: 30
+    measure: algo_0
+    name: algorithm 0 through f1
+  - expect: { mpls_label: { node: r1, label: 21104, next_hop: r3 } }
+    name: 128 stays over the bottom
+  - interface: r1:eth1
+    state: up
+  - expect: { mpls_label: { node: r1, label: 21004, next_hop: r2 } }
+    within: 60

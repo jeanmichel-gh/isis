@@ -1,0 +1,20 @@
+# isis4r in the flex-algo lab. See ../isis4r-flexalgo.clab.yml.
+system_id: 0000.0000.0003
+hostname: r3
+areas: [49.0001]
+level: 1
+metric_style: wide
+minimum_lsp_interval: 1
+forwarding: true
+segment_routing:
+  srgb: [{ start: 23000, size: 1000 }]
+  srlb: { start: 15000, size: 1000 }
+affinity_map: { red: 1 }
+flex_algo:
+  - { algorithm: 128, advertise: false }
+  - { algorithm: 129, advertise: false }
+prefixes:
+  - { prefix: 10.255.0.3/32, metric: 0, sid: 3, algorithm_sids: { 128: 103, 129: 203 } }
+interfaces:
+  - { name: eth1, ip_addresses: [10.0.13.2], metric: 20, delay: 2000, hello_interval: 1, hello_multiplier: 10 }
+  - { name: eth2, ip_addresses: [10.0.34.1], metric: 20, delay: 2000, hello_interval: 1, hello_multiplier: 10 }
