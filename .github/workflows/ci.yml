@@ -178,7 +178,8 @@ jobs:
   # machine ti_lfa_too_deep's 33 routers lose their adjacencies, so the
   # one in the repository comes from here. Flex-algo's topologies
   # (frr_flex_algo_topology_test.rb) added 706 s, and the job took 24 min
-  # of its 25 (2026-11-26, #145), so it has 40.
+  # of its 25 (2026-11-26, #145), so it has 40. Flex-algo's data
+  # (frr_flex_fault_test.rb) adds about 4 minutes (#146).
   interop-ti-lfa:
     name: interop (TI-LFA)
     needs: changes

@@ -154,9 +154,10 @@ wrong thing: in a link's attributes for flex-algo, which
 `Spf::LinkAttributes` reads; in a FAD, which `Spf::Definitions` reads;
 or in a prefix's sub-TLVs, which `Spf::PrefixMetrics` reads. Each makes
 its finding there, and `test/unit/fault_test.rb` holds them to it as it
-holds the SR entries. They are a group of their own until the
-fault matrix against FRR covers them (`docs/design/flex-algo.md`, step
-7). `ISIS::Fault.flex_algo_catalog` lists them; `entry`, `tlvs`, `build` and
+holds the SR entries. They are a group of their own, in the fault
+matrix too: `test/interop/frr_flex_fault_test.rb` gives each to isisd
+and FRR, as the SR entries are given (`docs/fault-matrix.md`, "Flex-algo
+data"). `ISIS::Fault.flex_algo_catalog` lists them; `entry`, `tlvs`, `build` and
 `wire` take them as they take the SR entries.
 
 | Entry | Finding | Builds |

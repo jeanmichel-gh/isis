@@ -35,7 +35,12 @@ class SrFaultLab
 
   attr_reader :dir
 
-  def initialize(prefix)
+  # With +flex+, isisd and FRR take part in algorithm 128 without a FAD
+  # of their own, so a FAD in s1's LSP is the only one; FRR runs mpls-te
+  # so it reads link attributes. For the flex-algo entries
+  # (ISIS::Fault::FLEX_ALGO_CATALOG).
+  def initialize(prefix, flex: false)
+    @flex = flex
     @prefix = prefix
     @dir = Dir.mktmpdir("isis4r-#{prefix}")
     @run = "/var/run/frr/#{prefix}"
@@ -153,7 +158,7 @@ class SrFaultLab
       "segment_routing" => { "srgb" => [{ "start" => ISISD_SRGB, "size" => SIZE }] },
       "prefixes" => [{ "prefix" => "10.255.0.1/32", "metric" => 0, "sid" => 1 }],
       "interfaces" => [{ "name" => "toS", "ip_addresses" => ["10.2.1.2"], "hello_interval" => 1, "hello_multiplier" => 10 }]
-    }.to_yaml)
+    }.merge(@flex ? { "flex_algo" => [{ "algorithm" => 128, "advertise" => false }] } : {}).to_yaml)
     @pids["isisd"] = Process.spawn("ip", "netns", "exec", ns("isisd"), RbConfig.ruby, "#{ROOT}/exe/isisd", "-c", file,
                                    "-s", socket("isisd"), "-l", "-", %i[out err] => File.join(@dir, "isisd.log"))
   end
@@ -180,6 +185,7 @@ class SrFaultLab
        segment-routing on
        segment-routing global-block #{FRR_SRGB} #{FRR_SRGB + SIZE - 1}
        segment-routing prefix 10.255.0.2/32 index 2
+      #{@flex ? " mpls-te on\n mpls-te router-address 10.255.0.2\n flex-algo 128\n  dataplane sr-mpls\n exit" : ''}
     CONF
     zebra = File.join(@etc, "zebra.conf")
     File.write(zebra, "hostname frr\n")
