@@ -4,9 +4,11 @@ require_relative "../test_helper"
 require_relative "../support/frr_lab"
 
 # SRv6 between isisd and FRR's isisd on one point to point link, at Level
-# 1 (docs/design/srv6.md, step 2's gate): FRR lists isisd in `show isis
+# 1. Step 2's gate (docs/design/srv6.md): FRR lists isisd in `show isis
 # segment-routing srv6 node`, and decodes its locator, its End and
-# End.DT6 SIDs and its End.X SID. Reading FRR's in return is step 3.
+# End.DT6 SIDs and its End.X SID. Step 3's: each side routes to the
+# other's locator, from TLV 236 and TLV 27 as RFC 9352 section 5 asks,
+# and isisd reads FRR's SIDs.
 #
 # isisd is 0000.0000.0001 with the locator fc00:0:1::/48, FRR
 # 0000.0000.0002 with fc00:0:2::/48, both block 32, node 16, function 16.
@@ -75,5 +77,27 @@ class TestFrrSrv6 < Minitest::Test
     route = -> { @lab.vtysh("show ipv6 route fc00:0:1::/48") }
     assert @lab.wait_for(20) { route.call.match?(/Routing entry for fc00:0:1::\/48.*Known via "isis"/m) },
            "FRR routes to isisd's locator\n#{route.call}"
+  end
+
+  # isisd routes to FRR's locator, marked as one, through FRR's
+  # link-local address, and reads FRR's End and End.X SIDs with no
+  # finding.
+  def test_isisd_reads_frrs_srv6
+    start
+    locator = -> { @lab.isisd("show.routes").find { _1["prefix"] == "fc00:0:2::/48" } }
+    assert @lab.wait_for(20) { locator.call }, "isisd routes to FRR's locator\n#{@lab.isisd('show.routes')}"
+    r = locator.call
+    assert_equal [true, 0, 10], r.values_at("locator", "algorithm", "metric")
+    assert_match(/\Afe80:/, r["next_hops"].first["address"])
+
+    srv6 = @lab.isisd("show.srv6")
+    frr = srv6["levels"]["1"]["nodes"].find { _1["system_id"] == "0000.0000.0002" }
+    refute_nil frr, "show.srv6 lists FRR\n#{srv6}"
+    assert_equal({ "o" => false }, frr["capabilities"])
+    loc = frr["locators"].find { _1["prefix"] == "fc00:0:2::/48" }
+    assert_equal [{ "sid" => "fc00:0:2::", "behavior" => "End", "structure" => [32, 16, 16, 0] }], loc["end_sids"]
+    assert_equal ["End.X"], frr["end_x_sids"].map { _1["behavior"] }
+    assert(frr["end_x_sids"].all? { _1["sid"].start_with?("fc00:0:2:") })
+    assert_empty srv6["levels"]["1"]["findings"]
   end
 end

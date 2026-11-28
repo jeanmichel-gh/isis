@@ -2,10 +2,10 @@
 
 require_relative "../test_helper"
 
-# ISIS::Fault's SRv6 group, as far as the codec owns it
-# (docs/design/srv6.md, step 1): each entry builds, round trips, and
-# differs from a correct SRv6 system in the one thing it names. That it
-# makes its finding is step 3's test, once validation.rb has the rules.
+# ISIS::Fault's SRv6 group (docs/design/srv6.md, steps 1 and 3): each
+# entry builds, round trips, differs from a correct SRv6 system in the
+# one thing it names, and read by Spf::Srv6.read makes its finding and
+# no other.
 class TestFaultSrv6 < Minitest::Test
   F = ISIS::Fault
 
@@ -23,6 +23,33 @@ class TestFaultSrv6 < Minitest::Test
     assert_equal FINDINGS, F.srv6_catalog.map { _1[:finding] }
     assert_equal F.srv6_names.uniq, F.srv6_names
     assert_empty F.srv6_names & (F.names + F.flex_algo_names)
+  end
+
+  # The findings Spf::Srv6.read makes from an LSP built as +name+, or
+  # correct when nil.
+  def findings(name, policy: :rfc)
+    lsp = name ? F.srv6_build(name) : F.lsp(correct, level: 2)
+    ISIS::Spf::Srv6.read([lsp], policy: policy, subject: "0000.0000.0003").findings.map(&:name)
+  end
+
+  def test_a_correct_system_makes_none
+    assert_empty findings(nil)
+    node = ISIS::Spf::Srv6.read([F.lsp(correct, level: 2)])
+    assert_equal ["fc00:0:3::/48"], node.locators.map(&:prefix)
+    assert_equal %w[fc00:0:3:: fc00:0:3:1::], node.sids.map(&:sid)
+  end
+
+  def test_each_entry_makes_its_finding_and_no_other
+    F.srv6_catalog.each do |e|
+      assert_equal [e[:finding]], findings(e[:name]), e[:name]
+    end
+  end
+
+  # Each entry says what RFC 9352 expects of a receiver, its rule's.
+  def test_an_entry_says_what_the_rfc_expects
+    e = F.srv6_entry(:end_sid_outside_locator)
+    assert_equal [:errors, :ignore_sid], e.values_at(:channel, :expect)
+    assert_match(/\ARFC 9352 section 7.2/, e[:rfc])
   end
 
   # A correct system, as RFC 9352 asks: SRv6 Capabilities, the locator in

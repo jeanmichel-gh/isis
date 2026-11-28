@@ -23,7 +23,7 @@ module ISIS
           spf_runs: r.levels.to_h { |l| [l, r.decisions[l].runs] },
           overload: r.originators.values.first&.overload || false,
           lsp_generation: lsp_generation(r.originators.values.first)
-        }
+        }.merge(r.srv6 ? { srv6: true } : {})
       end
 
       # How a change to this system's own LSP is timed: fixed, RFC 1142's
@@ -100,6 +100,9 @@ module ISIS
                       label ? hop.merge(label: label) : hop
                     end }
             row[:sid] = r.sid.index if r.sid&.index
+            # A route to an SRv6 locator (RFC 9352 section 5), and its
+            # algorithm, 0 here.
+            row.merge!(locator: true, algorithm: r.locator.algorithm) if r.locator
             backup = backups&.routes&.[](r.prefix)
             row.merge!(backup_fields(backup, r.family, names)) if backup
             row
@@ -222,6 +225,42 @@ module ISIS
           end }
       end
 
+      # This system's SRv6 and what it learned (docs/design/srv6.md, "API
+      # and CLI"): its locators, interface and decap setting; its own SIDs,
+      # End and End.DT6 per locator and an End.X per adjacency Up, union of
+      # the levels; then per level each system's SRv6 Capabilities,
+      # algorithms, locators with their End SIDs, End.X SIDs, whether a
+      # :strict policy ignored it, and the findings by name. { enabled:
+      # false } without srv6.
+      def srv6
+        local = @router.srv6 or return { enabled: false }
+        names = hostnames
+        own = @router.levels.flat_map { @router.decisions[_1].srv6_table&.own || [] }
+        own = own.uniq { [_1.sid, _1.adjacency&.circuit] }.map do |s|
+          row = { sid: s.sid, behavior: s.behavior, kind: s.kind.to_s, locator: s.locator }
+          if s.adjacency
+            id = SystemId.from_bytes(s.adjacency.neighbor).to_s
+            row.merge!(interface: interface_of(s.adjacency.circuit), neighbor: names.fetch(id, id))
+          end
+          row
+        end
+        { enabled: true,
+          locators: local.locators.map do |l|
+            { name: l.name, prefix: l.prefix, algorithm: l.algorithm,
+              structure: { block: l.block, node: l.node, function: l.function, argument: l.argument } }
+          end,
+          interface: local.interface, decap: local.decap, receive_policy: local.receive_policy.to_s, sids: own,
+          levels: @router.levels.to_h do |l|
+            table = @router.decisions[l].srv6_table
+            nodes = (table&.nodes || {}).map do |node, n|
+              id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
+              { system_id: id, hostname: names[id], capabilities: n.capabilities, algorithms: n.algorithms,
+                locators: n.locators.map(&:to_hash), end_x_sids: n.end_x_sids.map(&:to_hash), ignored: n.ignored }
+            end
+            [l, { nodes: nodes, findings: (table&.findings || []).map(&:to_hash) }]
+          end }
+      end
+
       # One level's database as a topology, for a reader such as a BGP-LS
       # Producer (docs/design/bgp-ls-export.md): one node per System ID and
       # pseudonode octet, its LSP fragments merged. Purged LSPs and
@@ -299,8 +338,38 @@ module ISIS
               interface_addresses: topology_addresses(lsps, Tlv::IpInterfaceAddresses),
               ipv6_interface_addresses: topology_addresses(lsps, Tlv::Ipv6InterfaceAddresses) }
         h[:link_findings] = attributes.findings.map(&:to_hash) unless attributes.findings.empty?
+        h.merge!(topology_srv6(lsps))
         sr = topology_sr(lsps)
         sr ? h.merge(sr: sr) : h
+      end
+
+      # The node's TLV 27 entries as it sent them, each with its algorithm,
+      # metric, D bit and flags, and its End SIDs, each with its locator,
+      # behaviour and SID Structure: +locators+ and +end_sids+, only when
+      # it sends TLV 27 (RFC 9352 section 7). Read as sent: show.srv6 has
+      # what the receive rules let through.
+      def topology_srv6(lsps)
+        entries = lsps.flat_map { _1.tlvs.to_a.grep(Tlv::Srv6Locator) }.flat_map(&:entries)
+        return {} if entries.empty?
+
+        locators = entries.map do |e|
+          paf = e.subtlvs_of(SubTlv::PrefixAttributeFlags).first
+          { locator: e.locator || "#{e.locator_octets.unpack1('H*')}/#{e.size}", algorithm: e.algorithm,
+            metric: e.metric, up_down: e.up_down?, flags: paf ? paf.flag_letters : [] }
+        end
+        sids = entries.flat_map do |e|
+          e.subtlvs_of(SubTlv::Srv6EndSid).map { |s| srv6_sid(s).merge(locator: locators[entries.index(e)][:locator]) }
+        end
+        { locators: locators, end_sids: sids }
+      end
+
+      # A SID sub-TLV as a view row: its value, behaviour by name, and SID
+      # Structure when it has one.
+      def srv6_sid(sub)
+        h = { sid: sub.sid, behavior: sub.behavior_name.to_s }
+        st = sub.structure
+        h[:structure] = { block: st.block, node: st.node, function: st.function, argument: st.argument } if st
+        h
       end
 
       # What a finding on received data does: segment routing's
@@ -375,6 +444,14 @@ module ISIS
         adj = Array(entry.subtlvs).grep(SubTlv::AdjSid) - lan
         h[:adj_sids] = adj.map(&:to_hash) unless adj.empty?
         h[:lan_adj_sids] = lan.map(&:to_hash) unless lan.empty?
+        # End.X (43) and LAN End.X (44), RFC 9352 sections 8.1 and 8.2.
+        x = Array(entry.subtlvs).grep(SubTlv::Srv6EndXSid)
+        unless x.empty?
+          h[:end_x_sids] = x.map do |s|
+            row = srv6_sid(s).merge(algorithm: s.algorithm, weight: s.weight, flags: s.flag_letters)
+            s.is_a?(SubTlv::Srv6LanEndXSid) ? row.merge(neighbor: s.neighbor_id.to_s) : row
+          end
+        end
         h
       end
 

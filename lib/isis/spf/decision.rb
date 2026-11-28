@@ -66,6 +66,11 @@ module ISIS
       # With ti_lfa too, each such algorithm's Spf::Backups, on its own
       # graph (docs/design/flex-algo.md, "TI-LFA per algorithm").
       attr_reader :flex_backups
+      # This system's Srv6::Local, or nil: with one, the calculation reads
+      # the locators of TLV 27, and each run builds the SRv6 table
+      # (Spf::Srv6), kept as +srv6_table+.
+      attr_accessor :srv6
+      attr_reader :srv6_table
 
       def initialize(system_id:, database:, scheduler:, log:, max_path_splits: MAXIMUM_PATH_SPLITS,
                      max_path_metric: MAX_PATH_METRIC, delay: 0, forwarding: nil,
@@ -89,6 +94,8 @@ module ISIS
         @flex_routes = {}
         @flex_labels = {}
         @flex_backups = {}
+        @srv6 = nil
+        @srv6_table = nil
         @circuits = []
         @routes = {}
         @paths = {}
@@ -159,6 +166,7 @@ module ISIS
         old_labels = @labels
         old_backups = @backups
         label(calc) if @segment_routing
+        build_srv6(calc) if @srv6
         flex(why) if @segment_routing && @flex_algo
         # No interface protected any more: no backups, so the forwarding
         # withdraws the last run's.
@@ -184,7 +192,8 @@ module ISIS
         adjacencies = @circuits.flat_map(&:spf_adjacencies)
         broadcast = @circuits.filter_map(&:spf_broadcast)
         Calculation.new(database: @database, system_id: @system_id, adjacencies: adjacencies, broadcast: broadcast,
-                        max_path_splits: @max_path_splits, max_path_metric: @max_path_metric).run
+                        max_path_splits: @max_path_splits, max_path_metric: @max_path_metric,
+                        srv6: @srv6 && Validation.policy(@srv6.receive_policy)).run
       end
 
       # Algorithm +algorithm+'s calculation, with +definition+ its winning
@@ -276,6 +285,43 @@ module ISIS
         (@labels.problems - before).each do |p|
           text = named[p] ? "#{named[p]}: #{p}" : p
           @log.warn("Level #{level} segment routing: #{text}", kind: :sr, level: level)
+        end
+      end
+
+      # The SRv6 table for this run (Spf::Srv6). Each finding is logged once,
+      # when it first appears, at warn with its clause; each locator learned
+      # or withdrawn at info; both as events of kind :srv6.
+      def build_srv6(calc)
+        before = @srv6_table
+        adjacencies = @circuits.flat_map(&:spf_adjacencies).map { |_, _, a| a }
+        @srv6_table = Srv6.new(local: @srv6, database: @database, paths: calc.paths, routes: @routes,
+                               adjacencies: adjacencies).build
+        (@srv6_table.findings - (before&.findings || [])).each do |f|
+          @log.warn("Level #{level} SRv6: #{f.name}: #{f}", kind: :srv6, level: level, finding: f.name)
+        end
+        old = locator_set(before)
+        new = locator_set(@srv6_table)
+        (new - old).each do |id, prefix, algorithm|
+          @log.info("Level #{level} SRv6 locator #{prefix} algorithm #{algorithm} of #{id} learned (RFC 9352 section 7.1)",
+                    kind: :srv6, level: level, system_id: id, locator: prefix, algorithm: algorithm, change: :added)
+        end
+        (old - new).each do |id, prefix, algorithm|
+          @log.info("Level #{level} SRv6 locator #{prefix} algorithm #{algorithm} of #{id} withdrawn",
+                    kind: :srv6, level: level, system_id: id, locator: prefix, algorithm: algorithm, change: :removed)
+        end
+      end
+
+      # The locators of other systems in +table+, as [System ID, prefix,
+      # algorithm].
+      def locator_set(table)
+        return [] unless table
+
+        mine = Pdu.dotted_octets(@system_id)
+        table.nodes.flat_map do |node, n|
+          next [] if node.byteslice(0, 6) == mine
+
+          id = SystemId.from_bytes(node.byteslice(0, 6)).to_s
+          n.locators.map { [id, _1.prefix, _1.algorithm] }
         end
       end
 

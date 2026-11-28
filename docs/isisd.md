@@ -371,16 +371,17 @@ Every method:
 
 | Method | Params | Answers |
 |---|---|---|
-| `show.overview` | | system ID, hostname, levels, areas, counts per level; `lsp_generation`, how a change to its own LSP is timed |
+| `show.overview` | | system ID, hostname, levels, areas, counts per level; `lsp_generation`, how a change to its own LSP is timed; `srv6: true` when SRv6 is configured |
 | `show.interfaces` | | each interface per level: network, metric, state, DIS on a LAN |
 | `show.adjacencies` | | each neighbour per level: system ID, hostname, state, address, hold; `bfd`, `waiting`, `up` or `down`, when it has a BFD session |
 | `show.database` | `level` | each LSP: ID, hostname, sequence, checksum, lifetime, ATT, P, OL |
-| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable, link attributes for flex-algo |
-| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
+| `show.topology` | `level`, required | one level's LSDB by node: neighbors, prefixes, interface addresses, flags, reachable, link attributes for flex-algo; a node's SRv6 `locators` and `end_sids`, and a neighbour's `end_x_sids`, as sent, when it has them |
+| `show.routes` | `level` | each route: prefix, metric, external, up/down, next hops; `locator: true` and its `algorithm` for a route to an SRv6 locator; with SR its `sid` and each next hop's `label`; with TI-LFA its `backup` (next hop, interface, `labels` top first, `case`, `protects` node or link, `fallback` when a node interface fell back to the link, `path` the repair's routers by hostname to Q, `p` and `q`), `{ ecmp: true }`, or `unprotected` and why |
 | `show.labels` | `level` | the SR label table: in-label, kind, prefix or neighbour, op (swap, php, pop), next hops with their out-label (3 is a pop), and the `algorithm`, 0 or a flex-algo's; with TI-LFA an algorithm 0 prefix's `backup` as on its route |
 | `show.flex_algo` | | `enabled`, the `configured` algorithms; per level the algorithms this system takes part in, and for each configured one the winning FAD with its origin, whether isis4r can run it, `participating`, the `reason` when not, every FAD offered (`candidates`, the winner first), the `routes` of each algorithm it takes part in (prefix, metric, next hops), and the `findings` on the FADs read |
 | `show.ti_lfa` | | `enabled`, the interfaces with `ti_lfa`; per level each protected interface with its neighbour, the mode, how many routes are protected, by ECMP, by the link as a fallback, and unprotected by reason, the `algorithm`, 0 or a flex-algo's, and the last computations' trees and milliseconds, all algorithms together (`docs/ti-lfa.md`) |
 | `show.segment_routing` | | `enabled`; the router ID, SRGB, SRLB and Adj-SIDs; per level each system's SRGB and algorithms, with its router ID, SRLB and Node-SID (`sid`, `prefix`, and `label`, the label this router takes it in) when it advertises them, the problems met, the findings by name (`docs/protocol-testing.md`), and the receive policy |
+| `show.srv6` | | `enabled`; the locators (name, prefix, algorithm, structure), the `interface` and `decap` setting, the receive policy, this router's SIDs (End and End.DT6 per locator, an End.X per adjacency Up with its interface and neighbour); per level each system's SRv6 Capabilities, algorithms, locators with their End SIDs, End.X SIDs, `ignored` when a strict policy refused them, and the findings by name (`docs/protocol-testing.md`) |
 | `show.hostnames` | | system ID to hostname, from TLV 137 |
 | `show.log` | `count` | the last events |
 | `show.configuration` | | the configuration, keys masked |

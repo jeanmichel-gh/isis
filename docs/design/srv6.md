@@ -8,8 +8,10 @@ answer, the default taken at approval. Step 1, the codec, is built (#152,
 10.7.1's two LSPs as fixtures, and the `SRV6` group's wire builders,
 whose findings wait for step 3. Step 2, configuration and
 origination, is built (#153, 2026-11-28): FRR 10.7.1 lists isisd as an SRv6
-node and decodes its SIDs ("Step 2's gate", below). Steps 3 to 9 are
-not started.
+node and decodes its SIDs ("Step 2's gate", below). Step 3, reading
+and the calculation, is built (2026-11-28): each side routes to the
+other's locator, and isisd reads FRR's SIDs ("Step 3's gate"). Steps 4
+to 9 are not started.
 
 This is P6's IS-IS half in routescope's `docs/protocol-coverage.md`:
 "IS-IS SRv6 locators and SIDs, BGP services over SRv6. The VM's kernel
@@ -548,15 +550,57 @@ Attribute Flags line for the locator, which isisd sends with no flag set.
 against the FRR the harness runs, 10.5.1 on ospflab and the one CI
 installs.
 
-Two parts of step 2 wait for step 3:
+One part of step 2 waits: **`ti_lfa` with `srv6` and no
+`segment_routing`** is still refused, since TI-LFA over SRv6 is step 5.
+Leaking, the other part that waited, is built in step 3.
 
-- **Leaking.** The originator sends locators from the other level in TLV
-  27, with D set going down and R in the Prefix Attribute Flags either
-  way (`Srv6::Local.propagated`, `leaked_locators` and `area_locators`).
-  Choosing which locators to leak needs the locator routes step 3 reads,
-  so `Spf::Leak` and `Spf::Summary` do not hand any over yet.
-- **`ti_lfa` with `srv6` and no `segment_routing`** is still refused:
-  TI-LFA over SRv6 is step 5.
+## Step 3's gate
+
+Measured 2026-11-28 with `test/interop/frr_srv6_test.rb` in network
+namespaces on ospflab, against FRR 10.5.1, isisd at Level 1 with
+`fc00:0:1::/48` and FRR with `fc00:0:2::/48`, both 32/16/16/0. FRR
+sends its locator in TLV 236 and TLV 27. isisd's `show.routes`:
+
+```json
+{"level":1,"prefix":"fc00:0:2::/48","metric":10,"external":false,"up_down":false,
+ "next_hops":[{"address":"fe80::9c35:cbff:fe62:f868","interface":"veth0"}],
+ "locator":true,"algorithm":0}
+```
+
+and in `show.srv6`, FRR's node, with no finding at the level:
+
+```text
+capabilities {o: false}, algorithms [0]
+locator fc00:0:2::/48 algorithm 0 metric 0, End SID fc00:0:2:: End 32/16/16/0
+End.X SID fc00:0:2:1:: End.X, algorithm 0, weight 0, to 0000.0000.0001.00, 32/16/16/0
+```
+
+FRR routes to `fc00:0:1::/48` through isisd, as in step 2's gate. The
+The two tests together took 14 s. FRR 10.7.1's two
+LSPs, uSID and not, are read with no finding as fixtures
+(`test/unit/spf/srv6_test.rb`); isisd against a live 10.7.1 waits for
+the lab, step 7.
+
+What step 3 decided where the RFCs leave room, each in the code beside
+it:
+
+- **TLV 27 is read only with `srv6` set.** Section 5 has locators
+  installed "in the forwarding plane of receiving SRv6-capable
+  routers"; an isisd without `srv6` routes TLV 236's copy, as a legacy
+  router does.
+- **Table 1 by base behaviour.** RFC 9800 gives no table of its own and
+  sends a receiver to RFC 9352's, so End with NEXT-CSID goes where End
+  goes. End.T, which section 7.2 names as not defined for IS-IS, is
+  `behavior_unknown`.
+- **An End.X SID under a refused locator** goes with it, with no
+  `end_x_sid_no_locator` of its own: the locator's finding says why.
+- **Leaking.** `Spf::Leak` hands an algorithm 0 locator route to the
+  Level 1 originator by the same `leak:` policy as TLV 236, and
+  `Spf::Summary` every area locator route to the Level 2 one, summaries
+  covering none; each with only the End SIDs the rules let through. A
+  route from TLV 27 alone goes on in TLV 27 alone.
+- **`policy.srv6`** is not built here: step 3's line in "Work" names
+  `show.srv6` and `show.topology` only, so it waits for a later step.
 
 ## The design
 

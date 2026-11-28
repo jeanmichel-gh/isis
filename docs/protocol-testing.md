@@ -63,6 +63,29 @@ will act on them.
 | `fapm_algorithm_range` | errors | a FAPM for an algorithm outside 128 to 255 |
 | `fapm_twice` | errors | two FAPMs for one algorithm on one prefix |
 | `prefix_sid_algorithm_twice` | errors | two Prefix-SIDs for one algorithm on one prefix |
+| `locator_size_invalid` | errors | a locator with a Loc-Size of 0 or past 128 |
+| `locator_algorithm_conflict` | errors | one locator in two TLV 27s with two algorithms |
+| `end_sid_outside_locator` | errors | an End SID outside the locator it is advertised under |
+| `end_x_sid_no_locator` | errors | an End.X or LAN End.X SID that no locator of its system covers at its algorithm |
+| `sid_structure_twice` | errors | a SID with two SID Structure sub-sub-TLVs |
+| `sid_structure_too_long` | errors | a SID whose SID Structure sums to more than 128 bits |
+| `behavior_not_allowed` | errors | an End SID with an End.X behaviour, or an End.X SID with an End behaviour |
+| `behavior_unknown` | gaps | a SID whose behaviour Table 1 of RFC 9352 does not have |
+| `anycast_and_node` | errors | a locator whose Prefix Attribute Flags set both N and A |
+| `x_flag_mismatch` | errors | a locator whose X flag in TLV 27 differs from its X bit in TLV 236 |
+| `fapm_in_locator` | errors | a Flexible Algorithm Prefix Metric sub-TLV in TLV 27 |
+| `locator_not_longest` | inconclusive | a SID whose longest matching route is not its locator's |
+
+The SRv6 rules (RFC 9352) run in `Spf::Srv6`, after each SPF run with
+`srv6` configured, on each reachable system's LSPs; the calculation
+reads locators through the same reader, so a locator a rule refuses is
+not routed from TLV 27. isisd logs each at warn, as an event of kind
+`srv6`, and `show.srv6` lists them per level. Where a behaviour may go is
+RFC 9352's Table 1, by base behaviour: an RFC 9800 behaviour such as End
+with NEXT-CSID, FRR's uN, goes where End goes. RFC 9800 has no table of
+its own, so that is this library's reading. `locator_not_longest` is
+inconclusive: section 5 asks the operator to keep the locator the
+longest match, and gives a receiver nothing to do.
 
 A FAPM past MAX_PATH_METRIC, and one on a prefix inside its level, are
 not findings: section 8 and section 13.1 say what a receiver does, and no
@@ -105,9 +128,19 @@ isis4r cannot run stops its taking part under every policy (section
 algorithm are used; `strict` uses no FAPM for an algorithm sent twice,
 and neither Prefix-SID.
 
+On SRv6, `srv6: { receive_policy: rfc }`: `rfc` ignores a TLV 27 with a
+bad Loc-Size, every TLV 27 for a locator sent at two algorithms, a SID
+outside its locator, a SID with a bad or doubled SID Structure or a
+behaviour Table 1 forbids there, and a FAPM in TLV 27; it drops the N
+flag beside A, and takes TLV 236's X bit over TLV 27's. An End.X SID
+under a refused locator goes with it, with no finding of its own.
+`strict` ignores all of the system's SRv6 data on a finding about it, and
+the locator on a flag finding. `lenient` uses what arrived. A behaviour
+isis4r has no code for is ignored under every policy.
+
 The tests: `test/unit/validation_test.rb` for each rule,
 `test/unit/spf/sr_findings_test.rb` for each finding on hand-built LSPs
-and each policy.
+and each policy, and `test/unit/spf/srv6_test.rb` for the SRv6 ones.
 
 ## The fault catalog
 
@@ -186,26 +219,27 @@ The SRv6 entries, `ISIS::Fault::SRV6_CATALOG` (`docs/design/srv6.md`,
 everything else what `Fault.srv6` gives a correct system: SRv6
 Capabilities, the locator in TLV 236 and in TLV 27, an End SID and an
 End.X SID with a SID Structure. Each is named for the finding it will
-make. The codec builds them, and `test/unit/fault_srv6_test.rb` holds
-each to its one change and to its round trip. The findings are the
-validation step's, so until then the entries are not in
-`Fault.catalog`, which reads each finding's rule:
-`ISIS::Fault.srv6_catalog`, `srv6_tlvs` and `srv6_build` give them, a
-Level 2 LSP by default.
+make. `test/unit/fault_srv6_test.rb` holds each to its one change, to
+its round trip, and, read by `Spf::Srv6.read`, to its finding and no
+other. One finding has no entry: `locator_not_longest` needs a second
+system. The injector serves `Fault.catalog`, and these are not in it
+yet; that is the design's step 6. Until then `ISIS::Fault.srv6_catalog`,
+`srv6_entry`, `srv6_tlvs` and `srv6_build` give them, a Level 2 LSP by
+default, each with its finding's channel, expectation and clause.
 
-| Entry | Builds |
-| --- | --- |
-| `locator_size_invalid` | a locator with a Loc-Size of 129 |
-| `locator_algorithm_conflict` | the same locator in a second SRv6 Locator TLV, at algorithm 128 |
-| `end_sid_outside_locator` | an End SID that is not in its locator |
-| `end_x_sid_no_locator` | an End.X SID that no locator of the system covers |
-| `sid_structure_twice` | an End SID with two SID Structure sub-sub-TLVs |
-| `sid_structure_too_long` | an End SID whose SID Structure sums to 144 bits |
-| `behavior_not_allowed` | an End SID with behaviour End.X, 5 |
-| `behavior_unknown` | an End SID with behaviour 125, which IANA lists as unassigned |
-| `anycast_and_node` | a locator whose Prefix Attribute Flags set both N and A |
-| `x_flag_mismatch` | a locator with X set in TLV 27 and clear in TLV 236 |
-| `fapm_in_locator` | a FAPM for algorithm 128 in the SRv6 Locator TLV |
+| Entry | Finding | Builds |
+| --- | --- | --- |
+| `locator_size_invalid` | `locator_size_invalid` | a locator with a Loc-Size of 129 |
+| `locator_algorithm_conflict` | `locator_algorithm_conflict` | the same locator in a second SRv6 Locator TLV, at algorithm 128 |
+| `end_sid_outside_locator` | `end_sid_outside_locator` | an End SID that is not in its locator |
+| `end_x_sid_no_locator` | `end_x_sid_no_locator` | an End.X SID that no locator of the system covers |
+| `sid_structure_twice` | `sid_structure_twice` | an End SID with two SID Structure sub-sub-TLVs |
+| `sid_structure_too_long` | `sid_structure_too_long` | an End SID whose SID Structure sums to 144 bits |
+| `behavior_not_allowed` | `behavior_not_allowed` | an End SID with behaviour End.X, 5 |
+| `behavior_unknown` | `behavior_unknown` | an End SID with behaviour 125, which IANA lists as unassigned |
+| `anycast_and_node` | `anycast_and_node` | a locator whose Prefix Attribute Flags set both N and A |
+| `x_flag_mismatch` | `x_flag_mismatch` | a locator with X set in TLV 27 and clear in TLV 236 |
+| `fapm_in_locator` | `fapm_in_locator` | a FAPM for algorithm 128 in the SRv6 Locator TLV |
 
 ### TI-LFA's topologies
 

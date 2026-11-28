@@ -15,21 +15,13 @@ class TestProtocolTestingDoc < Minitest::Test
 
   def test_every_fault_with_its_finding_and_no_other
     listed = DOC.scan(/^\| `(\w+)` \| `(\w+)` \|/).to_h { |n, f| [n.to_sym, f.to_sym] }
-    assert_equal (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog).to_h { [_1[:name], _1[:finding]] }, listed
+    assert_equal (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog + ISIS::Fault.srv6_catalog)
+                   .to_h { [_1[:name], _1[:finding]] }, listed
   end
 
   def test_each_fault_built_as_described
-    (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog).each do |e|
+    (ISIS::Fault.catalog + ISIS::Fault.flex_algo_catalog + ISIS::Fault.srv6_catalog).each do |e|
       assert_includes DOC, "| `#{e[:name]}` | `#{e[:finding]}` | #{e[:description]} |", e[:name]
-    end
-  end
-
-  # The SRv6 entries, which have no rule yet: each with what it builds.
-  def test_every_srv6_fault_built_as_described
-    listed = DOC.scan(/^\| `(\w+)` \| ([^`|][^|]*) \|$/).map { _1.first.to_sym } & ISIS::Fault.srv6_names
-    assert_equal ISIS::Fault.srv6_names, listed
-    ISIS::Fault.srv6_catalog.each do |e|
-      assert_includes DOC, "| `#{e[:name]}` | #{e[:description]} |", e[:name]
     end
   end
 

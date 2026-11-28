@@ -20,7 +20,8 @@ class TestValidation < Minitest::Test
   # each policy, all known ones.
   def test_every_rule_is_complete
     known = %i[ignore_srgb ignore_node use_first ignore_sid drop_both use ignore_subtlv ignore_values legacy
-               ignore_attribute ignore_tlv use_ag ignore_fad stop_participating ignore_fapm]
+               ignore_attribute ignore_tlv use_ag ignore_fad stop_participating ignore_fapm ignore_tlvs ignore_locator
+               ignore_n prefer_reachability report]
     V::RULES.each_value do |r|
       assert_includes V::CHANNELS, r.channel, r.name
       refute_empty r.clause, r.name

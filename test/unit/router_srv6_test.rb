@@ -139,6 +139,102 @@ class TestRouterSrv6 < Minitest::Test
     assert_equal sid[l1], sid[l2]
   end
 
+  # Step 3: each routes to the other's locator, from TLV 236 marked by
+  # TLV 27, through the neighbour's link-local address; and the SRv6
+  # table holds the other's locator and SIDs, and this system's own SIDs
+  # with the End.X on its adjacency.
+  def test_each_routes_to_the_others_locator
+    a, b = pair
+    r = a.decisions[1].routes["fc00:0:2::/48"]
+    assert_equal [10, "fc00:0:2::/48", nil], [r.metric, r.locator&.prefix, r.locator_only]
+    assert_equal ["ab"], r.adjacencies.map(&:circuit)
+    t = a.decisions[1].srv6_table
+    other = t.node((ISIS::Pdu.dotted_octets("0000.0000.0002") + "\x00".b).b)
+    assert_equal [%w[fc00:0:2:: End], %w[fc00:0:2:1:: End.DT6], %w[fc00:0:2:2:: End.X]],
+                 other.sids.map { [_1.sid, ISIS::Spf::Srv6.behavior_text(_1.behavior)] }
+    assert_equal [[:end, "fc00:0:1::"], [:decap, "fc00:0:1:1::"], [:end_x, "fc00:0:1:2::"]], t.own.map { [_1.kind, _1.sid] }
+    assert_equal "ab", t.own.last.adjacency.circuit
+    assert_empty t.findings
+    assert b.decisions[1].routes["fc00:0:1::/48"].locator
+  end
+
+  # What isisd's API shows of it (docs/isisd.md): show.srv6, the
+  # locator route in show.routes, show.overview and show.topology.
+  def test_the_views
+    a, = pair
+    v = ISIS::Daemon::Views.new(a)
+    s = v.srv6
+    assert_equal [true, "sr0", true, "rfc"], s.values_at(:enabled, :interface, :decap, :receive_policy)
+    assert_equal [{ name: "main", prefix: "fc00:0:1::/48", algorithm: 0, structure: STRUCTURE }], s[:locators]
+    assert_equal [{ sid: "fc00:0:1::", behavior: "End", kind: "end", locator: "main" },
+                  { sid: "fc00:0:1:1::", behavior: "End.DT6", kind: "decap", locator: "main" },
+                  { sid: "fc00:0:1:2::", behavior: "End.X", kind: "end_x", locator: "main", interface: "ab", neighbor: "r2" }],
+                 s[:sids]
+    nodes = s[:levels][1][:nodes]
+    assert_equal %w[0000.0000.0001 0000.0000.0002], nodes.map { _1[:system_id] }.sort
+    r2 = nodes.find { _1[:hostname] == "r2" }
+    assert_equal [{ o: false }, [0], false], r2.values_at(:capabilities, :algorithms, :ignored)
+    assert_equal %w[fc00:0:2:: fc00:0:2:1::], r2[:locators].first[:end_sids].map { _1[:sid] }
+    assert_equal ["fc00:0:2:2::"], r2[:end_x_sids].map { _1[:sid] }
+    assert_empty s[:levels][1][:findings]
+
+    route = v.routes(level: 1).find { _1[:prefix] == "fc00:0:2::/48" }
+    assert_equal [true, 0], route.values_at(:locator, :algorithm)
+    refute v.routes(level: 1).find { _1[:prefix] == "10.255.0.2/32" }&.key?(:locator)
+    assert v.overview[:srv6]
+
+    node = v.topology(level: 1)[:nodes].find { _1[:hostname] == "r2" }
+    assert_equal [{ locator: "fc00:0:2::/48", algorithm: 0, metric: 0, up_down: false, flags: [] }], node[:locators]
+    assert_equal [{ sid: "fc00:0:2::", behavior: "End", structure: STRUCTURE, locator: "fc00:0:2::/48" },
+                  { sid: "fc00:0:2:1::", behavior: "End.DT6", structure: STRUCTURE, locator: "fc00:0:2::/48" }],
+                 node[:end_sids]
+    assert_equal [{ sid: "fc00:0:2:2::", behavior: "End.X", structure: STRUCTURE, algorithm: 0, weight: 0, flags: [] }],
+                 node[:neighbors].first[:end_x_sids]
+  end
+
+  def test_the_views_without_srv6
+    a, = pair({ srv6: nil }, { srv6: nil })
+    v = ISIS::Daemon::Views.new(a)
+    assert_equal({ enabled: false }, v.srv6)
+    refute v.overview.key?(:srv6)
+  end
+
+  # A line of three, a at Level 1, b at both levels, c at Level 2 in
+  # another area, b leaking +leak+.
+  def across(leak: [])
+    a = router(conf(1, [{ name: "ab", hello_interval: 1, hello_multiplier: 3 }]),
+               { "ab" => "00:00:00:00:00:0a" })
+    b = router(conf(2, [{ name: "ab", hello_interval: 1, hello_multiplier: 3 },
+                        { name: "bc", hello_interval: 1, hello_multiplier: 3 }], level: "1-2", leak: leak),
+               { "ab" => "00:00:00:00:00:0b", "bc" => "00:00:00:00:00:0c" })
+    c = router(conf(3, [{ name: "bc", hello_interval: 1, hello_multiplier: 3 }], level: 2, areas: ["49.0002"]),
+               { "bc" => "00:00:00:00:00:0d" })
+    @routers.each(&:start)
+    run_for(20)
+    [a, b, c]
+  end
+
+  # a's locator goes into Level 2 at b, in TLV 27 with R and its End SIDs
+  # (RFC 9352 section 7.1), so c routes to it. c's goes into Level 1 only
+  # as b's leak policy allows, none by default.
+  def test_a_locator_announced_up
+    a, b, c = across
+    assert_equal 20, c.decisions[2].routes["fc00:0:1::/48"].metric
+    entry = grep(c.databases[2][b.originators[2].lsp_id].lsp, ISIS::Tlv::Srv6Locator).flat_map(&:entries)
+                                                                                       .find { _1.locator == "fc00:0:1::/48" }
+    assert_equal [[], %w[R]], [entry.flag_letters, entry.subtlvs_of(ISIS::SubTlv::PrefixAttributeFlags).first.flag_letters]
+    assert_equal %w[fc00:0:1:: fc00:0:1:1::], entry.subtlvs_of(ISIS::SubTlv::Srv6EndSid).map(&:sid)
+    assert_nil a.decisions[1].routes["fc00:0:3::/48"], "nothing leaked by default"
+  end
+
+  # Leaked into Level 1: D and R.
+  def test_a_locator_leaked_down
+    a, = across(leak: ["fc00::/16"])
+    r = a.decisions[1].routes["fc00:0:3::/48"]
+    assert_equal [20, true], [r.metric, r.up_down]
+    assert_equal [%w[D], %w[R]], [r.locator.entry.flag_letters, r.locator.flags]
+  end
+
   def test_refused_without_ipv6
     e = assert_raises(ArgumentError) { router(conf(1, p2p(1), ipv6: false), { "ab" => "00:00:00:00:00:0a" }) }
     assert_match(/srv6 needs ipv6: true/, e.message)

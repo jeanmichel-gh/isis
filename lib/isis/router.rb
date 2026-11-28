@@ -575,6 +575,7 @@ module ISIS
       d.label_table = @label_table
       d.ti_lfa = ti_lfa_modes
       d.flex_algo = @flex_algos[level]
+      d.srv6 = @srv6
       @interfaces.each do |i|
         c = i.circuits.fetch(level)
         d.attach(i.broadcast? ? c : c.levels.fetch(level))

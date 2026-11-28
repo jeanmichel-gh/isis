@@ -9,7 +9,7 @@ class TestDocsIsisd < Minitest::Test
   DOC = File.read(File.expand_path("../../docs/isisd.md", __dir__))
 
   def documented
-    DOC[/^Every method:\n(.*?)\n\n/m, 1].scan(/^\| `([a-z_.]+)` \|/).flatten
+    DOC[/^Every method:\n(.*?)\n\n/m, 1].scan(/^\| `([a-z0-9_.]+)` \|/).flatten
   end
 
   def test_every_method_is_documented

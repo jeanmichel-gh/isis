@@ -44,6 +44,7 @@ module ISIS
         "show.routes" => ->(a, p) { a.views.routes(level: p["level"]) },
         "show.labels" => ->(a, p) { a.views.labels(level: p["level"]) },
         "show.segment_routing" => ->(a, _) { a.views.segment_routing },
+        "show.srv6" => ->(a, _) { a.views.srv6 },
         "show.ti_lfa" => ->(a, _) { a.views.ti_lfa },
         "show.flex_algo" => ->(a, _) { a.views.flex_algo },
         "show.topology" => ->(a, p) { a.views.topology(level: p["level"]) },

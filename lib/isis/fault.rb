@@ -111,10 +111,11 @@ module ISIS
     # One per finding of that design's validation table but
     # locator_not_longest, which needs a second system.
     #
-    # The codec builds them (step 1), and each round trips. The findings
-    # they name are step 3's, in validation.rb, so this group is not yet
-    # in Fault.catalog, which reads each finding's rule: srv6_catalog
-    # gives the entries without one until then.
+    # The codec builds them (step 1), and each round trips; read by
+    # Spf::Srv6.read, each makes its finding (step 3). The group is not
+    # in Fault.catalog, which the injector and the fault matrix serve:
+    # srv6_catalog gives it, until the injector's step takes it
+    # (docs/design/srv6.md, "Work", 6).
     SRV6_STRUCTURE = { block: 32, node: 16, function: 16, argument: 0 }.freeze
 
     SRV6_CATALOG = [
@@ -452,11 +453,10 @@ module ISIS
 
     def srv6_names = SRV6_CATALOG.map(&:first)
 
-    # SRv6's entries as Hashes: name, the finding each is for, the
-    # description and the builder. No channel and no expectation yet:
-    # those are the finding's rule, which comes with the validation step.
+    # SRv6's entries as Hashes, as #catalog gives the others: the
+    # finding's channel, its :rfc action and its clause beside each.
     def srv6_catalog
-      SRV6_CATALOG.map { |name, finding, description, build| { name: name, finding: finding, description: description, build: build } }
+      entries(SRV6_CATALOG)
     end
 
     def srv6_entry(name)
