@@ -30,7 +30,16 @@ module ISIS
   #   TLV 236  the configured IPv6 prefixes, after the IPv4 ones, in every
   #            metric style, since TLV 236 has only a wide metric
   #   TLV 242  with segment routing, in LSP 0: the Router Capability with
-  #            the SRGB, SR-Algorithm 0 and the SRLB (RFC 8667 section 3)
+  #            the SRGB, SR-Algorithm 0 and the SRLB (RFC 8667 section 3);
+  #            with SRv6, the SRv6 Capabilities sub-TLV too (RFC 9352
+  #            section 2), and SR-Algorithm 0 when there is no SR-MPLS
+  #   TLV 27   with SRv6, the SRv6 Locator TLV: each locator with its End
+  #            and End.DT6 SIDs, and the locators leaked or taken from the
+  #            other level (RFC 9352 section 7.1)
+  #
+  # With SRv6 (Srv6::Local), TLV 22 entries carry an End.X SID, or LAN
+  # End.X SIDs toward a pseudonode (RFC 9352 section 8), and TLV 236 the
+  # locators of algorithm 0 (section 5).
   #
   # With segment routing (SegmentRouting), TLV 22 entries also carry
   # Adj-SIDs, or LAN-Adj-SIDs toward a pseudonode, and the wide TLV 135
@@ -124,7 +133,8 @@ module ISIS
     attr_accessor :areas, :protocols, :ip_addresses, :prefixes, :metric_style, :area_key, :is_type,
                   :ipv6_addresses, :ipv6_prefixes, :hostname
     attr_reader :leaked_prefixes, :area_prefixes, :external_prefixes
-    attr_reader :overload, :attached, :segment_routing, :injected, :link_attributes
+    attr_reader :overload, :attached, :segment_routing, :injected, :link_attributes, :srv6
+    attr_reader :leaked_locators, :area_locators
     attr_accessor :flex_algo
 
     def initialize(system_id:, database:, scheduler:, log:, areas: ["49.0001"], protocols: [:ipv4],
@@ -134,7 +144,7 @@ module ISIS
                    minimum_interval: MINIMUM_LSP_GENERATION_INTERVAL, lsp_generation: nil,
                    buffer_size: LSP_BUFFER_SIZE, is_type: nil, level1_database: nil, overload: false,
                    hostname: nil, lifetime: Database::MAX_AGE, segment_routing: nil, link_attributes: {},
-                   flex_algo: nil)
+                   flex_algo: nil, srv6: nil)
       @system_id = Pdu.dotted_octets(system_id)
       # The IS Type in the flags octet: what kind of system this is, not
       # which LSP. 1 for a Level 1 system, 3 for a Level 2 one, which a
@@ -153,6 +163,13 @@ module ISIS
       @hostname = hostname
       # A SegmentRouting, or nil: without it nothing of RFC 8667 is sent.
       @segment_routing = segment_routing
+      # A Srv6::Local, or nil: without it nothing of RFC 9352 is sent.
+      @srv6 = srv6
+      # Locator entries from the other level (Srv6::Local.propagated):
+      # leaked from Level 2 into this Level 1 LSP, or taken from Level 1
+      # into this Level 2 one.
+      @leaked_locators = []
+      @area_locators = []
       # Each circuit's attributes for flex-algo, by circuit name: :affinity
       # (groups), :delay, :te_metric and :srlg (Router#link_attributes).
       @link_attributes = link_attributes
@@ -380,6 +397,19 @@ module ISIS
       changed("area prefixes changed (RFC 1195 section 3.2)") if @generated_at
     end
 
+    # The locators of Level 2 to put in this Level 1 LSP, and those of
+    # Level 1 to put in this Level 2 one, as TLV 27 entries
+    # (Srv6::Local.propagated). A change is a change of content (7.3.6).
+    def leaked_locators=(list)
+      @leaked_locators = list
+      changed("leaked locators changed (RFC 9352 section 7.1)") if @generated_at
+    end
+
+    def area_locators=(list)
+      @area_locators = list
+      changed("area locators changed (RFC 9352 section 7.1)") if @generated_at
+    end
+
     def overload=(on)
       @overload = on
       changed("LSP Database Overload bit #{on ? 'set' : 'cleared'} (RFC 1142 7.3.19.1)") if @generated_at
@@ -496,12 +526,19 @@ module ISIS
       list << Tlv::DynamicHostname.new(@hostname) if @hostname
       list << Tlv::IpInterfaceAddresses.new(@ip_addresses) unless @ip_addresses.empty?
       list << Tlv::Ipv6InterfaceAddresses.new(@ipv6_addresses) unless @ipv6_addresses.empty?
+      extra = @srv6 ? [@srv6.capability_subtlv] : []
       if injected_capability?
         list.concat(@injected.select { |t| t.is_a?(Tlv::RouterCapability) })
       elsif @segment_routing && @flex_algo
-        list.concat(@segment_routing.capabilities(algorithms: @flex_algo.participating, fads: @flex_algo.fads))
+        list.concat(@segment_routing.capabilities(algorithms: @flex_algo.participating, fads: @flex_algo.fads,
+                                                  extra: extra))
       elsif @segment_routing
-        list << @segment_routing.capability
+        list << @segment_routing.capability(extra: extra)
+      elsif @srv6
+        # RFC 9352 section 3: algorithms go in "the Segment Routing
+        # Algorithm sub-TLV, as defined in [RFC8667]", which section 3.2
+        # there says lists 0.
+        list << Tlv::RouterCapability.new(router_id: @srv6.router_id, subtlvs: extra + [SubTlv::SrAlgorithm.new([0])])
       end
       list
     end
@@ -521,9 +558,10 @@ module ISIS
         n = c.is_neighbor or next
         # [ID, metric, addresses]; a simulated link answers without addresses.
         attributes = @link_attributes.empty? ? nil : @link_attributes[circuit_name(c)]
-        [n[0], n[1], n[2], @segment_routing ? adj_sids(c, n.first) : nil, attributes]
+        sids = (@segment_routing ? adj_sids(c, n.first) : []) + (@srv6 ? end_x_sids(c, n.first) : [])
+        [n[0], n[1], n[2], @segment_routing || @srv6 ? sids : nil, attributes]
       end
-      reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes) +
+      reachability(neighbors, @prefixes, @external_prefixes, @leaked_prefixes, @area_prefixes) + locator_tlvs +
         (@injected || []).reject { |t| t.is_a?(Tlv::RouterCapability) }
     end
 
@@ -539,6 +577,36 @@ module ISIS
       else
         @segment_routing.lan_adj_sids(name, circuit.up_neighbors.map { |n| n.system_id.b })
       end
+    end
+
+    def end_x_sids(circuit, id)
+      name = circuit_name(circuit)
+      if id.getbyte(-1).zero?
+        @srv6.end_x_sids(name, id.byteslice(0, 6))
+      else
+        @srv6.lan_end_x_sids(name, circuit.up_neighbors.map { |n| n.system_id.b })
+      end
+    end
+
+    # TLV 27: this system's locators, then those leaked from Level 2 and
+    # those taken from Level 1, as many entries to a TLV as fit. MTID 0,
+    # the only topology here.
+    def locator_tlvs
+      return [] unless @srv6
+
+      entries = @srv6.locator_entries + @leaked_locators + @area_locators
+      groups = []
+      size = 0
+      entries.each do |e|
+        n = e.encode.bytesize
+        if groups.empty? || size + n > 255 - Tlv::Srv6Locator::HEADER_OCTETS
+          groups << []
+          size = 0
+        end
+        groups.last << e
+        size += n
+      end
+      groups.map { |g| Tlv::Srv6Locator.new(entries: g) }
     end
 
     # A prefix as TLV 135 or 236 takes it: its prefix and metric, and with
@@ -603,7 +671,9 @@ module ISIS
         end
         list.concat(pack(Tlv::ExtendedIpReachability, reach))
       end
-      reach6 = (@ipv6_prefixes.map { |p| own_prefix(p) } + externals6.map { |p| p.slice(:prefix, :metric).merge(external: true) } +
+      locators6 = @srv6 ? @srv6.locator_prefixes : []
+      reach6 = (locators6 + @ipv6_prefixes.map { |p| own_prefix(p) } +
+                externals6.map { |p| p.slice(:prefix, :metric).merge(external: true) } +
                 leaked6.map(&down) + area6.map(&across)).map do |p|
         Tlv::Ipv6Reachability.new(p).entries.first
       end
