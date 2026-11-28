@@ -149,6 +149,66 @@ module ISIS
       end
     end
 
+    # A list of sub-TLVs behind a length octet that always comes first, as
+    # TLV 22 frames its sub-TLVs (RFC 5305 section 3) and RFC 9352 frames
+    # TLV 27's (section 7.1, "Sub-TLV-length: 1 octet") and the SID
+    # sub-TLVs' sub-sub-TLVs (7.2, 8.1, 8.2). A class names the registry
+    # its list reads from.
+    #
+    # The length octet is a computed field. A declared length that ran past
+    # the octets that were left is clamped to them (parse rule 1), kept,
+    # and written back while the list is unchanged (rule 2). A declared
+    # length short of what was left leaves the rest to the parent, whose
+    # octets they are. Neither reaches the hash: a hash never carries a
+    # computed field.
+    module FramedList
+      attr_reader :subtlvs
+
+      # The declared length, when it ran past the octets that were left.
+      def subtlv_length_clamped = @subtlv_length
+
+      private
+
+      # Read the length octet and the list from the front of +rest+, under
+      # +registry+. Returns the octets after the list.
+      def read_framed_list(rest, registry)
+        declared = rest.getbyte(0)
+        body = (rest.byteslice(1, declared) || "").b
+        @subtlv_length = (declared unless body.bytesize == declared)
+        @subtlv_body = body
+        @subtlvs = SubTlv::List.parse_under(registry, Octets.new(body))
+        (rest.byteslice(1 + body.bytesize..) || "").b
+      end
+
+      # The length octet and the list. A list over 255 octets cannot be
+      # framed by one octet, so it is refused rather than cut.
+      def framed_list_octets
+        body = @subtlvs.encode
+        raise ArgumentError, "sub-TLVs are #{body.bytesize} octets, max 255" if body.bytesize > 255
+
+        n = @subtlv_length && body == @subtlv_body ? @subtlv_length : body.bytesize
+        [n].pack("C") + body
+      end
+
+      def framed_list_hash(h)
+        sub = @subtlvs.to_hash
+        h[:subtlvs] = sub[:tlvs] unless sub[:tlvs].empty?
+        h[:subtlv_tail] = sub[:tail] if sub[:tail]
+        h
+      end
+
+      # From a list of sub-TLV hashes, or of sub-TLV objects.
+      def framed_list_from(registry, subtlvs, subtlv_tail = "")
+        subtlvs = Array(subtlvs)
+        @subtlvs = if subtlvs.all? { _1.is_a?(Hash) }
+                     SubTlv::List.new(registry, { tlvs: subtlvs, tail: subtlv_tail })
+                   else
+                     SubTlv::List.new(registry, subtlvs)
+                   end
+        @subtlv_length = nil
+      end
+    end
+
     # A SID or label field as RFC 8667 section 2.1.1.1 gives it: "a 4-octet
     # index" when the V and L flags are clear, "a 3-octet local label where
     # the 20 rightmost bits are used for encoding the label value" when

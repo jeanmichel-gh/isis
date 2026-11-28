@@ -277,5 +277,9 @@ module ISIS
     end
     register_under(Tlv::ExtendedIpReachability::TYPE, Fapm::TYPE, :fapm, Fapm)
     register_under(Tlv::Ipv6Reachability::TYPE, Fapm::TYPE, :fapm, Fapm)
+    # And under TLV 27, whose sub-TLV space is the prefix TLVs' (RFC 9352
+    # section 7). RFC 9350 section 8 has a FAPM there "MUST be ignored",
+    # and 9352 11.1.2 marks it "n": it is read so that it can be reported.
+    register_under(Tlv::Srv6Locator::TYPE, Fapm::TYPE, :fapm, Fapm)
   end
 end

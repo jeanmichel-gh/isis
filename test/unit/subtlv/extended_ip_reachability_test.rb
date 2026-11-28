@@ -84,4 +84,36 @@ class TestSubTlvExtendedIpReachability < Minitest::Test
     )
     assert_equal "8712" "0000000a" "60" "0aff0001" "08" "0306400000000001", tlv.to_shex
   end
+
+  # Prefix Attribute Flags, RFC 7794 section 2.1: type 4, the bits from
+  # bit 0, the high bit of the first octet: X 0x80, R 0x40, N 0x20, and
+  # A, bit 4, 0x08 (RFC 9352 section 6). Our own arithmetic.
+  def test_prefix_attribute_flags_masks
+    { "X" => "040180", "R" => "040140", "N" => "040120", "E" => "040110", "A" => "040108" }.each do |letter, hex|
+      f = ISIS::SubTlv::PrefixAttributeFlags.new(flags: [letter])
+      assert_equal hex, f.to_shex, letter
+      assert_equal [letter], replays(ISIS::SubTlv::PrefixAttributeFlags, hex).flag_letters
+    end
+    assert_equal "040128", ISIS::SubTlv::PrefixAttributeFlags.new(flags: %w[N A]).to_shex
+  end
+
+  # Unnamed bits are kept as reserved:, by number; a value with more
+  # octets than its bits need, or none, keeps its length.
+  def test_prefix_attribute_flags_reserved_and_length
+    f = replays(ISIS::SubTlv::PrefixAttributeFlags, "04022040")
+    assert_equal({ flags: %w[N], reserved: [9] }, f.to_hash)
+    assert_equal "Prefix Attribute Flags N, bit 9", f.to_s
+    assert_equal({ flags: %w[X], length: 2 }, replays(ISIS::SubTlv::PrefixAttributeFlags, "04028000").to_hash)
+    assert_equal({ length: 0 }, replays(ISIS::SubTlv::PrefixAttributeFlags, "0400").to_hash)
+    assert ISIS::SubTlv::PrefixAttributeFlags.new(flags: %w[A]).flag?("A")
+    assert_raises(ArgumentError) { ISIS::SubTlv::PrefixAttributeFlags.new(flags: %w[Z]) }
+  end
+
+  # Under 135, 236 and 27, which share the prefix sub-TLV registry (RFC
+  # 9352 section 7).
+  def test_prefix_attribute_flags_registered
+    [135, 236, 27].each do |parent|
+      assert_equal ISIS::SubTlv::PrefixAttributeFlags, ISIS::SubTlv.class_under(parent, 4), parent
+    end
+  end
 end

@@ -3,7 +3,10 @@
 Status: approved by the owner, 2026-11-25 ("approve the SRv6 spec,
 isis #135"), with the answers in "Decisions", at the end. The owner gave
 no separate answers, so each question takes this spec's recommended
-answer, the default taken at approval. No code is started yet.
+answer, the default taken at approval. Step 1, the codec, is built (#152,
+2026-11-28): the classes of "Wire format", the behaviour registry, FRR
+10.7.1's two LSPs as fixtures, and the `SRV6` group's wire builders,
+whose findings wait for step 3. Steps 2 to 9 are not started.
 
 This is P6's IS-IS half in routescope's `docs/protocol-coverage.md`:
 "IS-IS SRv6 locators and SIDs, BGP services over SRv6. The VM's kernel
@@ -478,6 +481,15 @@ TLV 27  44 000000000000000030fc00000100011c051a00002bfc0000010001000000000000000
 - In the kernel: `fc00:1:1::/48 ... action End flavors next-csid lblen
   32 nflen 16 dev sr0` and `fc00:1:1:e000::/64 ... action End.X nh6
   fe80::... oif eth0 flavors next-csid lblen 32 nflen 16 dev eth0`.
+
+Both LSPs were captured again on 2026-11-28, with the End.X SID in
+TLV 22, for the codec's fixtures: two FRR 10.7.1 containers, f1 uSID
+and f2 not, each with `fc00:0:N::/48`, point to point at Level 2, in a
+containerlab lab made and destroyed for it. f1's is
+`test/fixtures/frr-10.7.1-l2-lsp-srv6-usid.hex`, behaviours 43 and 52;
+f2's is `test/fixtures/frr-10.7.1-l2-lsp-srv6.hex`, behaviours 1 and 5.
+Each decodes with no SRv6 Unknown and replays byte for byte
+(`test/unit/pdu/lsp_srv6_test.rb`).
 
 FRR's uSID SID Structure has argument length 0. RFC 9800 section 8's
 example gives "AL: 48 (= 128-48-16-16)", the argument covering the rest

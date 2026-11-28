@@ -105,6 +105,44 @@ module ISIS
        end]
     ].freeze
 
+    # SRv6's entries (RFC 9352; docs/design/srv6.md, "3. Negative tests"),
+    # built as the SR entries are: an LSP with one wrong thing in its
+    # SRv6 data, everything else what Fault.srv6 gives a correct system.
+    # One per finding of that design's validation table but
+    # locator_not_longest, which needs a second system.
+    #
+    # The codec builds them (step 1), and each round trips. The findings
+    # they name are step 3's, in validation.rb, so this group is not yet
+    # in Fault.catalog, which reads each finding's rule: srv6_catalog
+    # gives the entries without one until then.
+    SRV6_STRUCTURE = { block: 32, node: 16, function: 16, argument: 0 }.freeze
+
+    SRV6_CATALOG = [
+      [:locator_size_invalid, :locator_size_invalid, "a locator with a Loc-Size of 129",
+       ->(c) { Fault.srv6(c, locator: { locator: nil, size: 129, octets: IPAddr.new(c[:locator]).hton.unpack1("H*") }) }],
+      [:locator_algorithm_conflict, :locator_algorithm_conflict,
+       "the same locator in a second SRv6 Locator TLV, at algorithm 128",
+       ->(c) { Fault.srv6(c, more: [{ algorithm: 128 }]) }],
+      [:end_sid_outside_locator, :end_sid_outside_locator, "an End SID that is not in its locator",
+       ->(c) { Fault.srv6(c, end_sid: { sid: "fc00:0:99::" }) }],
+      [:end_x_sid_no_locator, :end_x_sid_no_locator, "an End.X SID that no locator of the system covers",
+       ->(c) { Fault.srv6(c, end_x: { sid: "fc00:0:99:1::" }) }],
+      [:sid_structure_twice, :sid_structure_twice, "an End SID with two SID Structure sub-sub-TLVs",
+       ->(c) { Fault.srv6(c, end_sid: { subtlvs: [{ sid_structure: SRV6_STRUCTURE }] * 2 }) }],
+      [:sid_structure_too_long, :sid_structure_too_long, "an End SID whose SID Structure sums to 144 bits",
+       ->(c) { Fault.srv6(c, end_sid: { subtlvs: [{ sid_structure: { block: 64, node: 32, function: 32, argument: 16 } }] }) }],
+      [:behavior_not_allowed, :behavior_not_allowed, "an End SID with behaviour End.X, 5",
+       ->(c) { Fault.srv6(c, end_sid: { behavior: "End.X" }) }],
+      [:behavior_unknown, :behavior_unknown, "an End SID with behaviour 125, which IANA lists as unassigned",
+       ->(c) { Fault.srv6(c, end_sid: { behavior: 125 }) }],
+      [:anycast_and_node, :anycast_and_node, "a locator whose Prefix Attribute Flags set both N and A",
+       ->(c) { Fault.srv6(c, flags: %w[N A]) }],
+      [:x_flag_mismatch, :x_flag_mismatch, "a locator with X set in TLV 27 and clear in TLV 236",
+       ->(c) { Fault.srv6(c, flags: %w[X]) }],
+      [:fapm_in_locator, :fapm_in_locator, "a FAPM for algorithm 128 in the SRv6 Locator TLV",
+       ->(c) { Fault.srv6(c, locator_subtlvs: [{ fapm: { algorithm: 128, metric: 10 } }]) }]
+    ].freeze
+
     # The second group: topologies, well formed but hard for TI-LFA (RFC
     # 9855), each with the RFC section it tests. Each entry: [name,
     # description, rfc, the topology, the point of local repair (PLR),
@@ -412,6 +450,28 @@ module ISIS
       CATALOG.map(&:first)
     end
 
+    def srv6_names = SRV6_CATALOG.map(&:first)
+
+    # SRv6's entries as Hashes: name, the finding each is for, the
+    # description and the builder. No channel and no expectation yet:
+    # those are the finding's rule, which comes with the validation step.
+    def srv6_catalog
+      SRV6_CATALOG.map { |name, finding, description, build| { name: name, finding: finding, description: description, build: build } }
+    end
+
+    def srv6_entry(name)
+      srv6_catalog.find { |e| e[:name] == name } or
+        raise ArgumentError, "unknown SRv6 fault #{name.inspect}; they are #{srv6_names.join(', ')}"
+    end
+
+    # An SRv6 entry's TLVs, and the entry as an LSP, as #tlvs and #build
+    # give the others.
+    def srv6_tlvs(name, **ctx) = srv6_entry(name)[:build].call(context(**ctx))
+
+    def srv6_build(name, level: 2, sequence: 1, lifetime: 1200, **ctx)
+      lsp(srv6_tlvs(name, **ctx), level: level, sequence: sequence, lifetime: lifetime, **ctx)
+    end
+
     def flex_algo_names = FLEX_ALGO_CATALOG.map(&:first)
 
     # The entries, as Hashes: the finding's channel, what the RFC expects
@@ -443,10 +503,14 @@ module ISIS
     # Router ID (the loopback's address unless given), its SRGB as
     # [first, size], a second prefix, and its neighbors with their
     # metrics, as { "0000.0000.0002" => 10 }, so SPF reaches it.
+    #
+    # Its SRv6 locator is fc00:0:N::/48, N the System ID's last group, as
+    # the srv6 labs number theirs, unless given.
     def context(system_id: "0000.0000.0003", loopback: "10.255.0.3/32", index: INDEX, srgb: SRGB,
-                second: "10.255.9.3/32", neighbors: {}, router_id: nil)
+                second: "10.255.9.3/32", neighbors: {}, router_id: nil, locator: nil)
+      locator ||= "fc00:0:#{system_id.split('.').last.to_i(16).to_s(16)}::/48"
       { system_id: system_id, loopback: loopback, router_id: router_id || loopback.split("/").first, index: index,
-        srgb: srgb, second: second, neighbors: neighbors }
+        srgb: srgb, second: second, neighbors: neighbors, locator: locator }
     end
 
     # The entry's TLVs: a Router Capability and the reachability of its
@@ -561,6 +625,41 @@ module ISIS
     # An ASLA sub-TLV with X and a TE default metric, as a sub-TLV Hash.
     def asla_te(metric)
       { asla: { applications: %w[X], subtlvs: [{ te_default_metric: { metric: metric } }] } }
+    end
+
+    # The SID of function +function+ in the context's locator, with
+    # SRV6_STRUCTURE: fc00:0:3:: for 0, fc00:0:3:1:: for 1.
+    def srv6_sid(ctx, function)
+      loc = IPAddr.new(ctx[:locator])
+      shift = 128 - SRV6_STRUCTURE[:block] - SRV6_STRUCTURE[:node] - SRV6_STRUCTURE[:function]
+      IPAddr.new(loc.to_i | (function << shift), Socket::AF_INET6).to_s
+    end
+
+    # A system's SRv6 TLVs, correct unless told (RFC 9352): a Router
+    # Capability with SRv6 Capabilities and SR-Algorithm 0 (sections 2
+    # and 3); the locator in TLV 236 at metric 0 (section 5's SHOULD); TLV
+    # 27 with the locator at metric 0, algorithm 0, Prefix Attribute
+    # Flags +flags+ (section 7.1's SHOULD; none set by default), then
+    # +locator_subtlvs+, then its End SID, function 0, with a SID
+    # Structure; and a TLV 22 entry to the first neighbour with an End.X
+    # SID, function 1, with one. +locator+, +end_sid+ and +end_x+ are
+    # merged into the locator entry, the End SID and the End.X SID; each
+    # of +more+ is merged into a copy of the locator entry, sent in a
+    # second TLV 27.
+    def srv6(ctx, locator: {}, end_sid: {}, end_x: {}, flags: [], locator_subtlvs: [], more: [])
+      structure = [{ sid_structure: SRV6_STRUCTURE }]
+      capability = Tlv::RouterCapability.new(router_id: ctx[:router_id],
+                                             subtlvs: [{ srv6_capabilities: {} }, { sr_algorithm: [0] }])
+      sid = { behavior: "End", sid: srv6_sid(ctx, 0), subtlvs: structure }.merge(end_sid)
+      entry = { locator: ctx[:locator], metric: 0, algorithm: 0,
+                subtlvs: [{ prefix_attribute_flags: { flags: flags } }] + locator_subtlvs + [{ end_sid: sid }] }
+      entry = entry.merge(locator).compact
+      reach = Tlv::Ipv6Reachability.new([{ prefix: ctx[:locator], metric: 0 }])
+      neighbor, metric = link_neighbor(ctx)
+      x = { behavior: "End.X", sid: srv6_sid(ctx, 1), subtlvs: structure }.merge(end_x)
+      link = Tlv::ExtendedIsReachability.new({ neighbor: neighbor, metric: metric, subtlvs: [{ end_x_sid: x }] })
+      [capability, reach, Tlv::Srv6Locator.new(entries: [entry]), link] +
+        more.map { Tlv::Srv6Locator.new(entries: [entry.merge(_1)]) }
     end
 
     # A system's SR TLVs, correct unless told: one SR-Capabilities per
