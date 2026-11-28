@@ -28,6 +28,15 @@ module ISIS
   #     srgb: [{start: 16000, size: 8000}]   when absent
   #     srlb: {start: 15000, size: 1000}
   #     receive_policy: rfc          rfc, strict or lenient (Validation)
+  #   srv6:                         SRv6, RFC 9352 (Srv6::Local); off when
+  #     locators:                   absent; needs ipv6: true
+  #       - name: main
+  #         prefix: fc00:0:1::/48
+  #         algorithm: 0            0 only until flex-algo locators
+  #         structure: {block: 32, node: 16, function: 16, argument: 0}
+  #     interface: sr0              the dummy the End and End.DT6 SIDs sit on
+  #     decap: true                 an End.DT6 SID per locator
+  #     receive_policy: rfc         rfc, strict or lenient (Validation)
   #   affinity_map: {red: 1}        names for the interfaces' affinity, each a
   #                                 group, 0 to 1023 (RFC 7308)
   #   flex_algo: [{algorithm: 128, metric_type: delay, ...}]
@@ -58,6 +67,7 @@ module ISIS
   #       hello_interval: 3
   #       hello_multiplier: 10
   #       adj_sid: true             false: no Adj-SID for its adjacencies
+  #       end_x: true               false: no SRv6 End.X SID for them
   #       bfd: false                true: BFD for its adjacencies, through
   #                                 bfdd4r, with TLV 148 (RFC 6213)
   #       bfd_tlv: true             true or false: what TLV 148 says,
@@ -91,7 +101,7 @@ module ISIS
 
     # The keys an interface may give, as the class comment lists them.
     INTERFACE_KEYS = %i[name network ip_addresses metric priority hello_interval hello_multiplier
-                        adj_sid bfd bfd_tlv ti_lfa affinity delay te_metric srlg].freeze
+                        adj_sid end_x bfd bfd_tlv ti_lfa affinity delay te_metric srlg].freeze
 
     # The highest affinity group: FRR 10.7.1's affinity-map takes bit
     # positions 0 to 1023, measured.
@@ -111,7 +121,7 @@ module ISIS
       def each_circuit(&block) = circuits.values.uniq.each(&block)
     end
 
-    attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing,
+    attr_reader :config, :system_id, :levels, :databases, :originators, :decisions, :interfaces, :segment_routing, :srv6,
                 :label_table, :flex_config, :flex_algos,
                 :leak, :summary, :redistributions, :adapters, :log, :scheduler, :clock, :bfd
 
@@ -360,6 +370,9 @@ module ISIS
       @segment_routing = SegmentRouting.from_config(@config[:segment_routing], router_id: @config[:router_id],
                                                     prefixes: @config.fetch(:prefixes, []),
                                                     ipv6: protocols.include?(:ipv6), no_adj_sid: no_adj_sid)
+      @srv6 = Srv6::Local.from_config(@config[:srv6], ipv6: protocols.include?(:ipv6), router_id: @config[:router_id],
+                                      prefixes: @config.fetch(:prefixes, []),
+                                      ipv6_prefixes: @config.fetch(:ipv6_prefixes, []), no_end_x: circuits_without(:end_x))
       @flex_config = self.class.flex_config(@config)
       @flex_algos = {}
       @levels.each do |level|
@@ -431,7 +444,7 @@ module ISIS
                      buffer_size: c.fetch(:lsp_buffer_size, Originator::LSP_BUFFER_SIZE),
                      is_type: both? ? 3 : nil, level1_database: level == 2 ? @databases[1] : nil,
                      overload: c.fetch(:overload, false), segment_routing: @segment_routing,
-                     link_attributes: link_attributes, flex_algo: @flex_algos[level])
+                     link_attributes: link_attributes, flex_algo: @flex_algos[level], srv6: @srv6)
     end
 
     # Each interface's attributes for flex-algo, by circuit name, as the
@@ -524,8 +537,11 @@ module ISIS
 
     # The circuits of the interfaces whose configuration says adj_sid:
     # false. A LAN circuit at both levels is named for its level.
-    def no_adj_sid
-      @config[:interfaces].select { _1[:adj_sid] == false }.flat_map do |c|
+    def no_adj_sid = circuits_without(:adj_sid)
+
+    # The circuits of the interfaces whose configuration sets +key+ false.
+    def circuits_without(key)
+      @config[:interfaces].select { _1[key] == false }.flat_map do |c|
         c[:network] == "broadcast" && both? ? @levels.map { |l| "#{c[:name]}-l#{l}" } : [c[:name]]
       end
     end

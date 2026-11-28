@@ -93,13 +93,15 @@ module ISIS
     # "the S-Flag in the Router Capability TLV [RFC7981] MUST be unset";
     # then SR-Capabilities with I, and V with IPv6; SR-Algorithm 0 (section
     # 3.2: "algorithm 0 MUST be present"); and the SRLB (section 3.3).
-    def capability(algorithms: [0])
+    # +extra+ sub-TLVs follow, as SRv6's Capabilities does (RFC 9352
+    # section 2).
+    def capability(algorithms: [0], extra: [])
       Tlv::RouterCapability.new(
         router_id: @router_id.to_s,
         subtlvs: [SubTlv::SrCapabilities.new(flags: @ipv6 ? %w[I V] : %w[I],
                                              descriptors: @srgb.map { |first, size| { range: size, label: first } }),
                   SubTlv::SrAlgorithm.new(algorithms),
-                  SubTlv::SrLocalBlock.new(descriptors: [{ range: @srlb[1], label: @srlb[0] }])]
+                  SubTlv::SrLocalBlock.new(descriptors: [{ range: @srlb[1], label: @srlb[0] }])] + extra
       )
     end
 
@@ -108,8 +110,8 @@ module ISIS
     # (RFC 9350 section 11), and the FAD sub-TLVs +fads+ after it, S clear
     # (section 5.1). FADs that do not fit in the first TLV's 255 octets go
     # in a second TLV 242 with the same Router ID, and so on.
-    def capabilities(algorithms: [], fads: [])
-      first = capability(algorithms: [0] + algorithms)
+    def capabilities(algorithms: [], fads: [], extra: [])
+      first = capability(algorithms: [0] + algorithms, extra: extra)
       list = [first]
       fads.each do |fad|
         tlv = list.last

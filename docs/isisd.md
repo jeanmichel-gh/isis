@@ -79,6 +79,45 @@ interfaces:
   - { name: eth1, adj_sid: false }       # no Adj-SID on this one
 ```
 
+SRv6 (RFC 9352) is off unless `srv6` is there, and needs `ipv6: true`.
+With it, isisd sends its locators and their SIDs
+(`docs/design/srv6.md`, step 2):
+
+- TLV 242 carries the SRv6 Capabilities sub-TLV, O clear, beside the SR
+  sub-TLVs, or with SR-Algorithm 0 alone when there is no
+  `segment_routing`. Its Router ID is IPv4: `router_id`, or the first
+  IPv4 /32 prefix.
+- TLV 27, the SRv6 Locator TLV, carries each locator at metric 0, with
+  Prefix Attribute Flags, none set, its End SID (function 0) and, with
+  `decap`, its End.DT6 SID (function 1), each with a SID Structure.
+- TLV 236 carries each locator at metric 0 too, for routers without
+  SRv6 (RFC 9352 section 5).
+- Each TLV 22 entry to an adjacency carries an End.X SID, function 2 and
+  up, one per adjacency, kept while isisd runs; on a LAN, the entry to
+  the DIS carries a LAN End.X SID per neighbour. `end_x: false` on an
+  interface leaves its adjacencies without one.
+
+A locator's prefix is the block and the node, and the structure's four
+lengths add up to 128 at most (RFC 8986 section 3.1). Two locators must
+not overlap, and a locator must not be one of `ipv6_prefixes`. Only
+algorithm 0 for now. isisd installs no SID yet, and reads none of other
+systems' SRv6 data: that is the design's steps 3 and 4. A key `srv6` does
+not know is refused, with the keys it takes.
+
+```yaml
+ipv6: true
+router_id: 10.255.0.1
+srv6:
+  locators:
+    - name: main
+      prefix: fc00:0:1::/48
+      structure: { block: 32, node: 16, function: 16, argument: 0 }
+  interface: sr0          # the dummy its SIDs will sit on
+  decap: true             # an End.DT6 SID per locator; the default
+interfaces:
+  - { name: eth1, end_x: false }        # no End.X SID on this one
+```
+
 BFD (RFC 5880) is per interface, with `bfd: true`. isisd asks bfdd4r,
 bfd4r's daemon, for sessions through `BFD::Client`, under the client name
 `isisd`; bfdd4r runs beside it, one per network namespace, and the
