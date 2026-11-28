@@ -7,7 +7,7 @@ answer, the default taken at approval. Step 1, the codec, is built (#152,
 2026-11-28): the classes of "Wire format", the behaviour registry, FRR
 10.7.1's two LSPs as fixtures, and the `SRV6` group's wire builders,
 whose findings wait for step 3. Step 2, configuration and
-origination, is built (2026-11-28): FRR 10.7.1 lists isisd as an SRv6
+origination, is built (#153, 2026-11-28): FRR 10.7.1 lists isisd as an SRv6
 node and decodes its SIDs ("Step 2's gate", below). Steps 3 to 9 are
 not started.
 
