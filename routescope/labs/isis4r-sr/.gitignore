@@ -1,0 +1,8 @@
+# Runtime state, not source. notes.jsonl is not here: the lab's git
+# keeps the notes (routescope lib/routescope/notes.rb).
+recordings/
+clab-*/
+.*.clab.yml.bak
+# A node's run folder is mounted into it: keep the folder, not what it writes.
+*-run/*
+!*-run/.gitkeep
