@@ -6,7 +6,10 @@ no separate answers, so each question takes this spec's recommended
 answer, the default taken at approval. Step 1, the codec, is built (#152,
 2026-11-28): the classes of "Wire format", the behaviour registry, FRR
 10.7.1's two LSPs as fixtures, and the `SRV6` group's wire builders,
-whose findings wait for step 3. Steps 2 to 9 are not started.
+whose findings wait for step 3. Step 2, configuration and
+origination, is built (2026-11-28): FRR 10.7.1 lists isisd as an SRv6
+node and decodes its SIDs ("Step 2's gate", below). Steps 3 to 9 are
+not started.
 
 This is P6's IS-IS half in routescope's `docs/protocol-coverage.md`:
 "IS-IS SRv6 locators and SIDs, BGP services over SRv6. The VM's kernel
@@ -502,6 +505,58 @@ FRR 10.7.1 computes no TI-LFA repair over SRv6: routescope measured
 Its isisd has `isis_area_delete_backup_srv6_endx_sids`, so it allocates
 backup End.X SIDs, but it builds no repair list. So FRR can be P or a
 transit on isisd's repairs, never the PLR.
+
+## Step 2's gate
+
+Measured 2026-11-28 on ospflab: isisd from `claude/srv6-origination`,
+built as `isis4r:7d13e5e` with `vm-build`, against one FRR 10.7.1, point
+to point at Level 2, in a containerlab lab made and destroyed for it.
+isisd had `fc00:0:1::/48`, structure 32, 16, 16, 0. On FRR:
+
+```
+f1# show isis segment-routing srv6 node
+ IS-IS L2 SRv6-Nodes:
+ System ID       Algorithm  SRH Max SL  SRH Max End Pop  SRH Max H.encaps  SRH Max End D
+ 0000.0000.0001  SPF        0           0                0                 0
+ 0000.0000.0002  SPF        3           3                2                 5
+
+f1# show isis database detail r1.00-00
+  Router Capability: 10.255.0.1 , D:0, S:0
+    SR Algorithm:
+      0: SPF
+    SRv6: O:0
+  Extended Reachability: 0000.0000.0002.00 (Metric: 10)
+    Local Interface IP Address(es): 10.0.12.1
+    SRv6 End.X SID: fc00:0:1:2::, Algorithm: SPF, Weight: 0, Endpoint Behavior: End.X, Flags: B:0, S:0, P:0
+        SRv6 SID Structure Locator Block length: 32, Locator Node length: 16, Function length: 16, Argument length: 0,
+  IPv6 Reachability: fc00:0:1::/48 (Metric: 0)
+  SRv6 Locator: fc00:0:1::/48 (Metric: 0) standard
+    Sub-TLVs:
+      SRv6 End SID Endpoint Behavior: End, SID value: fc00:0:1::
+        ...
+      SRv6 End SID Endpoint Behavior: End.DT6, SID value: fc00:0:1:1::
+        ...
+
+f1# show ipv6 route fc00:0:1::/48
+Routing entry for fc00:0:1::/48
+  Known via "isis", distance 115, metric 10, best
+```
+
+The MSDs show 0 since isisd sends none (decision 5). FRR shows no Prefix
+Attribute Flags line for the locator, which isisd sends with no flag set.
+`test/interop/frr_srv6_test.rb` checks the same in network namespaces
+against the FRR the harness runs, 10.5.1 on ospflab and the one CI
+installs.
+
+Two parts of step 2 wait for step 3:
+
+- **Leaking.** The originator sends locators from the other level in TLV
+  27, with D set going down and R in the Prefix Attribute Flags either
+  way (`Srv6::Local.propagated`, `leaked_locators` and `area_locators`).
+  Choosing which locators to leak needs the locator routes step 3 reads,
+  so `Spf::Leak` and `Spf::Summary` do not hand any over yet.
+- **`ti_lfa` with `srv6` and no `segment_routing`** is still refused:
+  TI-LFA over SRv6 is step 5.
 
 ## The design
 
