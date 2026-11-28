@@ -179,6 +179,34 @@ data"). `ISIS::Fault.flex_algo_catalog` lists them; `entry`, `tlvs`, `build` and
 | `fapm_twice` | `fapm_twice` | two FAPMs for algorithm 128 on the loopback, metrics 10 and 20 |
 | `prefix_sid_algorithm_twice` | `prefix_sid_algorithm_twice` | two Prefix-SIDs for algorithm 0 on the loopback, indexes 3 and 4 |
 
+### SRv6
+
+The SRv6 entries, `ISIS::Fault::SRV6_CATALOG` (`docs/design/srv6.md`,
+"3. Negative tests"), each with one wrong thing in a system's SRv6 data,
+everything else what `Fault.srv6` gives a correct system: SRv6
+Capabilities, the locator in TLV 236 and in TLV 27, an End SID and an
+End.X SID with a SID Structure. Each is named for the finding it will
+make. The codec builds them, and `test/unit/fault_srv6_test.rb` holds
+each to its one change and to its round trip. The findings are the
+validation step's, so until then the entries are not in
+`Fault.catalog`, which reads each finding's rule:
+`ISIS::Fault.srv6_catalog`, `srv6_tlvs` and `srv6_build` give them, a
+Level 2 LSP by default.
+
+| Entry | Builds |
+| --- | --- |
+| `locator_size_invalid` | a locator with a Loc-Size of 129 |
+| `locator_algorithm_conflict` | the same locator in a second SRv6 Locator TLV, at algorithm 128 |
+| `end_sid_outside_locator` | an End SID that is not in its locator |
+| `end_x_sid_no_locator` | an End.X SID that no locator of the system covers |
+| `sid_structure_twice` | an End SID with two SID Structure sub-sub-TLVs |
+| `sid_structure_too_long` | an End SID whose SID Structure sums to 144 bits |
+| `behavior_not_allowed` | an End SID with behaviour End.X, 5 |
+| `behavior_unknown` | an End SID with behaviour 125, which IANA lists as unassigned |
+| `anycast_and_node` | a locator whose Prefix Attribute Flags set both N and A |
+| `x_flag_mismatch` | a locator with X set in TLV 27 and clear in TLV 236 |
+| `fapm_in_locator` | a FAPM for algorithm 128 in the SRv6 Locator TLV |
+
 ### TI-LFA's topologies
 
 The catalog's second group, `ISIS::Fault::TOPOLOGIES`: topologies that

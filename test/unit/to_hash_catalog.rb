@@ -100,7 +100,32 @@ module ToHashCatalog
     # Two SRLGs; one and a tail.
     "ISIS::SubTlv::FadExcludeSrlg" => %w[05080000000a00000014 05050000000aff],
     # Algorithm 128, metric 20; a tail; too short.
-    "ISIS::SubTlv::Fapm" => %w[06058000000014 0606800000001400 06028000]
+    "ISIS::SubTlv::Fapm" => %w[06058000000014 0606800000001400 06028000],
+    # The SRv6 classes (docs/design/srv6.md, step 1). MTID 2 with an R
+    # bit; a locator with D, a reserved flag bit, algorithm 128, Prefix
+    # Attribute Flags X and A, and an End SID; a Loc-Size of 47 with a
+    # trailing bit set; a tail. Then a Loc-Size of 129, and too short.
+    "ISIS::Tlv::Srv6Locator" => %w[
+      1b3f90020000000a838030fc00000000011f040188051a000001fc000000000100000000000000000000060104201010000000000000002ffc000000000100abcd
+      1b1a000000000000000081fc00000000010000000000000000000000
+      1b0100
+    ],
+    # Reserved flags, behaviour 125 that no row names, a SID Structure
+    # and a list tail, then a sub-TLV tail; too short.
+    "ISIS::SubTlv::Srv6EndSid" => %w[051c81007dfc00000000010000000000000000000007010420101000ffee 050400000100],
+    # B, S, P and a reserved bit, algorithm 128, weight 7, End.X with
+    # NEXT-CSID, a SID Structure, a tail; too short.
+    "ISIS::SubTlv::Srv6EndXSid" => %w[2b1de180070034fc000000000100000000000000000000060104201010009f 2b0400000000],
+    "ISIS::SubTlv::Srv6LanEndXSid" => %w[2c220000000000024000000005fc00000000010000000000000000000006010420101000 2c03000000],
+    # 32/16/16/0; a tail; too short.
+    "ISIS::SubTlv::Srv6SidStructure" => %w[010420101000 010520101000ee 01022010],
+    # O with reserved bits and an unknown sub-sub-TLV; too short.
+    "ISIS::SubTlv::Srv6Capabilities" => %w[1905c0010101aa 190100],
+    # FRR 10.7.1's four SRv6 MSDs; a type twice and a tail.
+    "ISIS::SubTlv::NodeMsd" => %w[170829032a032c022d05 1705010a0105ff],
+    "ISIS::SubTlv::LinkMsd" => %w[0f04290301ff 0f00],
+    # X and A; N and bit 9; X in two octets; no octet at all.
+    "ISIS::SubTlv::PrefixAttributeFlags" => %w[040188 04022040 04028000 0400]
   }.freeze
 
   # Class name => { loses:, recipe:, decision: }. None measured yet.
@@ -112,7 +137,7 @@ module ToHashCatalog
     ISIS::Pdu ISIS::Pdu::Csnp ISIS::Pdu::LanHello ISIS::Pdu::Layout ISIS::Pdu::Lsp ISIS::Pdu::Malformed
     ISIS::Pdu::P2pHello ISIS::Pdu::Psnp ISIS::Pdu::Truncated ISIS::Pdu::Unknown
     ISIS::SubTlv ISIS::SubTlv::Ipv4Address ISIS::SubTlv::Ipv6Address ISIS::SubTlv::Ipv4InterfaceAddress ISIS::SubTlv::Ipv4NeighborAddress
-    ISIS::SubTlv::LabelBlock ISIS::SubTlv::List ISIS::SubTlv::Unknown
+    ISIS::SubTlv::LabelBlock ISIS::SubTlv::List ISIS::SubTlv::Msd ISIS::SubTlv::Srv6Sid ISIS::SubTlv::Unknown
     ISIS::Tlv ISIS::Tlv::ExtendedIsReachability ISIS::Tlv::AreaAddresses ISIS::Tlv::Authentication
     ISIS::Tlv::BfdEnabled ISIS::Tlv::DynamicHostname ISIS::Tlv::IpInternalReachability
     ISIS::Tlv::IpExternalReachability ISIS::Tlv::IpInterfaceAddresses ISIS::Tlv::Ipv6InterfaceAddresses

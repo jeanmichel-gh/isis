@@ -87,13 +87,23 @@ them and fails if one is missing.
 - `ISIS::SubTlv::LanAdjSid`
 - `ISIS::SubTlv::LinkDelay`
 - `ISIS::SubTlv::LinkIdentifiers`
+- `ISIS::SubTlv::LinkMsd`
 - `ISIS::SubTlv::List`
 - `ISIS::SubTlv::MinMaxLinkDelay`
+- `ISIS::SubTlv::Msd`
+- `ISIS::SubTlv::NodeMsd`
+- `ISIS::SubTlv::PrefixAttributeFlags`
 - `ISIS::SubTlv::PrefixSid`
 - `ISIS::SubTlv::SidLabel`
 - `ISIS::SubTlv::SrAlgorithm`
 - `ISIS::SubTlv::SrCapabilities`
 - `ISIS::SubTlv::SrLocalBlock`
+- `ISIS::SubTlv::Srv6Capabilities`
+- `ISIS::SubTlv::Srv6EndSid`
+- `ISIS::SubTlv::Srv6EndXSid`
+- `ISIS::SubTlv::Srv6LanEndXSid`
+- `ISIS::SubTlv::Srv6Sid`
+- `ISIS::SubTlv::Srv6SidStructure`
 - `ISIS::SubTlv::TeDefaultMetric`
 - `ISIS::SubTlv::Unknown`
 - `ISIS::Tlv`
@@ -117,6 +127,7 @@ them and fails if one is missing.
 - `ISIS::Tlv::RouterCapability`
 - `ISIS::Tlv::Srlg`
 - `ISIS::Tlv::AslaSrlg`
+- `ISIS::Tlv::Srv6Locator`
 - `ISIS::Tlv::ThreeWayAdjacency`
 - `ISIS::Tlv::Unknown`
 
@@ -161,3 +172,31 @@ fad = ISIS::SubTlv::Fad.new(algorithm: 128, metric_type: "delay", priority: 200,
                             subtlvs: [{ fad_exclude_admin_group: { groups: [1] } }])
 fad.to_shex                                      # => "1a0a800100c8010400000002"
 ```
+
+TLV 27, the SRv6 Locator TLV (RFC 9352 section 7.1), "shares the
+sub-TLV space defined for TLVs 135, 235, 236, and 237". So the classes
+of that space are registered under 27 as well: Prefix Attribute Flags,
+4, under 135, 236 and 27; the Prefix-SID and the FAPM, which section
+11.1.2 does not allow there, are read so that a receiver can report
+them. The End SID, 5, is only TLV 27's. The SID sub-TLVs, 5, 43 and 44,
+read their sub-sub-TLVs from one registry of their own,
+`SubTlv::Srv6Sid::REGISTRY`, where the SID Structure is 1. TLV 27's
+entries and the SID sub-TLVs frame their lists behind a length octet
+that is always written, with `SubTlv::FramedList`, as TLV 22's are.
+
+```ruby
+loc = ISIS::Tlv::Srv6Locator.new(entries: [{ locator: "fc00:0:1::/48",
+        subtlvs: [{ end_sid: { behavior: "End", sid: "fc00:0:1::" } }] }])
+loc.to_shex
+# => "1b26" "0000" "00000000" "00" "00" "30" "fc0000000001" "16"
+#    "0514" "00" "0001" "fc000000000100000000000000000000" "00"
+```
+
+Type 27, length 38: the MTID, then the entry's metric, flags,
+algorithm, Loc-Size 48 and its six octets, a sub-TLV length of 22, and
+the End SID: type 5, length 20, flags, behaviour 1, the SID, and no
+sub-sub-TLV.
+
+An endpoint behaviour is kept as its number. `ISIS::Srv6::BEHAVIORS`,
+from RFC 8986 section 10.2.2 and RFC 9800 section 12.1, names it in
+`to_hash` and `to_s`; a number it does not have stays a number.

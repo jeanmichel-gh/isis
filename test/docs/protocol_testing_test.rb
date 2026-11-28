@@ -24,6 +24,15 @@ class TestProtocolTestingDoc < Minitest::Test
     end
   end
 
+  # The SRv6 entries, which have no rule yet: each with what it builds.
+  def test_every_srv6_fault_built_as_described
+    listed = DOC.scan(/^\| `(\w+)` \| ([^`|][^|]*) \|$/).map { _1.first.to_sym } & ISIS::Fault.srv6_names
+    assert_equal ISIS::Fault.srv6_names, listed
+    ISIS::Fault.srv6_catalog.each do |e|
+      assert_includes DOC, "| `#{e[:name]}` | #{e[:description]} |", e[:name]
+    end
+  end
+
   # The TI-LFA topologies: each with its section and the repair it
   # expects, written as the table writes it.
   def self.repair_text(expect)
