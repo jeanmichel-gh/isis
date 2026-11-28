@@ -3,8 +3,8 @@
 Status: approved by the owner, 2026-11-25 ("approve the SRv6 spec,
 isis #135"), with the answers in "Decisions", at the end. The owner gave
 no separate answers, so each question takes this spec's recommended
-answer, the default taken at approval. Step 1, the codec, is built
-(2026-11-28): the classes of "Wire format", the behaviour registry, FRR
+answer, the default taken at approval. Step 1, the codec, is built (#152,
+2026-11-28): the classes of "Wire format", the behaviour registry, FRR
 10.7.1's two LSPs as fixtures, and the `SRV6` group's wire builders,
 whose findings wait for step 3. Steps 2 to 9 are not started.
 
