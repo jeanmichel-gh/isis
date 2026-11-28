@@ -55,6 +55,17 @@ module ISIS
     #   :ignore_fad          the FAD is not used
     #   :stop_participating  this system takes no part in the algorithm
     #   :ignore_fapm         the FAPM is not used
+    #
+    # And for the SRv6 rules (RFC 9352), each about one system's locators
+    # and SIDs (Spf::Srv6), where :ignore_tlv is that TLV 27, :ignore_node
+    # the system's SRv6 data, :ignore_sid that End, End.X or LAN End.X
+    # SID, :use_first the first of two, and :ignore_fapm that FAPM:
+    #
+    #   :ignore_tlvs          every TLV 27 for that locator
+    #   :ignore_locator       the locator, and the SIDs under it
+    #   :ignore_n             the N flag of its Prefix Attribute Flags
+    #   :prefer_reachability  TLV 236's flags, not TLV 27's
+    #   :report               nothing is changed; the finding is reported
     Rule = Struct.new(:name, :channel, :clause, :description, :actions, keyword_init: true)
 
     # One finding: the rule's name, channel and clause, what it is about
@@ -194,7 +205,75 @@ module ISIS
                clause: "RFC 8402 section 3.1: several Prefix-SIDs on one prefix \"so long as the tuple <prefix, " \
                        "topology, algorithm> is unique\"",
                description: "two Prefix-SIDs for one algorithm on one prefix",
-               actions: { rfc: :use_first, strict: :ignore_sid, lenient: :use_first })
+               actions: { rfc: :use_first, strict: :ignore_sid, lenient: :use_first }),
+      # The SRv6 rules, docs/design/srv6.md, "2. Validation on receive".
+      # Each clause was read in RFC 9352.
+      Rule.new(name: :locator_size_invalid, channel: :errors,
+               clause: "RFC 9352 section 7.1: Loc-Size \"MUST be from the range (1-128). The entire TLV MUST be " \
+                       "ignored if the Loc-Size is outside this range.\"",
+               description: "a locator with a Loc-Size of 0 or past 128",
+               actions: { rfc: :ignore_tlv, strict: :ignore_node, lenient: :use }),
+      Rule.new(name: :locator_algorithm_conflict, channel: :errors,
+               clause: "RFC 9352 section 7.2: \"For a given MTID/Locator, the algorithm MUST be the same in all " \
+                       "TLVs. If this restriction is not met, all TLVs for that MTID/Locator MUST be ignored.\"",
+               description: "one locator in two TLV 27s with two algorithms",
+               actions: { rfc: :ignore_tlvs, strict: :ignore_node, lenient: :use_first }),
+      Rule.new(name: :end_sid_outside_locator, channel: :errors,
+               clause: "RFC 9352 section 7.2: \"SRv6 End SIDs that are not allocated from the associated locator " \
+                       "MUST be ignored.\"",
+               description: "an End SID outside the locator it is advertised under",
+               actions: { rfc: :ignore_sid, strict: :ignore_node, lenient: :use }),
+      Rule.new(name: :end_x_sid_no_locator, channel: :errors,
+               clause: "RFC 9352 section 8: End.X SIDs \"MUST be a subnet of a Locator with matching topology and " \
+                       "algorithm that are advertised by the same node\"; \"SIDs that do not meet this " \
+                       "requirement MUST be ignored\"",
+               description: "an End.X or LAN End.X SID that no locator of its system covers at its algorithm",
+               actions: { rfc: :ignore_sid, strict: :ignore_node, lenient: :use }),
+      Rule.new(name: :sid_structure_twice, channel: :errors,
+               clause: "RFC 9352 section 9: \"If it appears more than once in its parent sub-TLV, the parent " \
+                       "sub-TLV MUST be ignored by the receiver.\"",
+               description: "a SID with two SID Structure sub-sub-TLVs",
+               actions: { rfc: :ignore_sid, strict: :ignore_node, lenient: :use_first }),
+      Rule.new(name: :sid_structure_too_long, channel: :errors,
+               clause: "RFC 9352 section 9: \"If the sum of all four sizes ... is larger than 128 bits, the " \
+                       "parent sub-TLV MUST be ignored by the receiver.\"",
+               description: "a SID whose SID Structure sums to more than 128 bits",
+               actions: { rfc: :ignore_sid, strict: :ignore_node, lenient: :use }),
+      # Section 10 gives no receiver action; ignoring the SID is section
+      # 7.2's treatment of an unsupported behaviour (the design's decision
+      # 6).
+      Rule.new(name: :behavior_not_allowed, channel: :errors,
+               clause: "RFC 9352 section 10: a behaviour \"MUST NOT be advertised in the TLV(s) marked with " \
+                       "\"N\"\" in Table 1",
+               description: "an End SID with an End.X behaviour, or an End.X SID with an End behaviour",
+               actions: { rfc: :ignore_sid, strict: :ignore_node, lenient: :use }),
+      Rule.new(name: :behavior_unknown, channel: :gaps,
+               clause: "isis4r has no code for this behaviour in IS-IS; RFC 9352 section 7.2, and 8.1: " \
+                       "\"Unsupported or unrecognized behavior values are ignored by the receiver.\"",
+               description: "a SID whose behaviour Table 1 of RFC 9352 does not have",
+               actions: { rfc: :ignore_sid, strict: :ignore_sid, lenient: :ignore_sid }),
+      Rule.new(name: :anycast_and_node, channel: :errors,
+               clause: "RFC 9352 section 6: \"The A-flag and the N-flag MUST NOT both be set. If both ... are " \
+                       "set ..., the receiving routers MUST ignore the N-flag.\"",
+               description: "a locator whose Prefix Attribute Flags set both N and A",
+               actions: { rfc: :ignore_n, strict: :ignore_locator, lenient: :use }),
+      Rule.new(name: :x_flag_mismatch, channel: :errors,
+               clause: "RFC 9352 section 6: the X-flag in the Locator TLV \"MUST match the setting of the " \
+                       "embedded \"X-bit\"\" in TLV 236; \"the ones advertised in the Prefix Reachability TLV " \
+                       "MUST be preferred\"",
+               description: "a locator whose X flag in TLV 27 differs from its X bit in TLV 236",
+               actions: { rfc: :prefer_reachability, strict: :ignore_locator, lenient: :use }),
+      Rule.new(name: :fapm_in_locator, channel: :errors,
+               clause: "RFC 9350 section 8: \"The IS-IS FAPM sub-TLV MUST NOT be advertised as a sub-TLV of the " \
+                       "IS-IS SRv6 Locator TLV\"; \"such FAPM sub-TLV MUST be ignored\"",
+               description: "a Flexible Algorithm Prefix Metric sub-TLV in TLV 27",
+               actions: { rfc: :ignore_fapm, strict: :ignore_locator, lenient: :ignore_fapm }),
+      Rule.new(name: :locator_not_longest, channel: :inconclusive,
+               clause: "RFC 9352 section 5: \"the locator associated with SRv6 SID advertisements must be the " \
+                       "longest match prefix installed in the forwarding plane for those SIDs\"; it asks the " \
+                       "operator, and gives no receiver action",
+               description: "a SID whose longest matching route is not its locator's",
+               actions: { rfc: :report, strict: :report, lenient: :report })
     ].to_h { [_1.name, _1] }.freeze
 
     module_function

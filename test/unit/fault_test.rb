@@ -50,7 +50,9 @@ class TestFault < Minitest::Test
   end
 
   def test_every_rule_has_an_entry_and_every_entry_a_rule
-    assert_equal ISIS::Validation::RULES.keys.sort, (F.catalog + F.flex_algo_catalog).map { _1[:finding] }.sort
+    # locator_not_longest needs a second system, and is inconclusive.
+    assert_equal ISIS::Validation::RULES.keys.sort - [:locator_not_longest],
+                 (F.catalog + F.flex_algo_catalog + F.srv6_catalog).map { _1[:finding] }.sort
     assert_equal (F.names + F.flex_algo_names).uniq, F.names + F.flex_algo_names
   end
 

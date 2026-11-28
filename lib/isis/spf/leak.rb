@@ -24,12 +24,19 @@ module ISIS
     # asks nothing here, since this system advertises no Level 1 routes
     # into Level 2 at all.
     #
-    # Logging: each prefix leaked or no longer leaked at info, as an event
-    # of kind :leak.
+    # An SRv6 locator route goes down too, by the same policy (RFC 9352
+    # section 7.1; docs/design/srv6.md, "Origination"): its TLV 27 entry,
+    # with the SIDs the receive rules let through, D set and R in its
+    # Prefix Attribute Flags (Srv6::Local.propagated), at the route's
+    # metric. A route from TLV 27 alone is leaked in TLV 27 only, as its
+    # origin sent it.
+    #
+    # Logging: each prefix and locator leaked or no longer leaked at info,
+    # as an event of kind :leak.
     class Leak
       NONE = ->(_route) { false }
 
-      attr_reader :policy, :leaked
+      attr_reader :policy, :leaked, :leaked_locators
 
       def initialize(originator:, log:, policy: NONE)
         @originator = originator
@@ -37,6 +44,7 @@ module ISIS
         @policy = policy
         @routes = {}
         @leaked = []
+        @leaked_locators = []
       end
 
       # A policy that leaks a route whose prefix lies within one of
@@ -67,7 +75,9 @@ module ISIS
       private
 
       def choose
-        chosen = @routes.values.reject(&:local?).select { |r| @policy.call(r) }.sort_by(&:prefix).map do |r|
+        routes = @routes.values.reject(&:local?).select { |r| @policy.call(r) }.sort_by(&:prefix)
+        locators(routes.select(&:locator))
+        chosen = routes.reject(&:locator_only).map do |r|
           { prefix: r.prefix, metric: r.metric, external: r.external ? true : nil, sid: r.sid&.to_hash }.compact
         end
         return if chosen == @leaked
@@ -88,6 +98,24 @@ module ISIS
         end
         @leaked = chosen
         @originator.leaked_prefixes = chosen
+      end
+
+      def locators(routes)
+        chosen = routes.map { |r| ISIS::Srv6::Local.propagated(r.locator.usable_entry, down: true, metric: r.metric) }
+        return if chosen.map(&:to_hash) == @leaked_locators.map(&:to_hash)
+
+        old = @leaked_locators.map(&:locator)
+        new = chosen.map(&:locator)
+        (new - old).each do |l|
+          @log.info("Level 2 locator #{l} leaked into Level 1, D set (RFC 9352 section 7.1)",
+                    kind: :leak, prefix: l, locator: true, change: :added)
+        end
+        (old - new).each do |l|
+          @log.info("Level 2 locator #{l} no longer leaked into Level 1", kind: :leak, prefix: l, locator: true,
+                                                                          change: :removed)
+        end
+        @leaked_locators = chosen
+        @originator.leaked_locators = chosen
       end
     end
   end

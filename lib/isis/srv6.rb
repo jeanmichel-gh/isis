@@ -134,6 +134,28 @@ module ISIS
 
     BY_NAME = BEHAVIORS.values.to_h { [_1.name, _1] }.freeze
 
+    # RFC 9352 section 10, Table 1: where a behaviour may be advertised,
+    # by its base behaviour, :end for the End SID sub-TLV and :end_x for
+    # the End.X and LAN End.X SID sub-TLVs. "If a behavior is advertised,
+    # it MUST only be advertised in the TLV(s) marked with "Y" in the table
+    # below and MUST NOT be advertised in the TLV(s) marked with "N"". The
+    # table lists End and End.X with PSP, USP and USD, End.DX6, End.DX4,
+    # End.DT6, End.DT4 and End.DT46; RFC 9800 adds no table of its own, and
+    # its section 8 sends a receiver to "Sections 7.2, 8.1, and 8.2 of
+    # [RFC9352]". So an RFC 9800 behaviour goes where its base behaviour
+    # goes: End with NEXT-CSID, FRR's uN, in the End SID sub-TLV. That is
+    # this library's reading, not a sentence of either RFC.
+    TABLE_1 = { "End" => :end, "End.X" => :end_x, "End.DX6" => :end_x, "End.DX4" => :end_x,
+                "End.DT6" => :end, "End.DT4" => :end, "End.DT46" => :end }.freeze
+
+    # Where codepoint +number+ may be advertised, :end or :end_x, or nil
+    # when Table 1 does not have its base: End.T, which section 7.2 names
+    # as not defined for IS-IS, or a number the registry here lacks.
+    def self.advertised_in(number)
+      b = BEHAVIORS[number] or return nil
+      TABLE_1[b.base]
+    end
+
     module_function
 
     # The behaviour of codepoint +number+, or nil when the registry here

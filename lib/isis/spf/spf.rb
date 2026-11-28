@@ -76,7 +76,13 @@ module ISIS
     # is the chosen entry's Prefix-SID (SubTlv::PrefixSid), or nil, and
     # +origin+ the node ID (System ID and pseudonode octet) that advertised
     # it, the first one at an equal key.
-    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down, :sid, :origin) do
+    #
+    # +locator+ is the origin's SRv6 locator of that prefix
+    # (Spf::Srv6::Locator), when the calculation reads SRv6 and the
+    # origin advertises one, and +locator_only+ is true when the route came
+    # from TLV 27 alone, with no TLV 236 entry for it from that origin.
+    Route = Struct.new(:prefix, :metric, :adjacencies, :external, :up_down, :sid, :origin, :locator,
+                       :locator_only) do
       def local?
         adjacencies.empty?
       end
@@ -95,8 +101,9 @@ module ISIS
 
     # One system's advertisement of a prefix: its metric, whether that is of
     # the external metric type, the up/down bit, and its algorithm 0
-    # Prefix-SID (RFC 8667 section 2.1), or nil.
-    Offer = Struct.new(:metric, :external, :up_down, :sid) do
+    # Prefix-SID (RFC 8667 section 2.1), or nil; its SRv6 locator and
+    # whether it came from TLV 27 alone, as Route has them.
+    Offer = Struct.new(:metric, :external, :up_down, :sid, :locator, :locator_only) do
       # RFC 5302 section 3's order of preference, within one level: routes
       # "with internal metric" before those "with external metric", and at
       # each, intra-area before "L2->L1 inter-area", which is up/down set.
@@ -142,6 +149,19 @@ module ISIS
     #   No default route toward an attached system.
     #
     # The routes are for K's label table only; no IP route comes from them.
+    #
+    # With +srv6+, a receive policy (:rfc, :strict or :lenient), algorithm
+    # 0's calculation also reads each system's SRv6 locators of algorithm
+    # 0 (Spf::Srv6.read, under that policy) as IPv6 prefixes, RFC 9352
+    # section 5: their reachability "follows the process defined for the
+    # Prefix Reachability TLV 236", at the locator's metric, with its D
+    # bit as the up/down bit. "In cases where the same prefix ... is
+    # received in both a Prefix Reachability TLV and an SRv6 Locator TLV,
+    # the Prefix Reachability advertisement MUST be preferred", so a
+    # system's TLV 236 entry is kept and its TLV 27 one only marks the
+    # route as a locator. Without +srv6+, as a router that does not run
+    # SRv6, TLV 27 is not read: section 5 has locators installed "by
+    # receiving SRv6-capable routers", and others route TLV 236's copy.
     class Calculation
       attr_reader :paths, :routes, :attached, :algorithm
       # For a flex-algo, each link pruned: [node ID, neighbour ID, rule],
@@ -150,10 +170,12 @@ module ISIS
       attr_reader :pruned
 
       def initialize(database:, system_id:, adjacencies:, broadcast: [], max_path_splits: MAXIMUM_PATH_SPLITS,
-                     max_path_metric: MAX_PATH_METRIC, algorithm: 0, definition: nil, policy: :rfc)
+                     max_path_metric: MAX_PATH_METRIC, algorithm: 0, definition: nil, policy: :rfc,
+                     srv6: nil)
         raise ArgumentError, "algorithm #{algorithm} needs its definition" if !algorithm.zero? && definition.nil?
 
         @algorithm = algorithm
+        @srv6 = srv6
         @definition = definition
         @policy = policy
         @pruned = []
@@ -310,7 +332,8 @@ module ISIS
           held = @routes[prefix]
           if held.nil? || (key <=> @keys[prefix]).negative?
             @routes[prefix] = Route.new(prefix, dist, prune(path.adjacencies), offer.external || nil,
-                                        offer.up_down || nil, offer.sid, node)
+                                        offer.up_down || nil, offer.sid, node, offer.locator,
+                                        offer.locator_only || nil)
             @keys[prefix] = key
           elsif key == @keys[prefix] && !held.local?
             held.adjacencies = path.adjacencies.empty? ? [] : prune(held.adjacencies | path.adjacencies)
@@ -383,7 +406,9 @@ module ISIS
         return @nodes[node] = nil unless lsps
 
         base = read_links(lsps)
-        info = { links: base, base_links: base, prefixes: read_prefixes(lsps), overload: lsps.first.overload?,
+        prefixes = read_prefixes(lsps)
+        read_locators(node, lsps, prefixes) if @srv6 && !flex?
+        info = { links: base, base_links: base, prefixes: prefixes, overload: lsps.first.overload?,
                  attached: lsps.first.attached.include?(:default), areas: read_areas(lsps.first) }
         if flex?
           info[:flex_links] = read_flex_links(node, lsps)
@@ -536,6 +561,23 @@ module ISIS
           end
         end
         found
+      end
+
+      # The node's algorithm 0 locators into +prefixes+: a TLV 236 entry
+      # for the same prefix is kept and marked, else the locator is a
+      # prefix of its own.
+      def read_locators(node, lsps, prefixes)
+        subject = SystemId.from_bytes(node.byteslice(0, 6)).to_s
+        Srv6.read(lsps, policy: @srv6, subject: subject).locators.each do |loc|
+          next unless loc.algorithm.zero?
+
+          held = prefixes[loc.prefix]
+          if held
+            held.locator = loc
+          else
+            prefixes[loc.prefix] = Offer.new(loc.metric, false, loc.up_down, nil, loc, true)
+          end
+        end
       end
 
       # An entry's Prefix-SID for algorithm 0, the only one computed here.

@@ -36,10 +36,17 @@ module ISIS
     # a change withdraws the prefixes it supersedes, or brings them back,
     # without waiting for a run.
     #
-    # Logging: each prefix announced into Level 2 or withdrawn at info, as
-    # an event of kind :summary.
+    # An SRv6 locator route of the area goes into Level 2 too, in TLV 27
+    # (Srv6::Local.propagated: D as it came, R in its Prefix Attribute
+    # Flags), at the route's metric. Summaries do not cover locators
+    # (docs/design/srv6.md, "Origination"): each goes as itself, and a
+    # route from TLV 27 alone neither goes in TLV 236 nor counts toward a
+    # summary.
+    #
+    # Logging: each prefix and locator announced into Level 2 or withdrawn
+    # at info, as an event of kind :summary.
     class Summary
-      attr_reader :summaries, :announced
+      attr_reader :summaries, :announced, :locators
 
       def initialize(originator:, log:, summaries: [])
         @originator = originator
@@ -47,6 +54,7 @@ module ISIS
         @summaries = summaries
         @routes = {}
         @announced = []
+        @locators = []
       end
 
       # The Level 1 Decision Process ran and found +routes+.
@@ -63,7 +71,9 @@ module ISIS
       private
 
       def choose
-        area = @routes.values.reject { |r| r.up_down || r.prefix == Decision::DEFAULT }
+        all = @routes.values.reject { |r| r.up_down || r.prefix == Decision::DEFAULT }
+        announce_locators(all.reject(&:local?).select(&:locator).sort_by(&:prefix))
+        area = all.reject(&:locator_only)
         nets = @summaries.map { |s| [s, IPAddr.new(s.fetch(:prefix))] }
         covered = Hash.new { |h, k| h[k] = [] }
         uncovered = []
@@ -84,6 +94,24 @@ module ISIS
         report(@announced, chosen)
         @announced = chosen
         @originator.area_prefixes = chosen
+      end
+
+      def announce_locators(routes)
+        chosen = routes.map { |r| ISIS::Srv6::Local.propagated(r.locator.usable_entry, down: false, metric: r.metric) }
+        return if chosen.map(&:to_hash) == @locators.map(&:to_hash)
+
+        old = @locators.map(&:locator)
+        new = chosen.map(&:locator)
+        (new - old).each do |l|
+          @log.info("Level 1 locator #{l} announced into Level 2 (RFC 9352 section 7.1)", kind: :summary, prefix: l,
+                                                                                          locator: true, change: :added)
+        end
+        (old - new).each do |l|
+          @log.info("Level 1 locator #{l} no longer announced into Level 2", kind: :summary, prefix: l, locator: true,
+                                                                             change: :removed)
+        end
+        @locators = chosen
+        @originator.area_locators = chosen
       end
 
       def report(before, after)

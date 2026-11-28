@@ -26,7 +26,9 @@ require_relative "../support/fake_bfd"
 # 192.0.2.0/24, and B leaks its Level 2 routes into Level 1. C
 # redistributes its host's static routes, which change when D goes. A and
 # B run BFD on their link, through a FakeBfd each that the script drives
-# as bfdd4r would. The script brings it up, overloads C, cuts the
+# as bfdd4r would. Each runs SRv6 too, with a locator of its own, so
+# Spf::Srv6 and the locators crossing levels go through the controls.
+# The script brings it up, overloads C, cuts the
 # point to point link, BFD telling the failure, and restores it, and
 # silences D, the DIS.
 class TestPassThroughEquivalence < Minitest::Test
@@ -75,13 +77,15 @@ class TestPassThroughEquivalence < Minitest::Test
       db = ISIS::Database.new(level: 1, clock: @clock, scheduler: @scheduler, log: log)
       n = IDS.keys.index(who) + 1
       both = %i[a b].include?(who)
+      srv6 = srv6(n)
       orig = ISIS::Originator.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                   minimum_interval: 1, prefixes: [{ prefix: "192.0.2.#{n}/32", metric: 1 }],
-                                  is_type: both ? 3 : nil)
+                                  is_type: both ? 3 : nil, srv6: srv6)
       recorder = ISIS::Forwarding::Recorder.new
       decision = ISIS::Spf::Decision.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                          forwarding: recorder)
-      l2 = both ? level2(who, n, log, orig) : nil
+      decision.srv6 = srv6
+      l2 = both ? level2(who, n, log, orig, srv6) : nil
       decision.summary = l2[:summary] if l2
       circuits = []
       if both
@@ -127,19 +131,32 @@ class TestPassThroughEquivalence < Minitest::Test
     # 5302 section 2), so C and D learn A's Level 2 prefix only through
     # B's up/down entry; both set the AttachedFlag for their Level 1 LSP,
     # all in one area, so false.
-    def level2(who, n, log, level1_orig)
+    def level2(who, n, log, level1_orig, srv6)
       db = ISIS::Database.new(level: 2, clock: @clock, scheduler: @scheduler, log: log)
       orig = ISIS::Originator.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                   minimum_interval: 1, prefixes: [{ prefix: "198.51.100.#{n}/32", metric: 1 }],
-                                  is_type: 3, level1_database: level1_orig.database)
+                                  is_type: 3, level1_database: level1_orig.database, srv6: srv6)
       leak = ISIS::Spf::Leak.new(originator: level1_orig, log: log,
                                  policy: who == :b ? ->(_route) { true } : ISIS::Spf::Leak::NONE)
       recorder = ISIS::Forwarding::Recorder.new
       decision = ISIS::Spf::Decision.new(system_id: IDS[who], database: db, scheduler: @scheduler, log: log,
                                          forwarding: recorder, attached_flag: level1_orig, leak: leak)
+      decision.srv6 = srv6
       summary = ISIS::Spf::Summary.new(originator: orig, log: log,
                                        summaries: who == :a ? [{ prefix: "192.0.2.0/24", metric: 2 }] : [])
       { db: db, orig: orig, leak: leak, summary: summary, recorder: recorder, decision: decision }
+    end
+
+    # Each system's SRv6, a locator fc00:0:N::/48 with its End, End.DT6
+    # and End.X SIDs (docs/design/srv6.md, "Tests": pass-through with SRv6
+    # on), one for both levels. B's leak takes A's Level 2 locator into
+    # Level 1, and A's and B's summaries take the Level 1 ones into
+    # Level 2.
+    def srv6(n)
+      ISIS::Srv6::Local.from_config(
+        { locators: [{ name: "main", prefix: "fc00:0:#{n}::/48", structure: { block: 32, node: 16, function: 16 } }] },
+        ipv6: true, router_id: "192.0.2.#{n}", prefixes: [], ipv6_prefixes: []
+      )
     end
 
     # A transport the harness taps: every frame sent and received, in order,
@@ -222,6 +239,7 @@ class TestPassThroughEquivalence < Minitest::Test
             [e.lsp_id_s, e.sequence, e.checksum, e.purged?, e.srm.to_a.sort, e.ssn.to_a.sort]
           end,
           routes: s[:decision].routes.values.map(&:to_s),
+          srv6: srv6_state(s[:decision]),
           level2: s[:l2] && level2_state(s[:l2]) }
       end
     end
@@ -229,7 +247,17 @@ class TestPassThroughEquivalence < Minitest::Test
     def level2_state(l2)
       { database: l2[:db].entries.map { |e| [e.lsp_id_s, e.sequence, e.checksum, e.purged?, e.srm.to_a.sort, e.ssn.to_a.sort] },
         routes: l2[:decision].routes.values.map(&:to_s), leaked: l2[:leak].leaked,
-        announced: l2[:summary].announced }
+        announced: l2[:summary].announced, srv6: srv6_state(l2[:decision]),
+        leaked_locators: l2[:leak].leaked_locators.map(&:to_hash),
+        announced_locators: l2[:summary].locators.map(&:to_hash) }
+    end
+
+    # The SRv6 table: each node's locators and SIDs, this system's own
+    # SIDs, the findings.
+    def srv6_state(decision)
+      t = decision.srv6_table or return nil
+      { nodes: t.nodes.map { |id, n| [id.unpack1("H*"), n.locators.map(&:to_hash), n.end_x_sids.map(&:to_hash)] },
+        own: t.own.map { [_1.sid, _1.kind, _1.adjacency&.circuit] }, findings: t.findings.map(&:to_s) }
     end
 
     def circuit_state(circuit)
@@ -283,6 +311,16 @@ class TestPassThroughEquivalence < Minitest::Test
     # B reaches A's summary of the area at Level 2.
     l2 = @plain.operations[:b].last
     assert(l2.any? { |o| o.start_with?("install 192.0.2.0/24") }, l2.inspect)
+    # SRv6: C routes to A's locator; B's summary takes C's locator into
+    # Level 2, and its leak takes A's Level 2 locator into Level 1 while
+    # B's own announcement of it is not the better route, which at an
+    # equal metric it is, as for a prefix.
+    assert(ops[:c].any? { |o| o.start_with?("install fc00:0:1::/48") }, ops[:c].inspect)
+    final = @plain.states.last
+    assert_includes final[:b][:level2][:announced_locators].map { _1[:locator] }, "fc00:0:3::/48"
+    leaked = @plain.states.flat_map { |st| st[:b][:level2][:leaked_locators].map { _1[:locator] } }
+    assert_includes leaked, "fc00:0:1::/48"
+    assert(final[:c][:srv6][:own].any? { |_, kind, circuit| kind == :end_x && circuit == "c-lan" })
     assert(@plain.packets.values.sum(&:size) > 500, "few packets")
     assert_operator @plain.states.uniq.size, :>, 20
   end
